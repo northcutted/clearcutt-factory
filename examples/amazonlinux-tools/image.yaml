@@ -1,0 +1,22 @@
+# Amazon Linux 2023 with dnf packages. dnf resolves at lock time; each RPM is
+# signature-checked then, and installed offline by sha256 at build time.
+apiVersion: factory.dev/v1alpha1
+kind: Image
+metadata:
+  name: amazonlinux-tools
+spec:
+  base: amazonlinux:2023
+  packages: [git, jq, tar, gzip]
+  tools:
+    - name: kubectl
+      from: url
+      version: 1.37.1
+      url: https://dl.k8s.io/release/v{{version}}/bin/{{os}}/{{arch}}/kubectl
+      checksum: "{{url}}.sha256"
+  labels:
+    org.opencontainers.image.source: https://github.com/northcutted/declarative-image-factory
+    org.opencontainers.image.description: Amazon Linux 2023 with git, jq, and kubectl
+  user: "65532"
+  entrypoint: [/bin/bash]
+  test:
+    command: [/usr/bin/jq, --version]

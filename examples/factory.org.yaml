@@ -1,0 +1,53 @@
+# Org profile: every image under this directory inherits these choices.
+# Swap registry, signer, scanner gate, and policy to match your organization.
+apiVersion: factory.dev/v1alpha1
+kind: OrgProfile
+
+registry: ghcr.io/northcutted/images
+tags: [latest]
+
+defaults:
+  base: cgr.dev/chainguard/wolfi-base:latest
+  platforms: [linux/amd64, linux/arm64]
+  labels:
+    org.opencontainers.image.vendor: northcutted
+
+builder:
+  buildkit: moby/buildkit:v0.33.1
+  frontend: docker/dockerfile:1
+  toolbox: cgr.dev/chainguard/wolfi-base:latest
+  go: golang:1
+
+signing:
+  mode: keyless            # keyless (Sigstore OIDC) | key (file or KMS URI) | none
+  # key: awskms:///alias/image-signing
+  # args: [--use-signing-config=false, --tlog-upload=false]   # private: no public Rekor
+  verify:
+    certificateIdentityRegexp: ^https://github\.com/northcutted/declarative-image-factory/
+    certificateOIDCIssuer: https://token.actions.githubusercontent.com
+
+vulnerabilities:
+  scanner: grype
+  failOn: critical
+  onlyFixed: true          # don't block on CVEs nobody can fix yet
+
+# Route downloads through a caching proxy; checksums still pin every byte.
+# mirrors:
+#   - from: https://snapshot.debian.org/
+#     to: https://artifactory.example.com/artifactory/debian-snapshot/
+#   - from: https://kojipkgs.fedoraproject.org/
+#     to: https://artifactory.example.com/artifactory/fedora-koji/
+
+policy:
+  requireNonRoot: true
+  requiredLabels: [org.opencontainers.image.source]
+  allowTOFU: false
+  allowedHosts:
+    - github.com
+    - dl.k8s.io
+    - get.helm.sh
+    - snapshot.debian.org          # apt (Debian)
+    - launchpad.net                # apt (Ubuntu)
+    - kojipkgs.fedoraproject.org   # dnf (Fedora)
+    - cdn.amazonlinux.com          # dnf (Amazon Linux)
+    - cache.nixos.org              # nix

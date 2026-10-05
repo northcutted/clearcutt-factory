@@ -1,0 +1,16 @@
+# An app: source plus a stack. factory runs the stack's steps on this
+# directory and ships only their output (in /app) on the stack's run image.
+apiVersion: factory.dev/v1alpha1
+kind: App
+metadata:
+  name: hello-app
+spec:
+  stack: ../stacks/go.yaml
+  env:
+    PORT: "8080"
+  # Start the image as shipped and expect an answer on / (on every platform,
+  # after each build and each rebase).
+  test:
+    http: {port: 8080}
+  labels:
+    org.opencontainers.image.description: A tiny HTTP service built on the go stack

@@ -1,0 +1,27 @@
+# Debian with apt packages pinned to snapshot.debian.org, plus tools from Nix
+# and a release download. Every .deb is fetched by sha256 and installed offline.
+apiVersion: factory.dev/v1alpha1
+kind: Image
+metadata:
+  name: debian-tools
+spec:
+  base: debian:trixie-slim
+  packages: [ca-certificates, curl, git, jq]
+  tools:
+    # From nixpkgs: works on any base, pinned to a nixpkgs commit and verified
+    # against cache.nixos.org's signatures.
+    - name: ripgrep
+      from: nix
+      package: ripgrep
+    - name: kubectl
+      from: url
+      version: 1.37.1
+      url: https://dl.k8s.io/release/v{{version}}/bin/{{os}}/{{arch}}/kubectl
+      checksum: "{{url}}.sha256"
+  labels:
+    org.opencontainers.image.source: https://github.com/northcutted/declarative-image-factory
+    org.opencontainers.image.description: Debian trixie with git, curl, jq, ripgrep, and kubectl
+  user: "65532"
+  entrypoint: [/bin/bash]
+  test:
+    command: [/usr/local/bin/rg, --version]
