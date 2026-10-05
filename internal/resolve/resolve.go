@@ -152,6 +152,20 @@ func (r *Resolver) LockFrom(ctx context.Context, m *manifest.Manifest, o *manife
 		}
 	}
 
+	// A re-resolution that lands on the same content keeps the old pins
+	// (Debian's snapshot or nixpkgs moved, but nothing they pin did), so
+	// the lock and the image stay put.
+	if l.Packages.SameContent(orig.Packages) {
+		inputs := l.Packages.InputsDigest
+		l.Packages = orig.Packages
+		l.Packages.InputsDigest = inputs
+	}
+	for i, t := range l.Tools {
+		if old := orig.Tool(t.Name); old != nil && old.SpecDigest == t.SpecDigest && old.SamePins(t) {
+			l.Tools[i] = *old
+		}
+	}
+
 	// Keep the build timestamp unless the pins changed, so re-locking an
 	// unchanged manifest doesn't change the image.
 	l.SourceDateEpoch = orig.SourceDateEpoch

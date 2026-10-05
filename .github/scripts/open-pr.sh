@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
 # Opens, or updates, a pull request with the changes under PATH... on BRANCH
-# (recreated from the current commit each time, so it never goes stale).
+# (recreated from the current commit each time, so it never goes stale), and
+# closes the pull request once there is nothing left to change.
 #
 # Usage: open-pr.sh BRANCH TITLE BODY_FILE PATH...
 set -euo pipefail
 branch=$1 title=$2 body=$3
 shift 3
 
+open=$(gh pr view "$branch" --json state --jq .state 2>/dev/null || true)
+
 if git diff --quiet -- "$@" && [ -z "$(git ls-files --others --exclude-standard -- "$@")" ]; then
   echo "no changes under $*; nothing to propose"
+  if [ "$open" = OPEN ]; then
+    gh pr close "$branch" --delete-branch --comment "Nothing to change anymore; closing."
+  fi
   exit 0
 fi
 
@@ -19,7 +25,7 @@ git add -- "$@"
 git commit -q -m "$title"
 git push -q --force origin "$branch"
 
-if [ "$(gh pr view "$branch" --json state --jq .state 2>/dev/null || true)" = OPEN ]; then
+if [ "$open" = OPEN ]; then
   gh pr edit "$branch" --title "$title" --body-file "$body"
 else
   gh pr create --head "$branch" --title "$title" --body-file "$body" --label dependencies ||

@@ -46,6 +46,19 @@ func TestChanges(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}
 	}
+	snap := func(s string) Packages {
+		return Packages{Manager: ManagerAPT, Distro: "debian-13", Snapshot: s, Platforms: map[string][]Package{
+			"linux/amd64": {{Name: "jq", Version: "1.8", Arch: "amd64", SHA256: d("e"), URL: "https://snapshot.debian.org/archive/debian/" + s + "/jq.deb"}},
+		}}
+	}
+	if !snap("20261003T000000Z").SameContent(snap("20261005T000000Z")) {
+		t.Error("a moved snapshot with the same files is not the same content")
+	}
+	moved := snap("20261005T000000Z")
+	moved.Platforms["linux/amd64"][0].SHA256 = d("f")
+	if snap("20261003T000000Z").SameContent(moved) {
+		t.Error("a different file is the same content")
+	}
 	if len(Changes(cur, cur)) != 0 {
 		t.Errorf("identical locks reported changes: %q", Changes(cur, cur))
 	}
