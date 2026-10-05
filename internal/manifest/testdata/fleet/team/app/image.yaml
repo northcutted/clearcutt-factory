@@ -1,0 +1,13 @@
+apiVersion: factory.dev/v1alpha1
+kind: Image
+extends: ../../base.yaml
+metadata:
+  name: app
+spec:
+  packages: [jq]
+  tools:
+    - {name: kubectl, from: url, version: "2.0", url: "https://dl.k8s.io/{{version}}/kubectl"}
+    - {name: crane, from: oci, image: gcr.io/go-containerregistry/crane, path: /ko-app/crane}
+  files:
+    - {src: config/, dst: /etc/app/}
+  env: {B: app}

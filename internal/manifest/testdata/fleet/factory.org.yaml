@@ -1,0 +1,11 @@
+apiVersion: factory.dev/v1alpha1
+kind: OrgProfile
+registry: registry.example/fleet
+tags: [latest]
+defaults:
+  platforms: [linux/arm64]
+  labels:
+    vendor: acme
+signing:
+  mode: key
+  key: cosign.key
