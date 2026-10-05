@@ -75,6 +75,8 @@ jobs:
 
       - name: Rebase onto the newest run image
         id: rebase
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # GitHub API lookups when the lock is re-resolved
         run: |
           if factory rebase -f "${{ matrix.app }}" --push --update-lock 2>&1 | tee "$RUNNER_TEMP/rebase.out"; then
             echo "failed=false" >> "$GITHUB_OUTPUT"
