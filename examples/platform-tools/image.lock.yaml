@@ -2,7 +2,7 @@
 apiVersion: factory.dev/v1alpha1
 kind: Lock
 inputsDigest: sha256:311d499688dd175491579a25208029a04c8e35d8de14485779439f56cb32f8cc
-sourceDateEpoch: 1791063765
+sourceDateEpoch: 1791072000
 builder:
   buildkit:
     ref: moby/buildkit:v0.33.1
@@ -17,7 +17,8 @@ base:
   ref: cgr.dev/chainguard/wolfi-base:latest
   digest: sha256:9c2092b053779e14c82fb50f77b37bcc38b7d2c83972352d5813280f9d035b03
 packages:
-  inputsDigest: sha256:df23bb26b99944ecb4a06b92ea59355a38dc57218bea32b14d31c3933d15c70d
+  manager: apk
+  inputsDigest: sha256:baeb89316bc3862f2175b8ab6e45f6a05dbb27e2b54aaf8bed6e0db4b943232d
   repositories:
     - https://apk.cgr.dev/chainguard
   platforms:
@@ -72,9 +73,9 @@ packages:
         license: GPL-3.0-or-later
         repo: https://apk.cgr.dev/chainguard
       - name: git
-        version: 2.55.0-r10
+        version: 2.56.0-r0
         arch: x86_64
-        checksum: Q1XhUMprDTVouUE6+G7P3wQ+ppPSA=
+        checksum: Q1c/gXw3ZlWqlTTOszeBVlwRVA+Tw=
         origin: git
         license: GPL-2.0-or-later AND ( Artistic-1.0-Perl OR GPL-1.0-or-later )
         repo: https://apk.cgr.dev/chainguard
@@ -114,16 +115,16 @@ packages:
         license: GPL-2.0-or-later OR LGPL-2.0-or-later
         repo: https://apk.cgr.dev/chainguard
       - name: krb5-conf
-        version: 1.0-r9
+        version: 1.0-r10
         arch: x86_64
-        checksum: Q1Ra+vl5lLBEyOhG8QYdPfwg9wdgg=
+        checksum: Q1+nzcG33MVDgV7NxwDXA6r0h6j14=
         origin: krb5-conf
         license: MIT
         repo: https://apk.cgr.dev/chainguard
       - name: krb5-libs
-        version: 1.22.2-r4
+        version: 1.22.2-r5
         arch: x86_64
-        checksum: Q18SFAUL9axzZ6zpc7We7QTkW5RkQ=
+        checksum: Q1gZY9KeWPIWMl4XhKlmOtDt+EYLQ=
         origin: krb5
         license: MIT
         repo: https://apk.cgr.dev/chainguard
@@ -296,16 +297,16 @@ packages:
         license: BSD-2-Clause
         repo: https://apk.cgr.dev/chainguard
       - name: openssl-4.0-libcrypto
-        version: 4.0.3-r2
+        version: 4.0.3-r3
         arch: x86_64
-        checksum: Q1jcL2KVxEKYaOu1vyodgvTFxTqU8=
+        checksum: Q1b4G1sNKXcxy3Vh2mP3kJ/jZjdYE=
         origin: openssl-4.0
         license: Apache-2.0
         repo: https://apk.cgr.dev/chainguard
       - name: openssl-4.0-libssl
-        version: 4.0.3-r2
+        version: 4.0.3-r3
         arch: x86_64
-        checksum: Q1Sh40oIUgnyg5LXsHO6yA4fsYmEA=
+        checksum: Q1p4V03cwi4QFSuGvtiF1KIQC07NY=
         origin: openssl-4.0
         license: Apache-2.0
         repo: https://apk.cgr.dev/chainguard
@@ -352,9 +353,9 @@ packages:
         license: MIT
         repo: https://apk.cgr.dev/chainguard
       - name: zlib
-        version: 1.3.2.1_rc20260601-r0
+        version: 1.3.2.1_rc20260917-r0
         arch: x86_64
-        checksum: Q1CUQtfgunel6EkmYihApm5q+qkmI=
+        checksum: Q1g9d7hzIr/FDvBI7cawWPmD2a7BA=
         origin: zlib
         license: MPL-2.0 AND MIT
         repo: https://apk.cgr.dev/chainguard
@@ -409,9 +410,9 @@ packages:
         license: GPL-3.0-or-later
         repo: https://apk.cgr.dev/chainguard
       - name: git
-        version: 2.55.0-r10
+        version: 2.56.0-r0
         arch: aarch64
-        checksum: Q1zUDdIMvZitwRtgOXK0Ny//SCpdc=
+        checksum: Q1lV/sPjnmRs20W+9YUQGcn8ibY2g=
         origin: git
         license: GPL-2.0-or-later AND ( Artistic-1.0-Perl OR GPL-1.0-or-later )
         repo: https://apk.cgr.dev/chainguard
@@ -451,16 +452,16 @@ packages:
         license: GPL-2.0-or-later OR LGPL-2.0-or-later
         repo: https://apk.cgr.dev/chainguard
       - name: krb5-conf
-        version: 1.0-r9
+        version: 1.0-r10
         arch: aarch64
-        checksum: Q1cRVp/4tI0buRLoYjuCDJ0WoM69w=
+        checksum: Q1VYg7l46TvIrY6GYfhkQ/ghkw7l8=
         origin: krb5-conf
         license: MIT
         repo: https://apk.cgr.dev/chainguard
       - name: krb5-libs
-        version: 1.22.2-r4
+        version: 1.22.2-r5
         arch: aarch64
-        checksum: Q15Fw8DM83bOcEsUIsWrybZ07/FfQ=
+        checksum: Q15gVCBS8eVVRSoVyXGLW6FTQsk7M=
         origin: krb5
         license: MIT
         repo: https://apk.cgr.dev/chainguard
@@ -633,16 +634,16 @@ packages:
         license: BSD-2-Clause
         repo: https://apk.cgr.dev/chainguard
       - name: openssl-4.0-libcrypto
-        version: 4.0.3-r2
+        version: 4.0.3-r3
         arch: aarch64
-        checksum: Q1jhFuS+JVDiuTYMq7VEauz0GMTfk=
+        checksum: Q1mZ3eZCYZN+iPg5jS2cyoMZnnboI=
         origin: openssl-4.0
         license: Apache-2.0
         repo: https://apk.cgr.dev/chainguard
       - name: openssl-4.0-libssl
-        version: 4.0.3-r2
+        version: 4.0.3-r3
         arch: aarch64
-        checksum: Q1RPOJqFbJZSGNAxaaviQzN2NXvag=
+        checksum: Q1Lpr/CZSQx7wrHb5jw9y+V8P4zA4=
         origin: openssl-4.0
         license: Apache-2.0
         repo: https://apk.cgr.dev/chainguard
@@ -689,9 +690,9 @@ packages:
         license: MIT
         repo: https://apk.cgr.dev/chainguard
       - name: zlib
-        version: 1.3.2.1_rc20260601-r0
+        version: 1.3.2.1_rc20260917-r0
         arch: aarch64
-        checksum: Q1qEEcRLz25dJ+vO1267oeD0lDd0Y=
+        checksum: Q1yIbOKKJrEHmfQUEvp8haQHhn8Rc=
         origin: zlib
         license: MPL-2.0 AND MIT
         repo: https://apk.cgr.dev/chainguard
