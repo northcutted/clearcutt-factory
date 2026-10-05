@@ -1,0 +1,11 @@
+apiVersion: factory.dev/v1alpha1
+kind: Image
+metadata:
+  name: base
+spec:
+  base: cgr.dev/chainguard/wolfi-base:latest
+  packages: [bash]
+  tools:
+    - {name: kubectl, from: url, version: "1.0", url: "https://dl.k8s.io/{{version}}/kubectl"}
+  env: {A: base, B: base}
+  user: "65532"
