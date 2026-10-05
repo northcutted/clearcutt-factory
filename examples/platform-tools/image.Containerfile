@@ -7,7 +7,7 @@
 # (moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea):
 #   buildctl build --frontend dockerfile.v0 --local context=. --local dockerfile=. \
 #     --opt platform=linux/amd64,linux/arm64 \
-#     --opt build-arg:SOURCE_DATE_EPOCH=1791063765 \
+#     --opt build-arg:SOURCE_DATE_EPOCH=1791072000 \
 #     --output type=oci,dest=image.tar,rewrite-timestamp=true
 # from a context staged with `factory render --context-dir`.
 
@@ -98,14 +98,14 @@ RUN apk add --no-cache --repositories-file /dev/null \
       curl=8.22.0-r4 \
       cyrus-sasl-heimdal-libs=2.1.28-r58 \
       gdbm=1.26-r6 \
-      git=2.55.0-r10 \
+      git=2.56.0-r0 \
       glibc-2.44=2.44-r7 \
       glibc-2.44-locale-posix=2.44-r7 \
       heimdal-libs=7.8.0-r52 \
       jq=1.8.2-r2 \
       keyutils-libs=1.6.3-r40 \
-      krb5-conf=1.0-r9 \
-      krb5-libs=1.22.2-r4 \
+      krb5-conf=1.0-r10 \
+      krb5-libs=1.22.2-r5 \
       ld-linux-2.44=2.44-r7 \
       libbrotlicommon1=1.2.0-r5 \
       libbrotlidec1=1.2.0-r5 \
@@ -130,15 +130,15 @@ RUN apk add --no-cache --repositories-file /dev/null \
       nghttp3=1.18.0-r1 \
       ngtcp2=1.25.0-r5 \
       oniguruma=6.9.10-r5 \
-      openssl-4.0-libcrypto=4.0.3-r2 \
-      openssl-4.0-libssl=4.0.3-r2 \
+      openssl-4.0-libcrypto=4.0.3-r3 \
+      openssl-4.0-libssl=4.0.3-r3 \
       openssl-provider-legacy-allowed=4.0.2-r3 \
       readline=8.3-r3 \
       sqlite-libs=3.53.4-r2 \
       wolfi-base=1-r7 \
       wolfi-baselayout=20230201-r30 \
       wolfi-keys=1-r13 \
-      zlib=1.3.2.1_rc20260601-r0 \
+      zlib=1.3.2.1_rc20260917-r0 \
  && rm -f /var/cache/ldconfig/aux-cache
 COPY --link --from=tool-kubectl /out/ /
 COPY --link --from=tool-helm /out/ /
