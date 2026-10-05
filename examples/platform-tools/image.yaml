@@ -1,0 +1,69 @@
+# A purpose-built image for platform engineers: distro packages from Wolfi plus
+# third-party tools, each pinned and verified by factory lock.
+apiVersion: factory.dev/v1alpha1
+kind: Image
+metadata:
+  name: platform-tools
+spec:
+  packages: [bash, ca-certificates-bundle, curl, git, jq]
+
+  tools:
+    # Plain download, verified against the publisher's checksum file.
+    - name: kubectl
+      from: url
+      version: 1.37.1
+      url: https://dl.k8s.io/release/v{{version}}/bin/{{os}}/{{arch}}/kubectl
+      checksum: "{{url}}.sha256"
+
+    # Archive download; pull one binary out of it.
+    - name: helm
+      from: url
+      version: 4.3.0
+      url: https://get.helm.sh/helm-v{{version}}-{{os}}-{{arch}}.tar.gz
+      checksum: "{{url}}.sha256sum"
+      extract: "{{os}}-{{arch}}/helm"
+
+    # GitHub release asset, verified against the release's checksums file.
+    - name: gh
+      from: github-release
+      repo: cli/cli
+      version: 2.102.0
+      asset: gh_{{version}}_{{os}}_{{arch}}.tar.gz
+      checksums: gh_{{version}}_checksums.txt
+      extract: gh_{{version}}_{{os}}_{{arch}}/bin/gh
+
+    # GitHub release asset with no checksums file: the lock records the
+    # sha256 GitHub reports for the asset.
+    - name: cosign
+      from: github-release
+      repo: sigstore/cosign
+      version: 3.1.3
+      asset: cosign-{{os}}-{{arch}}
+
+    # Copied out of another image, pinned by digest.
+    - name: crane
+      from: oci
+      image: gcr.io/go-containerregistry/crane:latest
+      path: /ko-app/crane
+
+    # Compiled from source with the pinned Go toolchain (sumdb-verified).
+    - name: yq
+      from: go
+      package: github.com/mikefarah/yq/v4
+      version: v4.54.1
+
+  files:
+    - src: config/
+      dst: /etc/platform-tools/
+
+  env:
+    KUBECONFIG: /home/nonroot/.kube/config
+  labels:
+    org.opencontainers.image.source: https://github.com/northcutted/declarative-image-factory
+    org.opencontainers.image.description: kubectl, helm, gh, cosign, crane, and yq on Wolfi
+  user: "65532"
+  workdir: /home/nonroot
+  entrypoint: [/bin/bash]
+  # Run in every platform image before it is pushed (and after each rebase).
+  test:
+    command: [/usr/local/bin/kubectl, version, --client]
