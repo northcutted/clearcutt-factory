@@ -20,7 +20,7 @@ jobs:
     outputs:
       manifests: ${{ steps.find.outputs.manifests }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: find
         run: echo "manifests=$(find examples \( -name image.yaml -o -name app.yaml \) | sort | jq -R -s -c 'split("\n")[:-1]')" >> "$GITHUB_OUTPUT"
 
@@ -38,13 +38,13 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ secrets.FACTORY_BOT_TOKEN || github.token }}
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: docker/setup-qemu-action@v4 # apt and dnf resolve inside the base, per platform
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0; apt and dnf resolve inside the base, per platform
       - run: go install ./cmd/factory
 
       - name: Re-resolve every input
