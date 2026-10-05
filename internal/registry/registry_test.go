@@ -1,6 +1,21 @@
 package registry
 
-import "testing"
+import (
+	"context"
+	"io"
+	"log"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/google/go-containerregistry/pkg/name"
+	ggcrregistry "github.com/google/go-containerregistry/pkg/registry"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/mutate"
+	"github.com/google/go-containerregistry/pkg/v1/random"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
+)
 
 func TestQualify(t *testing.T) {
 	for in, want := range map[string]string{
@@ -13,5 +28,40 @@ func TestQualify(t *testing.T) {
 		if got := Qualify(in); got != want {
 			t.Errorf("Qualify(%s) = %s, want %s", in, got, want)
 		}
+	}
+}
+
+func TestPlatformRef(t *testing.T) {
+	srv := httptest.NewServer(ggcrregistry.New(ggcrregistry.Logger(log.New(io.Discard, "", 0))))
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	var adds []mutate.IndexAddendum
+	for _, arch := range []string{"amd64", "arm64"} {
+		img, err := random.Image(32, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		adds = append(adds, mutate.IndexAddendum{Add: img, Descriptor: v1.Descriptor{Platform: &v1.Platform{OS: "linux", Architecture: arch}}})
+	}
+	idx := mutate.AppendManifests(empty.Index, adds...)
+	ref, _ := name.ParseReference(host + "/base:latest")
+	if err := remote.WriteIndex(ref, idx); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := idx.Digest()
+	im, _ := idx.IndexManifest()
+	got, err := PlatformRef(context.Background(), host+"/base:latest@"+d.String(), "linux/arm64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := host + "/base@" + im.Manifests[1].Digest.String(); got != want {
+		t.Errorf("PlatformRef = %s, want %s", got, want)
+	}
+	single := host + "/base@" + im.Manifests[0].Digest.String()
+	if got, err := PlatformRef(context.Background(), single, "linux/amd64"); err != nil || got != single {
+		t.Errorf("single image: %s, %v", got, err)
+	}
+	if _, err := PlatformRef(context.Background(), host+"/base:latest", "linux/s390x"); err == nil {
+		t.Error("expected an error for a missing platform")
 	}
 }

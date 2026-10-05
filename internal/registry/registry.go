@@ -288,6 +288,42 @@ func Qualify(ref string) string {
 	return out
 }
 
+// PlatformRef returns ref narrowed to the image for platform: when ref names
+// a multi-platform index, the platform's own manifest by digest (which the
+// index digest pins). Docker's classic image store can't keep two platforms
+// pulled under one index digest, so containers run the platform image.
+func PlatformRef(ctx context.Context, ref, platform string) (string, error) {
+	r, err := name.ParseReference(ref)
+	if err != nil {
+		return "", err
+	}
+	want, err := v1.ParsePlatform(platform)
+	if err != nil {
+		return "", err
+	}
+	desc, err := remote.Get(r, opts(ctx)...)
+	if err != nil {
+		return "", fmt.Errorf("resolving %s: %w", ref, err)
+	}
+	if !desc.MediaType.IsIndex() {
+		return ref, nil
+	}
+	idx, err := desc.ImageIndex()
+	if err != nil {
+		return "", err
+	}
+	im, err := idx.IndexManifest()
+	if err != nil {
+		return "", err
+	}
+	for _, d := range im.Manifests {
+		if d.Platform != nil && d.MediaType.IsImage() && d.Platform.Satisfies(*want) {
+			return Qualify(r.Context().Name()) + "@" + d.Digest.String(), nil
+		}
+	}
+	return "", fmt.Errorf("%s has no %s image", ref, platform)
+}
+
 // Registry returns the registry host of an image reference, normalized the
 // way Docker config files key it.
 func Registry(ref string) (string, error) {
