@@ -7,7 +7,7 @@
 # (moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea):
 #   buildctl build --frontend dockerfile.v0 --local context=. --local dockerfile=. \
 #     --opt platform=linux/amd64,linux/arm64 \
-#     --opt build-arg:SOURCE_DATE_EPOCH=1790985600 \
+#     --opt build-arg:SOURCE_DATE_EPOCH=1791072000 \
 #     --output type=oci,dest=image.tar,rewrite-timestamp=true
 # from a context staged with `factory render --context-dir`.
 
@@ -114,12 +114,12 @@ ADD --checksum=sha256:24bdbf834529c67dbcfa23901bb315a2e610ba79075590b1e95e949d37
 ADD --checksum=sha256:311607ac8ad7d4d1635129bf43595dbb26a31620bf5839dc148e60bf82eb4b69 https://cdn.amazonlinux.com/al2023/blobstore/311607ac8ad7d4d1635129bf43595dbb26a31620bf5839dc148e60bf82eb4b69/perl-subs-1.03-477.amzn2023.0.9.noarch.rpm /pkgs/perl-subs-1.03-477.amzn2023.0.9.noarch.rpm
 ADD --checksum=sha256:07b1c37e6e8b836a99fd36e53cf01ad686f325296fae4455efc8742969552867 https://cdn.amazonlinux.com/al2023/blobstore/07b1c37e6e8b836a99fd36e53cf01ad686f325296fae4455efc8742969552867/perl-vars-1.05-477.amzn2023.0.9.noarch.rpm /pkgs/perl-vars-1.05-477.amzn2023.0.9.noarch.rpm
 ADD --checksum=sha256:bf29c6750bc92a3ca2eb0857ae91c3d28b935f744ee808d1b4517f74f8397ae1 https://cdn.amazonlinux.com/al2023/blobstore/bf29c6750bc92a3ca2eb0857ae91c3d28b935f744ee808d1b4517f74f8397ae1/shadow-utils-4.9-12.amzn2023.0.4.x86_64.rpm /pkgs/shadow-utils-4.9-12.amzn2023.0.4.x86_64.rpm
-ADD --checksum=sha256:21c8ebbda7a5b5ba17209f58a5428736604b7b8b21125e8d10ddd08eda0f1053 https://cdn.amazonlinux.com/al2023/blobstore/21c8ebbda7a5b5ba17209f58a5428736604b7b8b21125e8d10ddd08eda0f1053/systemd-libs-252.23-12.amzn2023.x86_64.rpm /pkgs/systemd-libs-252.23-12.amzn2023.x86_64.rpm
+ADD --checksum=sha256:39a529d8961f85e2b6a78a45647c59e78652a7487b75a8a250431dddce57b562 https://cdn.amazonlinux.com/al2023/blobstore/39a529d8961f85e2b6a78a45647c59e78652a7487b75a8a250431dddce57b562/systemd-libs-252.23-14.amzn2023.x86_64.rpm /pkgs/systemd-libs-252.23-14.amzn2023.x86_64.rpm
 ADD --checksum=sha256:06d66285ecaec0f943b4dc24290c6dfefd291f1d2d6e0a3fb26b966ee7c27f55 https://cdn.amazonlinux.com/al2023/blobstore/06d66285ecaec0f943b4dc24290c6dfefd291f1d2d6e0a3fb26b966ee7c27f55/tar-1.34-1.amzn2023.0.4.x86_64.rpm /pkgs/tar-1.34-1.amzn2023.0.4.x86_64.rpm
 ADD --checksum=sha256:6b7b568461a81bd209d3e95f44d8cf49df9798296141bffca8d21c2fec477212 https://cdn.amazonlinux.com/al2023/blobstore/6b7b568461a81bd209d3e95f44d8cf49df9798296141bffca8d21c2fec477212/util-linux-2.37.4-1.amzn2023.0.6.x86_64.rpm /pkgs/util-linux-2.37.4-1.amzn2023.0.6.x86_64.rpm
 ADD --checksum=sha256:b9e31f14cc83fcbc159267e237c3e6ba4489329d064f938a19530c64f006060c https://cdn.amazonlinux.com/al2023/blobstore/b9e31f14cc83fcbc159267e237c3e6ba4489329d064f938a19530c64f006060c/util-linux-core-2.37.4-1.amzn2023.0.6.x86_64.rpm /pkgs/util-linux-core-2.37.4-1.amzn2023.0.6.x86_64.rpm
 
-FROM amazonlinux:2023@sha256:5b29412077a463b4a3a8fbc99a8cdf4b929f38a3ecc8dac10328d8f36b0099b8 AS packages-amd64
+FROM amazonlinux:2023@sha256:8ed3c0a996841537f75607e7d1de2114d8150391f75792e8da9268738547e73f AS packages-amd64
 ARG SOURCE_DATE_EPOCH
 RUN --mount=type=bind,from=pkgs-amd64,source=/pkgs,target=/tmp/factory-pkgs <<'FACTORY_EOF'
 set -eu
@@ -244,12 +244,12 @@ ADD --checksum=sha256:24bdbf834529c67dbcfa23901bb315a2e610ba79075590b1e95e949d37
 ADD --checksum=sha256:311607ac8ad7d4d1635129bf43595dbb26a31620bf5839dc148e60bf82eb4b69 https://cdn.amazonlinux.com/al2023/blobstore/311607ac8ad7d4d1635129bf43595dbb26a31620bf5839dc148e60bf82eb4b69/perl-subs-1.03-477.amzn2023.0.9.noarch.rpm /pkgs/perl-subs-1.03-477.amzn2023.0.9.noarch.rpm
 ADD --checksum=sha256:07b1c37e6e8b836a99fd36e53cf01ad686f325296fae4455efc8742969552867 https://cdn.amazonlinux.com/al2023/blobstore/07b1c37e6e8b836a99fd36e53cf01ad686f325296fae4455efc8742969552867/perl-vars-1.05-477.amzn2023.0.9.noarch.rpm /pkgs/perl-vars-1.05-477.amzn2023.0.9.noarch.rpm
 ADD --checksum=sha256:0d5edf982aa8fbab3590a9525865f637ee0888e42a85192424a72dca270956e8 https://cdn.amazonlinux.com/al2023/blobstore/0d5edf982aa8fbab3590a9525865f637ee0888e42a85192424a72dca270956e8/shadow-utils-4.9-12.amzn2023.0.4.aarch64.rpm /pkgs/shadow-utils-4.9-12.amzn2023.0.4.aarch64.rpm
-ADD --checksum=sha256:6f574eac5d754133248a6ba1d212f4ddd76c667b705a838a6b1731c015bb84dd https://cdn.amazonlinux.com/al2023/blobstore/6f574eac5d754133248a6ba1d212f4ddd76c667b705a838a6b1731c015bb84dd/systemd-libs-252.23-12.amzn2023.aarch64.rpm /pkgs/systemd-libs-252.23-12.amzn2023.aarch64.rpm
+ADD --checksum=sha256:d0aa85e199ae1ba7aa36da43f5cb68b861d8a1bd9f89097356c4c9bc215c98ae https://cdn.amazonlinux.com/al2023/blobstore/d0aa85e199ae1ba7aa36da43f5cb68b861d8a1bd9f89097356c4c9bc215c98ae/systemd-libs-252.23-14.amzn2023.aarch64.rpm /pkgs/systemd-libs-252.23-14.amzn2023.aarch64.rpm
 ADD --checksum=sha256:d479f30ce438ab5d91f2a652e60ac5ca00c8662d02ea495477367c1c7d5caca9 https://cdn.amazonlinux.com/al2023/blobstore/d479f30ce438ab5d91f2a652e60ac5ca00c8662d02ea495477367c1c7d5caca9/tar-1.34-1.amzn2023.0.4.aarch64.rpm /pkgs/tar-1.34-1.amzn2023.0.4.aarch64.rpm
 ADD --checksum=sha256:c7f712f4ad72709e07c3502a295105cd0fa03d926579529331e6d874a1635ebf https://cdn.amazonlinux.com/al2023/blobstore/c7f712f4ad72709e07c3502a295105cd0fa03d926579529331e6d874a1635ebf/util-linux-2.37.4-1.amzn2023.0.6.aarch64.rpm /pkgs/util-linux-2.37.4-1.amzn2023.0.6.aarch64.rpm
 ADD --checksum=sha256:da57659990d3142bcaceaf2ac0c12ed38bee1877b82f280c5f5bd52c766c500a https://cdn.amazonlinux.com/al2023/blobstore/da57659990d3142bcaceaf2ac0c12ed38bee1877b82f280c5f5bd52c766c500a/util-linux-core-2.37.4-1.amzn2023.0.6.aarch64.rpm /pkgs/util-linux-core-2.37.4-1.amzn2023.0.6.aarch64.rpm
 
-FROM amazonlinux:2023@sha256:5b29412077a463b4a3a8fbc99a8cdf4b929f38a3ecc8dac10328d8f36b0099b8 AS packages-arm64
+FROM amazonlinux:2023@sha256:8ed3c0a996841537f75607e7d1de2114d8150391f75792e8da9268738547e73f AS packages-arm64
 ARG SOURCE_DATE_EPOCH
 RUN --mount=type=bind,from=pkgs-arm64,source=/pkgs,target=/tmp/factory-pkgs <<'FACTORY_EOF'
 set -eu
