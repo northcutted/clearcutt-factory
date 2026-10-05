@@ -111,6 +111,33 @@ func versions(pkgs []Package) map[string]string {
 	return m
 }
 
+// SameContent reports whether two package locks install exactly the same
+// files, whatever URLs or snapshot they were resolved through.
+func (p Packages) SameContent(o Packages) bool {
+	if p.EffectiveManager() != o.EffectiveManager() || p.Distro != o.Distro || len(p.Platforms) != len(o.Platforms) {
+		return false
+	}
+	for plat, pkgs := range p.Platforms {
+		other, ok := o.Platforms[plat]
+		if !ok || len(other) != len(pkgs) {
+			return false
+		}
+		for i, x := range pkgs {
+			y := other[i]
+			if x.Name != y.Name || x.Version != y.Version || x.Arch != y.Arch || x.SHA256 != y.SHA256 || x.Checksum != y.Checksum {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// SamePins reports whether two locks of a tool pin the same version and
+// content (hashes, image digests, Nix store paths).
+func (t Tool) SamePins(o Tool) bool {
+	return t.Version == o.Version && t.Verification == o.Verification && toolPins(t) == toolPins(o)
+}
+
 func toolPins(t Tool) string {
 	var b strings.Builder
 	for _, p := range slices.Sorted(maps.Keys(t.Artifacts)) {

@@ -300,3 +300,25 @@ func TestLockApp(t *testing.T) {
 		t.Errorf("expected missing platform error, got %v", err)
 	}
 }
+
+// TestUpdateKeepsSameContent: lock --update that resolves the same files
+// (through a moved snapshot, say) leaves the lock and its timestamp alone.
+func TestUpdateKeepsSameContent(t *testing.T) {
+	srv, _ := fakeUpstream(t)
+	r := testResolver(t, srv)
+	m, o := testManifest(srv)
+	first, err := r.Lock(context.Background(), m, o, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// As if the first lock had resolved through another snapshot.
+	first.Packages.Snapshot = "20261003T000000Z"
+	r.Now = func() time.Time { return time.Unix(1800000000, 0) }
+	again, err := r.Lock(context.Background(), m, o, first, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(again.Marshal()) != string(first.Marshal()) {
+		t.Errorf("an update that changed nothing moved the lock:\n%s", strings.Join(lock.Changes(first, again), "\n"))
+	}
+}
