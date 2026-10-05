@@ -1,0 +1,69 @@
+# Re-resolves every input of every image and app once a week and opens one
+# pull request per manifest listing what moved (image digests, package and
+# tool versions). CI on the pull request builds, smoke-tests, scans, and
+# gates the change; merging it publishes the rebuilt image.
+#
+# Pull requests opened with the default GITHUB_TOKEN don't start other
+# workflows. Set a FACTORY_BOT_TOKEN secret (a GitHub App token, or a
+# fine-grained token with contents and pull-requests write) so CI runs on
+# them.
+name: update-locks
+on:
+  schedule:
+    - cron: "23 6 * * 1" # Mondays
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  manifests:
+    runs-on: ubuntu-latest
+    outputs:
+      manifests: ${{ steps.find.outputs.manifests }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: find
+        run: echo "manifests=$(find examples \( -name image.yaml -o -name app.yaml \) | sort | jq -R -s -c 'split("\n")[:-1]')" >> "$GITHUB_OUTPUT"
+
+  update:
+    needs: manifests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix:
+        manifest: ${{ fromJSON(needs.manifests.outputs.manifests) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ secrets.FACTORY_BOT_TOKEN || github.token }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: docker/setup-qemu-action@v4 # apt and dnf resolve inside the base, per platform
+      - run: go install ./cmd/factory
+
+      - name: Re-resolve every input
+        run: factory lock -f "${{ matrix.manifest }}" --update | tee "$RUNNER_TEMP/lock.out"
+
+      - name: Open or update the pull request
+        env:
+          GH_TOKEN: ${{ secrets.FACTORY_BOT_TOKEN || github.token }}
+          MANIFEST: ${{ matrix.manifest }}
+        run: |
+          dir=$(dirname "$MANIFEST")
+          name=$(basename "$dir")
+          {
+            echo "Weekly \`factory lock --update\` of \`$MANIFEST\`:"
+            echo
+            echo '```'
+            grep '^  ' "$RUNNER_TEMP/lock.out" || true
+            echo '```'
+            echo
+            echo "CI builds, smoke-tests, scans, and gates this change. Merging publishes the rebuilt image."
+          } > "$RUNNER_TEMP/body.md"
+          .github/scripts/open-pr.sh "factory/update/$name" "Update the pinned inputs of $name" "$RUNNER_TEMP/body.md" "$dir"
