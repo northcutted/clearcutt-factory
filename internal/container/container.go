@@ -53,6 +53,9 @@ func (r Runner) Run(ctx context.Context, image, platform, script string, args ..
 	cmdArgs := []string{"run", "--rm", "--pull=missing"}
 	if platform != "" {
 		cmdArgs = append(cmdArgs, "--platform", platform)
+		if image, err = registry.PlatformRef(ctx, image, platform); err != nil {
+			return nil, err
+		}
 	}
 	cmdArgs = append(cmdArgs, "--entrypoint", "sh", registry.Qualify(image), "-c", script, "factory")
 	cmdArgs = append(cmdArgs, args...)
