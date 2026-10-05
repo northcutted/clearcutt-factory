@@ -1,0 +1,103 @@
+# Keeps every app on the newest build of its stack's run image without
+# rebuilding it: daily, and after the images workflow publishes on main.
+#
+# Each app's published image is rebased (when safe), smoke-tested, scanned,
+# gated, pushed, signed, and checked by repeating the rebase from its signed
+# record. A pull request then pins the app's lock to the same base, so the
+# next build from source doesn't move it back. An app that can't be rebased
+# gets the same pull request (building it is the fix) and its job fails.
+#
+# See update-locks.yml about FACTORY_BOT_TOKEN.
+name: fleet
+on:
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+  workflow_run:
+    workflows: [images]
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  apps:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      apps: ${{ steps.find.outputs.apps }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: find
+        run: echo "apps=$(find examples -name app.yaml | sort | jq -R -s -c 'split("\n")[:-1]')" >> "$GITHUB_OUTPUT"
+
+  rebase:
+    needs: apps
+    if: needs.apps.outputs.apps != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      packages: write # push to ghcr.io
+      id-token: write # keyless signing
+    strategy:
+      fail-fast: false
+      matrix:
+        app: ${{ fromJSON(needs.apps.outputs.apps) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ secrets.FACTORY_BOT_TOKEN || github.token }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: docker/setup-qemu-action@v4 # smoke tests run every platform
+      - uses: sigstore/cosign-installer@v4
+      - uses: anchore/sbom-action/download-syft@v0
+      - uses: anchore/scan-action/download-grype@v7
+      - run: go install ./cmd/factory
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rebase onto the newest run image
+        id: rebase
+        run: |
+          if factory rebase -f "${{ matrix.app }}" --push --update-lock 2>&1 | tee "$RUNNER_TEMP/rebase.out"; then
+            echo "failed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+          fi
+          result=$(find out -path '*-rebase/result.json' 2>/dev/null | head -n 1 || true)
+          if [ -n "$result" ]; then echo "image=$(jq -r '.image // empty' "$result")" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Repeat the rebase from its signed record
+        if: steps.rebase.outputs.image != ''
+        working-directory: examples
+        run: factory verify --image "${{ steps.rebase.outputs.image }}"
+
+      - name: Pin the lock to the same base
+        env:
+          GH_TOKEN: ${{ secrets.FACTORY_BOT_TOKEN || github.token }}
+          APP: ${{ matrix.app }}
+          FAILED: ${{ steps.rebase.outputs.failed }}
+        run: |
+          dir=$(dirname "$APP")
+          name=$(basename "$dir")
+          if [ "$FAILED" = true ]; then
+            intro="The published image could not be rebased. This moves the lock to the newest run image, so merging rebuilds the app on it from source."
+          else
+            intro="The published image is on the newest run image. This pins the lock to the same base, so the next build from source doesn't move it back."
+          fi
+          { echo "$intro"; echo; echo '```'; cat "$RUNNER_TEMP/rebase.out"; echo '```'; } > "$RUNNER_TEMP/body.md"
+          .github/scripts/open-pr.sh "factory/rebase/$name" "Pin $name to the newest run image" "$RUNNER_TEMP/body.md" "$dir"
+
+      - name: Fail if the app must be rebuilt
+        if: steps.rebase.outputs.failed == 'true'
+        run: |
+          echo "::error::${{ matrix.app }} could not be rebased; see the step above and the pull request"
+          exit 1
