@@ -48,6 +48,8 @@ jobs:
       - run: go install ./cmd/factory
 
       - name: Re-resolve every input
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # GitHub API lookups (release digests, nixpkgs revisions) without the anonymous rate limit
         run: factory lock -f "${{ matrix.manifest }}" --update | tee "$RUNNER_TEMP/lock.out"
 
       - name: Open or update the pull request
