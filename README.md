@@ -35,12 +35,24 @@ rebuilding the app, after checking that this is safe.
 
 ## Quick start
 
-Requirements: Go, and Docker or Podman (BuildKit runs inside a container, pinned
-by digest). `syft`, `grype`, and `cosign` on `PATH` for scanning and signing.
+Install a signed release binary from
+[Releases](https://github.com/northcutted/clearcutt-factory/releases) (see
+[docs/adopting.md](docs/adopting.md#1-install) to verify it), or
+`go install github.com/northcutted/clearcutt-factory/cmd/clearcutt-factory@v0.1.0`.
+Building needs Docker or Podman (BuildKit runs inside a container, pinned by
+digest); scanning and signing need `syft`, `grype`, and `cosign` on `PATH`.
+
+Set up your own repository (an org profile, an example image, and a GitHub
+Actions workflow that publishes and maintains everything):
 
 ```sh
-go install github.com/northcutted/clearcutt-factory/cmd/clearcutt-factory@latest
+clearcutt-factory init
+```
 
+[docs/adopting.md](docs/adopting.md) walks through the rest. To try the
+examples here:
+
+```sh
 clearcutt-factory lock   -f examples/platform-tools/image.yaml   # pin everything; writes lock + Containerfile
 clearcutt-factory build  -f examples/platform-tools/image.yaml   # build, SBOM, scan, gate (local only)
 clearcutt-factory build  -f examples/platform-tools/image.yaml --push   # …and push, sign, attest
@@ -54,6 +66,11 @@ clearcutt-factory rebase -f examples/hello-app/app.yaml --push --update-lock   #
 Commit `image.yaml`, `image.lock.yaml`, and `image.Containerfile`. Reviewers see
 exact version and hash changes in the lock diff and the resulting build steps in
 the Containerfile diff.
+
+JSON Schemas for manifests, stacks, and the org profile are in
+[`schemas/`](schemas); start a file with
+`# yaml-language-server: $schema=…/schemas/manifest.schema.json` (as `init`
+does) and editors complete and check it.
 
 ## The manifest
 
@@ -195,6 +212,13 @@ image with `COPY --link`. The app's layer therefore never touches the run
 image's files, and the image records its base in the standard
 `org.opencontainers.image.base.name`/`.base.digest` annotations. Those two
 properties are what make it safe to rebase.
+
+**Stacks in a registry.** A platform team publishes a stack once
+(`clearcutt-factory stack push -f stacks/go.yaml --ref ghcr.io/acme/stacks/go:1`,
+which resolves manifest paths to image references and signs it), and apps in
+any repository name it: `stack: ghcr.io/acme/stacks/go:1`. The app's lock pins
+the stack's digest until `lock --update` moves it, and
+`policy.requireSignedStacks` accepts only stacks signed by the org's signer.
 
 Apps can't declare packages, tools, or files: anything an app needs from the
 OS belongs in the stack's run image, which is itself a factory image. Quote
@@ -361,8 +385,6 @@ nothing is GitHub-specific.
 * Vulnerability reports describe the day they were made. Rescanning and
   re-attesting on a schedule is not built in yet.
 * The local BuildKit cache volume is shared, so run one build at a time per machine.
-* Stacks are referenced by path, so apps in other repositories vendor them
-  (a git submodule, say); fetching stacks from a registry is not built in yet.
 * Rebase checks are file-level: they catch replaced files, missing libraries
   and interpreters, and a changed distribution release, not every behavior
   change in the new base (a different default config file, say). Within one
@@ -376,13 +398,21 @@ nothing is GitHub-specific.
 * Smoke tests run images on the build machine, other architectures through
   emulation (QEMU in CI); `--no-test` skips them.
 
+## Versions
+
+Releases are signed and reproducible; until 1.0, formats may change between
+minor releases with migration notes. See [docs/stability.md](docs/stability.md)
+and [CHANGELOG.md](CHANGELOG.md).
+
 ## Development
 
 ```sh
 go test ./...
 go test ./internal/render -update   # refresh the golden Containerfiles
+go test ./internal/schema -update   # regenerate schemas/ after changing manifest types
 CLEARCUTT_FACTORY_E2E=1 go test ./internal/factory   # real lock + build + no-cache rebuild per package manager,
-                                           # and an app built on a stack, then rebased (needs docker or podman)
+                                                     # and an app built on a stack, then rebased (needs docker or podman)
+scripts/release.sh v0.2.0           # after adding a CHANGELOG section: re-pin refs, commit, tag
 ```
 
 ## License
