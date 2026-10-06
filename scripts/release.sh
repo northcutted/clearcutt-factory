@@ -19,6 +19,8 @@ perl -pi -e 's#(northcutted/clearcutt-factory(?:/\.github/workflows/[a-z-]+\.yml
 
 go test ./internal/factory -run TestInit >/dev/null
 git add -A
-git commit -q -m "Release $version"
+if ! git diff --cached --quiet; then
+  git commit -q -m "Release $version"
+fi
 git tag -a "$version" -m "$version"
 echo "tagged $version; push with: git push origin main $version"
