@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schemas/manifest.schema.json
 # Debian with apt packages pinned to snapshot.debian.org, plus tools from Nix
 # and a release download. Every .deb is fetched by sha256 and installed offline.
 apiVersion: factory.clearcutt.dev/v1alpha1

@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schemas/manifest.schema.json
 # An app: source plus a stack. factory runs the stack's steps on this
 # directory and ships only their output (in /app) on the stack's run image.
 apiVersion: factory.clearcutt.dev/v1alpha1
