@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schemas/stack.schema.json
 # A stack: how the platform team builds Go services. Apps name it and add
 # little more than their source; the stack decides the toolchain, the build
 # steps, and the image every app ships on.

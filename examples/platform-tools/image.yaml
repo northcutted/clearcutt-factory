@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schemas/manifest.schema.json
 # A purpose-built image for platform engineers: distro packages from Wolfi plus
 # third-party tools, each pinned and verified by clearcutt-factory lock.
 apiVersion: factory.clearcutt.dev/v1alpha1
