@@ -8,15 +8,15 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/northcutted/declarative-image-factory/internal/container"
-	"github.com/northcutted/declarative-image-factory/internal/lock"
+	"github.com/northcutted/clearcutt-factory/internal/container"
+	"github.com/northcutted/clearcutt-factory/internal/lock"
 )
 
 // dnfScript runs in an RPM-based base. dnf decides what to install and
 // downloads it; rpm reports each file's identity and checks its signature
 // against the distribution keys shipped in the image.
 const dnfScript = `set -eu
-command -v dnf >/dev/null 2>&1 || { echo "factory: dnf is not available in the base image (microdnf-only images can't be locked yet)" >&2; exit 3; }
+command -v dnf >/dev/null 2>&1 || { echo "clearcutt-factory: dnf is not available in the base image (microdnf-only images can't be locked yet)" >&2; exit 3; }
 . /etc/os-release
 echo "### os"
 echo "${ID:-} ${VERSION_ID:-}"

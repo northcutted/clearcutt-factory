@@ -56,7 +56,7 @@ func write(t *testing.T, body string) string {
 }
 
 func TestValidation(t *testing.T) {
-	p := write(t, `apiVersion: factory.dev/v1alpha1
+	p := write(t, `apiVersion: factory.clearcutt.dev/v1alpha1
 kind: Image
 metadata: {name: Bad_Name}
 spec:
@@ -86,14 +86,14 @@ spec:
 }
 
 func TestUnknownFieldsRejected(t *testing.T) {
-	p := write(t, "apiVersion: factory.dev/v1alpha1\nkind: Image\nmetadata: {name: x}\nspec:\n  pakages: [bash]\n")
+	p := write(t, "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Image\nmetadata: {name: x}\nspec:\n  pakages: [bash]\n")
 	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "pakages") {
 		t.Fatalf("expected unknown field error, got %v", err)
 	}
 }
 
 func TestArchMap(t *testing.T) {
-	p := write(t, `apiVersion: factory.dev/v1alpha1
+	p := write(t, `apiVersion: factory.clearcutt.dev/v1alpha1
 kind: Image
 metadata: {name: x}
 spec:
@@ -115,8 +115,8 @@ func TestExtendsCycle(t *testing.T) {
 	a := filepath.Join(dir, "a.yaml")
 	b := filepath.Join(dir, "b.yaml")
 	for p, body := range map[string]string{
-		a: "apiVersion: factory.dev/v1alpha1\nkind: Image\nextends: b.yaml\nmetadata: {name: a}\n",
-		b: "apiVersion: factory.dev/v1alpha1\nkind: Image\nextends: a.yaml\nmetadata: {name: b}\n",
+		a: "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Image\nextends: b.yaml\nmetadata: {name: a}\n",
+		b: "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Image\nextends: a.yaml\nmetadata: {name: b}\n",
 	} {
 		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
@@ -130,9 +130,9 @@ func TestExtendsCycle(t *testing.T) {
 func TestApp(t *testing.T) {
 	dir := t.TempDir()
 	files := map[string]string{
-		"factory.org.yaml":      "apiVersion: factory.dev/v1alpha1\nkind: OrgProfile\nregistry: registry.example/acme\ntags: [stable]\ndefaults: {labels: {vendor: acme}}\n",
-		"images/run/image.yaml": "apiVersion: factory.dev/v1alpha1\nkind: Image\nmetadata: {name: go-run}\nspec: {base: cgr.dev/chainguard/static:latest}\n",
-		"stacks/go.yaml": `apiVersion: factory.dev/v1alpha1
+		"factory.org.yaml":      "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nregistry: registry.example/acme\ntags: [stable]\ndefaults: {labels: {vendor: acme}}\n",
+		"images/run/image.yaml": "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Image\nmetadata: {name: go-run}\nspec: {base: cgr.dev/chainguard/static:latest}\n",
+		"stacks/go.yaml": `apiVersion: factory.clearcutt.dev/v1alpha1
 kind: Stack
 metadata: {name: go}
 spec:
@@ -148,7 +148,7 @@ spec:
   user: "65532"
   entrypoint: ["/app/{{name}}"]
 `,
-		"apps/hello/app.yaml": `apiVersion: factory.dev/v1alpha1
+		"apps/hello/app.yaml": `apiVersion: factory.clearcutt.dev/v1alpha1
 kind: App
 metadata: {name: hello}
 spec:
@@ -199,7 +199,7 @@ spec:
 	}
 
 	bad := filepath.Join(dir, "apps/hello/bad.yaml")
-	if err := os.WriteFile(bad, []byte("apiVersion: factory.dev/v1alpha1\nkind: App\nmetadata: {name: bad}\nspec:\n  stack: ../../stacks/go.yaml\n  packages: [curl]\n  source: missing\n"), 0o644); err != nil {
+	if err := os.WriteFile(bad, []byte("apiVersion: factory.clearcutt.dev/v1alpha1\nkind: App\nmetadata: {name: bad}\nspec:\n  stack: ../../stacks/go.yaml\n  packages: [curl]\n  source: missing\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	m, err = Load(bad)

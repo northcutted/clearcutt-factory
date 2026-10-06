@@ -3,7 +3,7 @@ package scan
 import (
 	"testing"
 
-	"github.com/northcutted/declarative-image-factory/internal/manifest"
+	"github.com/northcutted/clearcutt-factory/internal/manifest"
 )
 
 func TestGate(t *testing.T) {

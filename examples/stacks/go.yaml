@@ -1,7 +1,7 @@
 # A stack: how the platform team builds Go services. Apps name it and add
 # little more than their source; the stack decides the toolchain, the build
 # steps, and the image every app ships on.
-apiVersion: factory.dev/v1alpha1
+apiVersion: factory.clearcutt.dev/v1alpha1
 kind: Stack
 metadata:
   name: go
@@ -10,7 +10,7 @@ spec:
   # The toolchain the steps run in (pinned by digest in each app's lock).
   build: golang:1
   # What apps ship on. Point this at an image you build with factory (e.g.
-  # run: ../go-runtime/image.yaml) and `factory rebase` moves every app onto
+  # run: ../go-runtime/image.yaml) and `clearcutt-factory rebase` moves every app onto
   # each rebuild of it without rebuilding the apps.
   run: cgr.dev/chainguard/static:latest
   platforms: [linux/amd64, linux/arm64]
@@ -25,4 +25,4 @@ spec:
   user: "65532"
   entrypoint: ["/app/{{name}}"]
   labels:
-    org.opencontainers.image.source: https://github.com/northcutted/declarative-image-factory
+    org.opencontainers.image.source: https://github.com/northcutted/clearcutt-factory

@@ -14,7 +14,7 @@ import (
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 
-	"github.com/northcutted/declarative-image-factory/internal/registry"
+	"github.com/northcutted/clearcutt-factory/internal/registry"
 )
 
 // Artifacts describes differences between want and got, platform by platform.

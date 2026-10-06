@@ -11,19 +11,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/northcutted/declarative-image-factory/internal/attest"
-	"github.com/northcutted/declarative-image-factory/internal/builder"
-	"github.com/northcutted/declarative-image-factory/internal/lock"
-	"github.com/northcutted/declarative-image-factory/internal/manifest"
-	"github.com/northcutted/declarative-image-factory/internal/policy"
-	"github.com/northcutted/declarative-image-factory/internal/registry"
-	"github.com/northcutted/declarative-image-factory/internal/render"
-	"github.com/northcutted/declarative-image-factory/internal/sbom"
-	"github.com/northcutted/declarative-image-factory/internal/scan"
-	"github.com/northcutted/declarative-image-factory/internal/smoke"
+	"github.com/northcutted/clearcutt-factory/internal/attest"
+	"github.com/northcutted/clearcutt-factory/internal/builder"
+	"github.com/northcutted/clearcutt-factory/internal/lock"
+	"github.com/northcutted/clearcutt-factory/internal/manifest"
+	"github.com/northcutted/clearcutt-factory/internal/policy"
+	"github.com/northcutted/clearcutt-factory/internal/registry"
+	"github.com/northcutted/clearcutt-factory/internal/render"
+	"github.com/northcutted/clearcutt-factory/internal/sbom"
+	"github.com/northcutted/clearcutt-factory/internal/scan"
+	"github.com/northcutted/clearcutt-factory/internal/smoke"
 )
 
-const cacheVolume = "factory-buildkit-cache"
+const cacheVolume = "clearcutt-factory-buildkit-cache"
 
 type BuildOptions struct {
 	Push    bool
@@ -72,7 +72,7 @@ func Build(ctx context.Context, opts Options, bo BuildOptions) error {
 		return err
 	}
 	if old, err := os.ReadFile(m.ContainerfilePath()); err != nil || !bytes.Equal(old, out.Containerfile) {
-		opts.logf("warning: %s is missing or out of date; run factory render and commit it", rel(m.ContainerfilePath()))
+		opts.logf("warning: %s is missing or out of date; run clearcutt-factory render and commit it", rel(m.ContainerfilePath()))
 	}
 
 	work, err := filepath.Abs(filepath.Join(bo.OutDir, m.Metadata.Name))

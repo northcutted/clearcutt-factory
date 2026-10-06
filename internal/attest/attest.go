@@ -25,10 +25,15 @@ const (
 	StatementType = "https://in-toto.io/Statement/v1"
 
 	// RecipePredicateType identifies factory's reproducibility recipe.
-	RecipePredicateType = "https://github.com/northcutted/declarative-image-factory/recipe/v1"
+	RecipePredicateType = "https://github.com/northcutted/clearcutt-factory/recipe/v1"
 	// RebasePredicateType identifies the record of a rebase, which is
 	// enough to repeat it.
-	RebasePredicateType = "https://github.com/northcutted/declarative-image-factory/rebase/v1"
+	RebasePredicateType = "https://github.com/northcutted/clearcutt-factory/rebase/v1"
+
+	// Predicate types from before the project was named clearcutt-factory,
+	// accepted when verifying images published then.
+	legacyRecipePredicateType = "https://github.com/northcutted/declarative-image-factory/recipe/v1"
+	legacyRebasePredicateType = "https://github.com/northcutted/declarative-image-factory/rebase/v1"
 	CycloneDXType       = "https://cyclonedx.org/bom"
 	VulnType            = "https://cosign.sigstore.dev/attestation/vuln/v1"
 
@@ -260,7 +265,7 @@ func (c Cosign) Attest(ctx context.Context, ref, predicateType, predicatePath st
 
 // VerifyRecipe verifies and returns the recipe attestation on ref.
 func VerifyRecipe(ctx context.Context, ref string, args []string) (*Recipe, error) {
-	raw, err := VerifyPredicate(ctx, ref, RecipePredicateType, args)
+	raw, err := verifyEither(ctx, ref, RecipePredicateType, legacyRecipePredicateType, args)
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +278,7 @@ func VerifyRecipe(ctx context.Context, ref string, args []string) (*Recipe, erro
 
 // VerifyRebase verifies and returns the rebase record on ref.
 func VerifyRebase(ctx context.Context, ref string, args []string) (*Rebase, error) {
-	raw, err := VerifyPredicate(ctx, ref, RebasePredicateType, args)
+	raw, err := verifyEither(ctx, ref, RebasePredicateType, legacyRebasePredicateType, args)
 	if err != nil {
 		return nil, err
 	}
@@ -282,6 +287,18 @@ func VerifyRebase(ctx context.Context, ref string, args []string) (*Rebase, erro
 		return nil, fmt.Errorf("parsing rebase record: %w", err)
 	}
 	return &r, nil
+}
+
+// verifyEither verifies the current predicate type, then the legacy one.
+func verifyEither(ctx context.Context, ref, current, legacy string, args []string) (json.RawMessage, error) {
+	raw, err := VerifyPredicate(ctx, ref, current, args)
+	if err == nil {
+		return raw, nil
+	}
+	if raw, lerr := VerifyPredicate(ctx, ref, legacy, args); lerr == nil {
+		return raw, nil
+	}
+	return nil, err
 }
 
 // VerifyPredicate verifies the attestations of predicateType on ref with

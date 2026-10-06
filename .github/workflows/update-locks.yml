@@ -4,7 +4,7 @@
 # gates the change; merging it publishes the rebuilt image.
 #
 # Pull requests opened with the default GITHUB_TOKEN don't start other
-# workflows. Set a FACTORY_BOT_TOKEN secret (a GitHub App token, or a
+# workflows. Set a CLEARCUTT_BOT_TOKEN secret (a GitHub App token, or a
 # fine-grained token with contents and pull-requests write) so CI runs on
 # them.
 name: update-locks
@@ -40,27 +40,27 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          token: ${{ secrets.FACTORY_BOT_TOKEN || github.token }}
+          token: ${{ secrets.CLEARCUTT_BOT_TOKEN || github.token }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0; apt and dnf resolve inside the base, per platform
-      - run: go install ./cmd/factory
+      - run: go install ./cmd/clearcutt-factory
 
       - name: Re-resolve every input
         env:
           GITHUB_TOKEN: ${{ github.token }} # GitHub API lookups (release digests, nixpkgs revisions) without the anonymous rate limit
-        run: factory lock -f "${{ matrix.manifest }}" --update | tee "$RUNNER_TEMP/lock.out"
+        run: clearcutt-factory lock -f "${{ matrix.manifest }}" --update | tee "$RUNNER_TEMP/lock.out"
 
       - name: Open or update the pull request
         env:
-          GH_TOKEN: ${{ secrets.FACTORY_BOT_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN || github.token }}
           MANIFEST: ${{ matrix.manifest }}
         run: |
           dir=$(dirname "$MANIFEST")
           name=$(basename "$dir")
           {
-            echo "Weekly \`factory lock --update\` of \`$MANIFEST\`:"
+            echo "Weekly \`clearcutt-factory lock --update\` of \`$MANIFEST\`:"
             echo
             echo '```'
             grep '^  ' "$RUNNER_TEMP/lock.out" || true

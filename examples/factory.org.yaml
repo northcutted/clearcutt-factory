@@ -1,6 +1,6 @@
 # Org profile: every image under this directory inherits these choices.
 # Swap registry, signer, scanner gate, and policy to match your organization.
-apiVersion: factory.dev/v1alpha1
+apiVersion: factory.clearcutt.dev/v1alpha1
 kind: OrgProfile
 
 registry: ghcr.io/northcutted/images
@@ -23,7 +23,7 @@ signing:
   # key: awskms:///alias/image-signing
   # args: [--use-signing-config=false, --tlog-upload=false]   # private: no public Rekor
   verify:
-    certificateIdentityRegexp: ^https://github\.com/northcutted/declarative-image-factory/
+    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
 
 vulnerabilities:

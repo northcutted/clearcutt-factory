@@ -14,13 +14,13 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/northcutted/declarative-image-factory/internal/container"
-	"github.com/northcutted/declarative-image-factory/internal/lock"
-	"github.com/northcutted/declarative-image-factory/internal/manifest"
-	"github.com/northcutted/declarative-image-factory/internal/policy"
-	"github.com/northcutted/declarative-image-factory/internal/registry"
-	"github.com/northcutted/declarative-image-factory/internal/render"
-	"github.com/northcutted/declarative-image-factory/internal/resolve"
+	"github.com/northcutted/clearcutt-factory/internal/container"
+	"github.com/northcutted/clearcutt-factory/internal/lock"
+	"github.com/northcutted/clearcutt-factory/internal/manifest"
+	"github.com/northcutted/clearcutt-factory/internal/policy"
+	"github.com/northcutted/clearcutt-factory/internal/registry"
+	"github.com/northcutted/clearcutt-factory/internal/render"
+	"github.com/northcutted/clearcutt-factory/internal/resolve"
 )
 
 // Options are shared by every command.
@@ -59,13 +59,13 @@ func loadLocked(opts Options) (*manifest.Manifest, *manifest.Org, *lock.Lock, er
 	}
 	l, err := lock.Read(m.LockPath())
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil, nil, fmt.Errorf("%s does not exist; run factory lock", filepath.Base(m.LockPath()))
+		return nil, nil, nil, fmt.Errorf("%s does not exist; run clearcutt-factory lock", filepath.Base(m.LockPath()))
 	}
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	if l.InputsDigest != lock.InputsOf(m, org).Digest() {
-		return nil, nil, nil, fmt.Errorf("%s is stale (the manifest or org builder settings changed); run factory lock", filepath.Base(m.LockPath()))
+		return nil, nil, nil, fmt.Errorf("%s is stale (the manifest or org builder settings changed); run clearcutt-factory lock", filepath.Base(m.LockPath()))
 	}
 	return m, org, l, nil
 }
@@ -161,7 +161,7 @@ func Render(ctx context.Context, opts Options, check bool, contextDir string) er
 	if check {
 		old, err := os.ReadFile(m.ContainerfilePath())
 		if err != nil || !bytes.Equal(old, out.Containerfile) {
-			return fmt.Errorf("%s is out of date; run factory render", rel(m.ContainerfilePath()))
+			return fmt.Errorf("%s is out of date; run clearcutt-factory render", rel(m.ContainerfilePath()))
 		}
 		opts.printf("%s is up to date", rel(m.ContainerfilePath()))
 	} else if err := writeContainerfile(opts, m, l); err != nil {

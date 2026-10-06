@@ -1,4 +1,4 @@
-apiVersion: factory.dev/v1alpha1
+apiVersion: factory.clearcutt.dev/v1alpha1
 kind: Image
 extends: ../../base.yaml
 metadata:

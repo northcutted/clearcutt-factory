@@ -11,7 +11,7 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/v1/random"
 
-	"github.com/northcutted/declarative-image-factory/internal/manifest"
+	"github.com/northcutted/clearcutt-factory/internal/manifest"
 )
 
 type fake struct {
@@ -49,10 +49,10 @@ func TestCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := f.called("run ")
-	if !strings.Contains(run, "--platform linux/arm64 --entrypoint /usr/local/bin/kubectl localhost/factory-smoke/platform-tools:linux-arm64 version --client") {
+	if !strings.Contains(run, "--platform linux/arm64 --entrypoint /usr/local/bin/kubectl localhost/clearcutt-factory-smoke/platform-tools:linux-arm64 version --client") {
 		t.Errorf("run = %q", run)
 	}
-	if f.called("load -q -i ") == "" || f.called("rmi -f localhost/factory-smoke/platform-tools:linux-arm64") == "" || f.called("rm -f factory-smoke-") == "" {
+	if f.called("load -q -i ") == "" || f.called("rmi -f localhost/clearcutt-factory-smoke/platform-tools:linux-arm64") == "" || f.called("rm -f clearcutt-factory-smoke-") == "" {
 		t.Errorf("load/cleanup missing: %q", f.calls)
 	}
 
@@ -99,7 +99,7 @@ func TestHTTP(t *testing.T) {
 	if err := r.Run(context.Background(), img, "linux/amd64", "hello", test); err != nil {
 		t.Fatal(err)
 	}
-	if run := f.called("run "); !strings.Contains(run, "-d -p 127.0.0.1::8080 localhost/factory-smoke/hello:linux-amd64") {
+	if run := f.called("run "); !strings.Contains(run, "-d -p 127.0.0.1::8080 localhost/clearcutt-factory-smoke/hello:linux-amd64") {
 		t.Errorf("run = %q", run)
 	}
 

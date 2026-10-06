@@ -11,13 +11,13 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/northcutted/declarative-image-factory/internal/registry"
+	"github.com/northcutted/clearcutt-factory/internal/registry"
 )
 
 // Runtime returns the docker or podman binary to use. pref is auto, docker, or
-// podman; FACTORY_RUNTIME overrides it.
+// podman; CLEARCUTT_FACTORY_RUNTIME overrides it.
 func Runtime(pref string) (string, error) {
-	if env := os.Getenv("FACTORY_RUNTIME"); env != "" {
+	if env := os.Getenv("CLEARCUTT_FACTORY_RUNTIME"); env != "" {
 		pref = env
 	}
 	switch pref {

@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/northcutted/declarative-image-factory/internal/apk"
-	"github.com/northcutted/declarative-image-factory/internal/lock"
-	"github.com/northcutted/declarative-image-factory/internal/manifest"
+	"github.com/northcutted/clearcutt-factory/internal/apk"
+	"github.com/northcutted/clearcutt-factory/internal/lock"
+	"github.com/northcutted/clearcutt-factory/internal/manifest"
 )
 
 func sum(s string) string {
@@ -268,9 +268,9 @@ func TestLockApp(t *testing.T) {
 	}
 
 	// Both tags move upstream. A plain relock keeps both pins; dropping
-	// only the base pin (factory lock --update-base) moves only the base.
+	// only the base pin (clearcutt-factory lock --update-base) moves only the base.
 	r.ImageDigest = func(_ context.Context, ref string) (string, error) { return "sha256:" + sum(ref+"-v2"), nil }
-	r.digests = nil // a new run of factory lock
+	r.digests = nil // a new run of clearcutt-factory lock
 	same, err := r.Lock(context.Background(), m, manifest.DefaultOrg(), l, false)
 	if err != nil || same.Base.Digest != l.Base.Digest {
 		t.Fatalf("plain relock moved the base: %v", err)

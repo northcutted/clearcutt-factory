@@ -11,7 +11,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/northcutted/declarative-image-factory/internal/lock"
+	"github.com/northcutted/clearcutt-factory/internal/lock"
 )
 
 // Result is one platform's resolution.

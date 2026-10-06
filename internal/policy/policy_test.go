@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/northcutted/declarative-image-factory/internal/lock"
-	"github.com/northcutted/declarative-image-factory/internal/manifest"
+	"github.com/northcutted/clearcutt-factory/internal/lock"
+	"github.com/northcutted/clearcutt-factory/internal/manifest"
 )
 
 func TestCheck(t *testing.T) {

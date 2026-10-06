@@ -19,8 +19,8 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 
-	"github.com/northcutted/declarative-image-factory/internal/container"
-	"github.com/northcutted/declarative-image-factory/internal/manifest"
+	"github.com/northcutted/clearcutt-factory/internal/container"
+	"github.com/northcutted/clearcutt-factory/internal/manifest"
 )
 
 // Exec runs a container runtime command and returns its stdout and stderr.
@@ -66,7 +66,7 @@ func (r *Runner) run(ctx context.Context, args ...string) ([]byte, []byte, error
 
 // Run loads one platform image into the runtime and runs the test in it.
 func (r *Runner) Run(ctx context.Context, img v1.Image, platform, label string, t *manifest.Test) error {
-	ref := fmt.Sprintf("localhost/factory-smoke/%s:%s", sanitize(label), sanitize(platform))
+	ref := fmt.Sprintf("localhost/clearcutt-factory-smoke/%s:%s", sanitize(label), sanitize(platform))
 	tag, err := name.NewTag(ref)
 	if err != nil {
 		return err
@@ -87,7 +87,7 @@ func (r *Runner) Run(ctx context.Context, img v1.Image, platform, label string, 
 	ctx, cancel := context.WithTimeout(ctx, t.TimeoutOrDefault())
 	defer cancel()
 	// A named container can be removed even if the client is killed on timeout.
-	cname := fmt.Sprintf("factory-smoke-%s-%s-%d", sanitize(label), sanitize(platform), time.Now().UnixNano())
+	cname := fmt.Sprintf("clearcutt-factory-smoke-%s-%s-%d", sanitize(label), sanitize(platform), time.Now().UnixNano())
 	defer func() { _, _ = r.exec(context.WithoutCancel(ctx), "rm", "-f", cname) }()
 	run := []string{"run", "--name", cname, "--platform", platform}
 	var args []string

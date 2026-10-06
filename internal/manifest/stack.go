@@ -55,7 +55,7 @@ type StackSpec struct {
 	// Steps run in the app's source (/src) and write the app to /out.
 	Steps []Step `yaml:"steps" json:"steps"`
 	// AppDir is where /out lands in the run image (default /app). The app
-	// adds nothing else, which is what lets factory rebase it.
+	// adds nothing else, which is what lets clearcutt-factory rebase it.
 	AppDir string `yaml:"appDir,omitempty" json:"appDir,omitempty"`
 
 	// Defaults for apps; {{name}} is the app's name.

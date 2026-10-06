@@ -15,12 +15,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/northcutted/declarative-image-factory/internal/apk"
-	"github.com/northcutted/declarative-image-factory/internal/container"
-	"github.com/northcutted/declarative-image-factory/internal/lock"
-	"github.com/northcutted/declarative-image-factory/internal/manifest"
-	"github.com/northcutted/declarative-image-factory/internal/nix"
-	"github.com/northcutted/declarative-image-factory/internal/registry"
+	"github.com/northcutted/clearcutt-factory/internal/apk"
+	"github.com/northcutted/clearcutt-factory/internal/container"
+	"github.com/northcutted/clearcutt-factory/internal/lock"
+	"github.com/northcutted/clearcutt-factory/internal/manifest"
+	"github.com/northcutted/clearcutt-factory/internal/nix"
+	"github.com/northcutted/clearcutt-factory/internal/registry"
 )
 
 // Resolver pins manifest inputs. Its fields are swappable for tests.
@@ -73,7 +73,7 @@ func (r *Resolver) logf(format string, a ...any) {
 }
 
 // Lock resolves m against org o. Entries of prev whose inputs are unchanged are
-// reused unless update is set, so `factory lock` only moves what you changed.
+// reused unless update is set, so `clearcutt-factory lock` only moves what you changed.
 func (r *Resolver) Lock(ctx context.Context, m *manifest.Manifest, o *manifest.Org, prev *lock.Lock, update bool) (*lock.Lock, error) {
 	return r.LockFrom(ctx, m, o, prev, prev, update)
 }

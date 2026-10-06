@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/northcutted/declarative-image-factory/internal/lock"
+	"github.com/northcutted/clearcutt-factory/internal/lock"
 )
 
 const aptOut = `### os

@@ -17,17 +17,17 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 
-	"github.com/northcutted/declarative-image-factory/internal/rebase"
-	"github.com/northcutted/declarative-image-factory/internal/registry"
+	"github.com/northcutted/clearcutt-factory/internal/rebase"
+	"github.com/northcutted/clearcutt-factory/internal/registry"
 )
 
 // TestEndToEnd locks, builds, and rebuilds small real images, one per package
 // manager, and requires the digests to match. It needs network access and
-// docker or podman, so it only runs with FACTORY_E2E=1. The work directory
+// docker or podman, so it only runs with CLEARCUTT_FACTORY_E2E=1. The work directory
 // must be visible to the container runtime (on macOS, somewhere under $HOME).
 func TestEndToEnd(t *testing.T) {
-	if os.Getenv("FACTORY_E2E") == "" {
-		t.Skip("set FACTORY_E2E=1 to run (needs network and docker or podman)")
+	if os.Getenv("CLEARCUTT_FACTORY_E2E") == "" {
+		t.Skip("set CLEARCUTT_FACTORY_E2E=1 to run (needs network and docker or podman)")
 	}
 	platform := "linux/" + runtime.GOARCH
 	cases := []struct{ name, base, extra string }{
@@ -47,7 +47,7 @@ func TestEndToEnd(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			endToEnd(t, c.name, `apiVersion: factory.dev/v1alpha1
+			endToEnd(t, c.name, `apiVersion: factory.clearcutt.dev/v1alpha1
 kind: Image
 metadata: {name: e2e-`+c.name+`}
 spec:
@@ -78,7 +78,7 @@ func endToEnd(t *testing.T, name, manifest string) {
 		t.Fatal(err)
 	}
 	files := map[string]string{
-		"factory.org.yaml": "apiVersion: factory.dev/v1alpha1\nkind: OrgProfile\nregistry: registry.example/e2e\nsigning: {mode: none}\npolicy: {requireNonRoot: true}\n",
+		"factory.org.yaml": "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nregistry: registry.example/e2e\nsigning: {mode: none}\npolicy: {requireNonRoot: true}\n",
 		"conf/app.yaml":    "greeting: hello\n",
 		"image.yaml":       manifest,
 	}
@@ -119,8 +119,8 @@ func endToEnd(t *testing.T, name, manifest string) {
 // TestEndToEndApp builds a Go app on a stack, rebuilds it to compare
 // digests, then rebases it onto an updated run image in a local registry.
 func TestEndToEndApp(t *testing.T) {
-	if os.Getenv("FACTORY_E2E") == "" {
-		t.Skip("set FACTORY_E2E=1 to run (needs network and docker or podman)")
+	if os.Getenv("CLEARCUTT_FACTORY_E2E") == "" {
+		t.Skip("set CLEARCUTT_FACTORY_E2E=1 to run (needs network and docker or podman)")
 	}
 	home, _ := os.UserHomeDir()
 	base := filepath.Join(home, ".cache", "factory-e2e-test", "app")
@@ -132,8 +132,8 @@ func TestEndToEndApp(t *testing.T) {
 	})
 	dir := filepath.Join(base, "src")
 	files := map[string]string{
-		"factory.org.yaml": "apiVersion: factory.dev/v1alpha1\nkind: OrgProfile\nregistry: registry.example/e2e\nsigning: {mode: none}\npolicy: {requireNonRoot: true}\n",
-		"stacks/go.yaml": `apiVersion: factory.dev/v1alpha1
+		"factory.org.yaml": "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nregistry: registry.example/e2e\nsigning: {mode: none}\npolicy: {requireNonRoot: true}\n",
+		"stacks/go.yaml": `apiVersion: factory.clearcutt.dev/v1alpha1
 kind: Stack
 metadata: {name: go}
 spec:
@@ -147,7 +147,7 @@ spec:
   user: "65532"
   entrypoint: ["/app/{{name}}"]
 `,
-		"hello/app.yaml": "apiVersion: factory.dev/v1alpha1\nkind: App\nmetadata: {name: hello}\nspec:\n  stack: ../stacks/go.yaml\n  platforms: [linux/" + runtime.GOARCH + "]\n  test: {command: [/app/hello]}\n",
+		"hello/app.yaml": "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: App\nmetadata: {name: hello}\nspec:\n  stack: ../stacks/go.yaml\n  platforms: [linux/" + runtime.GOARCH + "]\n  test: {command: [/app/hello]}\n",
 		"hello/go.mod":   "module example.com/hello\n\ngo 1.24\n",
 		"hello/main.go":  "package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Println(\"hello\") }\n",
 	}
