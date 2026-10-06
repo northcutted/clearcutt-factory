@@ -36,7 +36,10 @@ type Options struct {
 func (o Options) printf(format string, a ...any) { _, _ = fmt.Fprintf(o.Stdout, format+"\n", a...) }
 func (o Options) logf(format string, a ...any)   { _, _ = fmt.Fprintf(o.Stderr, format+"\n", a...) }
 
-func load(opts Options) (*manifest.Manifest, *manifest.Org, error) {
+// load reads the manifest and its org profile, fetching a registry stack
+// at the digest its lock pins (or, with fresh or no pin, where its
+// reference points now).
+func load(ctx context.Context, opts Options, fresh bool) (*manifest.Manifest, *manifest.Org, error) {
 	m, err := manifest.Load(opts.ManifestPath)
 	if err != nil {
 		return nil, nil, err
@@ -45,6 +48,9 @@ func load(opts Options) (*manifest.Manifest, *manifest.Org, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := fetchAppStack(ctx, m, fresh); err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", opts.ManifestPath, err)
+	}
 	if err := m.ApplyOrg(org); err != nil {
 		return nil, nil, fmt.Errorf("%s: %w", opts.ManifestPath, err)
 	}
@@ -52,8 +58,8 @@ func load(opts Options) (*manifest.Manifest, *manifest.Org, error) {
 }
 
 // loadLocked loads the manifest and a lock that is current for it.
-func loadLocked(opts Options) (*manifest.Manifest, *manifest.Org, *lock.Lock, error) {
-	m, org, err := load(opts)
+func loadLocked(ctx context.Context, opts Options) (*manifest.Manifest, *manifest.Org, *lock.Lock, error) {
+	m, org, err := load(ctx, opts, false)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -83,8 +89,11 @@ type LockOptions struct {
 // Lock resolves the manifest and writes the lockfile and Containerfile,
 // printing what changed.
 func Lock(ctx context.Context, opts Options, lo LockOptions) error {
-	m, org, err := load(opts)
+	m, org, err := load(ctx, opts, lo.Update)
 	if err != nil {
+		return err
+	}
+	if err := verifyStack(ctx, m, org); err != nil {
 		return err
 	}
 	_, err = lockManifest(ctx, opts, m, org, lo)
@@ -150,7 +159,7 @@ func writeContainerfile(opts Options, m *manifest.Manifest, l *lock.Lock) error 
 // Render writes the Containerfile, checks it is current, or stages a full
 // build context that plain buildctl can build.
 func Render(ctx context.Context, opts Options, check bool, contextDir string) error {
-	m, _, l, err := loadLocked(opts)
+	m, _, l, err := loadLocked(ctx, opts)
 	if err != nil {
 		return err
 	}

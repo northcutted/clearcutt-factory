@@ -60,7 +60,7 @@ func Verify(ctx context.Context, opts Options, vo VerifyOptions) error {
 		previous string
 	)
 	if vo.FromSource {
-		m, o, l, err := loadLocked(opts)
+		m, o, l, err := loadLocked(ctx, opts)
 		if err != nil {
 			return err
 		}

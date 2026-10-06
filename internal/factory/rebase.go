@@ -70,7 +70,7 @@ func Rebase(ctx context.Context, opts Options, ro RebaseOptions) error {
 		return err
 	}
 
-	m, org, err := load(opts)
+	m, org, err := load(ctx, opts, false)
 	if err != nil {
 		return err
 	}
@@ -269,18 +269,8 @@ func rebaseImage(ctx context.Context, opts Options, org *manifest.Org, ro Rebase
 	}
 
 	if ro.Push {
-		ref, err := registry.Push(ctx, art, plan.repo, tags)
-		if err != nil {
+		if result.Image, result.Published, result.Signed, err = publish(ctx, opts, org, art, plan.repo, tags, attest.RebasePredicateType, recordPath, outputs, ro.NoSign); err != nil {
 			return "", err
-		}
-		result.Image = ref
-		opts.printf("pushed %s", ref)
-		if org.Signing.Mode != "none" && !ro.NoSign {
-			if err := signAndAttest(ctx, opts, org, plan.repo, ref, attest.RebasePredicateType, recordPath, outputs); err != nil {
-				return "", err
-			}
-			result.Signed = true
-			opts.printf("signed %s and attached its attestations", ref)
 		}
 		if err := githubOutput(result); err != nil {
 			return "", err

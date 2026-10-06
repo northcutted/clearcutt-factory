@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 )
 
 func opts(ctx context.Context) []remote.Option {
@@ -220,6 +222,41 @@ func WriteImageLayout(dir string, img v1.Image) error {
 		return err
 	}
 	return lp.AppendImage(img)
+}
+
+// Exists reports whether ref (by digest) is in its registry.
+func Exists(ctx context.Context, ref string) (bool, error) {
+	r, err := name.ParseReference(ref)
+	if err != nil {
+		return false, err
+	}
+	_, err = remote.Head(r, opts(ctx)...)
+	var terr *transport.Error
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.As(err, &terr) && terr.StatusCode == http.StatusNotFound:
+		return false, nil
+	}
+	return false, fmt.Errorf("checking %s: %w", ref, err)
+}
+
+// Tag points each tag of ref's repository at ref (by digest).
+func Tag(ctx context.Context, ref string, tags []string) error {
+	d, err := name.NewDigest(ref)
+	if err != nil {
+		return err
+	}
+	desc, err := remote.Get(d, opts(ctx)...)
+	if err != nil {
+		return err
+	}
+	for _, tag := range tags {
+		if err := remote.Tag(d.Context().Tag(tag), desc, opts(ctx)...); err != nil {
+			return fmt.Errorf("tagging %s: %w", d.Context().Tag(tag), err)
+		}
+	}
+	return nil
 }
 
 // WriteLayout writes the artifact as an OCI layout (one entry in index.json,

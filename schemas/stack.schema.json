@@ -1,0 +1,166 @@
+{
+  "$id": "https://raw.githubusercontent.com/northcutted/clearcutt-factory/main/schemas/stack.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Stack is a platform team's recipe for building apps: the image the build runs in, the image apps ship on, the build steps, and defaults for the app's configuration. Apps name a stack and add little more than their source.",
+  "properties": {
+    "apiVersion": {
+      "const": "factory.clearcutt.dev/v1alpha1"
+    },
+    "kind": {
+      "enum": [
+        "Stack"
+      ]
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "properties": {
+        "appDir": {
+          "description": "AppDir is where /out lands in the run image (default /app). The app adds nothing else, which is what lets clearcutt-factory rebase it.",
+          "type": "string"
+        },
+        "build": {
+          "description": "Build is the image the steps run in, and Run the image apps ship on: each an image reference, or the path of a factory manifest (image.yaml) whose published image to use.",
+          "type": "string"
+        },
+        "buildEnv": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "BuildEnv is set for the steps; apps add to it.",
+          "type": "object"
+        },
+        "caches": {
+          "description": "Caches are directories kept between builds (BuildKit cache mounts), e.g. /root/.cache/go-build. Rebuilds without cache must give the same result.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cmd": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "crossCompile": {
+          "description": "CrossCompile runs the steps on the build machine's platform, once per target, with TARGETOS and TARGETARCH set (for toolchains that cross compile, like Go). Otherwise they run on each target platform.",
+          "type": "boolean"
+        },
+        "entrypoint": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Defaults for apps; {{name}} is the app's name.",
+          "type": "object"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "platforms": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "run": {
+          "type": "string"
+        },
+        "steps": {
+          "description": "Steps run in the app's source (/src) and write the app to /out.",
+          "items": {
+            "additionalProperties": false,
+            "description": "Step is one build command (a shell script).",
+            "properties": {
+              "run": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "run"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "test": {
+          "additionalProperties": false,
+          "description": "Test is the default smoke test for apps.",
+          "properties": {
+            "command": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "http": {
+              "additionalProperties": false,
+              "description": "HTTPTest probes a port the container listens on.",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "port"
+              ],
+              "type": "object"
+            },
+            "timeout": {
+              "description": "Timeout is a duration like 30s (default 60s; emulated platforms are slow).",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "user": {
+          "type": "string"
+        },
+        "workdir": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "build",
+        "run",
+        "steps"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "title": "ClearCutt Factory stack",
+  "type": "object"
+}

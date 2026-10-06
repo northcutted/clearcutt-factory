@@ -195,6 +195,9 @@ func (r *Resolver) lockApp(ctx context.Context, m *manifest.Manifest, run lock.I
 		return nil, err
 	}
 	a := &lock.App{Stack: m.Stack.Metadata.Name, StackDigest: lock.StackDigest(m.Stack), Build: build, RunPlatforms: maps.Clone(old.RunPlatforms)}
+	if f := m.StackFrom; f != nil {
+		a.StackArtifact = &lock.Image{Ref: f.Ref, Digest: f.Digest}
+	}
 	if prev.Base.Digest != run.Digest || a.RunPlatforms == nil {
 		if a.RunPlatforms, err = r.PlatformDigests(ctx, run.Pinned()); err != nil {
 			return nil, err

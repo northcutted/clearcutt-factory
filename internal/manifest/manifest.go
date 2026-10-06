@@ -35,6 +35,10 @@ type Manifest struct {
 	Path string `yaml:"-" json:"-"`
 	// Stack is the loaded stack of an App (set by ApplyOrg).
 	Stack *Stack `yaml:"-" json:"-"`
+	// StackFrom is set when spec.stack names a registry artifact: the
+	// reference and the digest it was fetched at, with StackPath pointing
+	// at the fetched file.
+	StackFrom *StackArtifact `yaml:"-" json:"-"`
 }
 
 type Metadata struct {
@@ -63,7 +67,9 @@ type Spec struct {
 	// before anything is pushed.
 	Test *Test `yaml:"test,omitempty" json:"test,omitempty"`
 
-	// App only: the stack to build with, the source directory (default:
+	// App only: the stack to build with (a stack file, or a stack
+	// published with clearcutt-factory stack push, by reference), the source
+	// directory (default:
 	// the manifest's directory), source paths to leave out, and variables
 	// for the stack's build steps.
 	Stack    string            `yaml:"stack,omitempty" json:"stack,omitempty"`
@@ -241,7 +247,7 @@ func loadChain(path string, seen []string) (*Manifest, error) {
 		return nil, fmt.Errorf("%s: expected apiVersion %q and kind %q or %q", path, APIVersion, KindImage, KindApp)
 	}
 	dir := filepath.Dir(path)
-	if m.Spec.Stack != "" {
+	if IsStackFile(m.Spec.Stack) {
 		m.Spec.StackPath = filepath.Join(dir, m.Spec.Stack)
 	}
 	if m.Spec.Source != "" {

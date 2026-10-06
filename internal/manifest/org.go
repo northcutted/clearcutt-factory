@@ -122,6 +122,9 @@ type Policy struct {
 	AllowedHosts []string `yaml:"allowedHosts,omitempty"`
 	// AllowedRegistries restricts image references by prefix, e.g. cgr.dev/chainguard/.
 	AllowedRegistries []string `yaml:"allowedRegistries,omitempty"`
+	// RequireSignedStacks requires stacks fetched from a registry to carry
+	// a signature from signing.verify's identity, checked when locking.
+	RequireSignedStacks bool `yaml:"requireSignedStacks,omitempty"`
 }
 
 // DefaultOrg is used when no org profile is found.

@@ -275,7 +275,7 @@ func TestRebaseApp(t *testing.T) {
 	for _, app := range []string{"hello", "bad"} {
 		opts := Options{ManifestPath: filepath.Join(dir, app, "app.yaml"), Version: "test", Stdout: &out, Stderr: &out}
 		// The app's lock pins the run image it was built on.
-		m, org, err := load(opts)
+		m, org, err := load(ctx, opts, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -333,5 +333,108 @@ func TestRebaseApp(t *testing.T) {
 
 	if err := Rebase(ctx, Options{ManifestPath: filepath.Join(dir, "stack.yaml"), Stdout: &out, Stderr: &out}, ro); err == nil {
 		t.Error("rebase -f accepted a stack")
+	}
+}
+
+// TestPublishOnce: publishing an unchanged digest again only moves tags.
+func TestPublishOnce(t *testing.T) {
+	srv := httptest.NewServer(ggcrregistry.New(ggcrregistry.Logger(log.New(io.Discard, "", 0))))
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	ctx := context.Background()
+	idx := testIndex(t, nil, func(arch string) []v1.Layer { return []v1.Layer{testLayer(t, map[string]string{"a": arch})} }, nil)
+	d, _ := idx.Digest()
+	art := &registry.Artifact{Digest: d.String(), Index: idx}
+	org := manifest.DefaultOrg()
+	org.Signing.Mode = "none"
+	var out bytes.Buffer
+	opts := Options{Stdout: &out, Stderr: &out}
+
+	ref, published, _, err := publish(ctx, opts, org, art, host+"/app", []string{"latest"}, attest.RecipePredicateType, "", nil, false)
+	if err != nil || !published || ref != host+"/app@"+d.String() {
+		t.Fatalf("first publish: %s %v %v", ref, published, err)
+	}
+	// The tag moves elsewhere, then the same digest is published again.
+	other := testIndex(t, nil, func(arch string) []v1.Layer { return []v1.Layer{testLayer(t, map[string]string{"b": arch})} }, nil)
+	push(t, host+"/app:latest", other)
+	_, published, _, err = publish(ctx, opts, org, art, host+"/app", []string{"latest", "v1"}, attest.RecipePredicateType, "", nil, false)
+	if err != nil || published {
+		t.Fatalf("second publish: published=%v, %v", published, err)
+	}
+	for _, tag := range []string{"latest", "v1"} {
+		if got, _ := registry.Digest(ctx, host+"/app:"+tag); got != d.String() {
+			t.Errorf("%s points at %s, want %s", tag, got, d)
+		}
+	}
+	if !strings.Contains(out.String(), "already published; moved its tags") {
+		t.Errorf("output:\n%s", out.String())
+	}
+	if ok, err := registry.Exists(ctx, host+"/app@sha256:"+strings.Repeat("0", 64)); ok || err != nil {
+		t.Errorf("missing digest: exists=%v, %v", ok, err)
+	}
+}
+
+// TestRegistryStack publishes a stack and builds an app manifest on it.
+func TestRegistryStack(t *testing.T) {
+	srv := httptest.NewServer(ggcrregistry.New(ggcrregistry.Logger(log.New(io.Discard, "", 0))))
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	ctx := context.Background()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+
+	dir := t.TempDir()
+	files := map[string]string{
+		"platform/factory.org.yaml":   "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nregistry: registry.example/platform\ntags: [stable]\nsigning: {mode: none}\n",
+		"platform/runtime/image.yaml": "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Image\nmetadata: {name: go-runtime}\nspec: {base: cgr.dev/chainguard/static:latest}\n",
+		"platform/stacks/go.yaml":     "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Stack\nmetadata: {name: go}\nspec:\n  build: golang:1\n  run: ../runtime/image.yaml\n  steps: [{run: go build -o /out/app .}]\n  entrypoint: [\"/app/{{name}}\"]\n",
+		"team/factory.org.yaml":       "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nregistry: registry.example/team\nsigning: {mode: none}\n",
+		"team/svc/app.yaml":           "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: App\nmetadata: {name: svc}\nspec: {stack: " + host + "/stacks/go:1}\n",
+	}
+	for n, body := range files {
+		p := filepath.Join(dir, n)
+		_ = os.MkdirAll(filepath.Dir(p), 0o755)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out bytes.Buffer
+	opts := Options{Stdout: &out, Stderr: &out}
+	if err := StackPush(ctx, opts, filepath.Join(dir, "platform/stacks/go.yaml"), host+"/stacks/go:1", false); err != nil {
+		t.Fatal(err)
+	}
+
+	// Another repository's app names the published stack; its run image was
+	// a factory manifest path, published as that image's reference.
+	opts.ManifestPath = filepath.Join(dir, "team/svc/app.yaml")
+	m, _, err := load(ctx, opts, false)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if m.Spec.Base != "registry.example/platform/go-runtime:stable" || m.Stack.BuildRef != "golang:1" || m.StackFrom == nil || !strings.HasPrefix(m.StackFrom.Digest, "sha256:") {
+		t.Fatalf("app on registry stack: base %q build %q from %+v", m.Spec.Base, m.Stack.BuildRef, m.StackFrom)
+	}
+	if strings.Join(m.Spec.Entrypoint, " ") != "/app/svc" {
+		t.Errorf("entrypoint = %v", m.Spec.Entrypoint)
+	}
+
+	// A lock pin wins over the tag, even after the tag moves.
+	pinned := m.StackFrom.Digest
+	l := &lock.Lock{APIVersion: manifest.APIVersion, Kind: lock.Kind, App: &lock.App{StackArtifact: &lock.Image{Ref: host + "/stacks/go:1", Digest: pinned}}}
+	if err := l.Write(m.LockPath()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "platform/stacks/go.yaml"), []byte(strings.Replace(files["platform/stacks/go.yaml"], "golang:1", "golang:2", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := StackPush(ctx, opts, filepath.Join(dir, "platform/stacks/go.yaml"), host+"/stacks/go:1", false); err != nil {
+		t.Fatal(err)
+	}
+	if m, _, err = load(ctx, opts, false); err != nil || m.StackFrom.Digest != pinned || m.Stack.BuildRef != "golang:1" {
+		t.Errorf("pinned load: %v, %+v", err, m.StackFrom)
+	}
+	if m, _, err = load(ctx, opts, true); err != nil || m.StackFrom.Digest == pinned || m.Stack.BuildRef != "golang:2" {
+		t.Errorf("fresh load: %v, %+v", err, m.StackFrom)
 	}
 }

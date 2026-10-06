@@ -37,6 +37,13 @@ func Changes(old, cur *Lock) []string {
 			oa = *old.App
 		}
 		image("build image", oa.Build, cur.App.Build)
+		if cur.App.StackArtifact != nil {
+			var prev Image
+			if oa.StackArtifact != nil {
+				prev = *oa.StackArtifact
+			}
+			image("stack", prev, *cur.App.StackArtifact)
+		}
 		if oa.StackDigest != "" && oa.StackDigest != cur.App.StackDigest {
 			out = append(out, fmt.Sprintf("stack %s changed", cur.App.Stack))
 		}

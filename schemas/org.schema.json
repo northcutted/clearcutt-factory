@@ -1,0 +1,217 @@
+{
+  "$id": "https://raw.githubusercontent.com/northcutted/clearcutt-factory/main/schemas/org.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Org holds the choices that differ between organizations: where images go, how they are built, signed, scanned, and what policy they must meet.",
+  "properties": {
+    "apiVersion": {
+      "const": "factory.clearcutt.dev/v1alpha1"
+    },
+    "builder": {
+      "additionalProperties": false,
+      "properties": {
+        "addr": {
+          "description": "Addr targets an existing buildkitd (e.g. tcp://buildkitd:1234) with the local buildctl instead of starting a container.",
+          "type": "string"
+        },
+        "buildkit": {
+          "description": "BuildKit is the moby/buildkit image used for every build. Pinning it is what makes rebuilds bit-for-bit comparable across machines.",
+          "type": "string"
+        },
+        "frontend": {
+          "description": "Frontend is the Dockerfile frontend pinned via `# syntax=`.",
+          "type": "string"
+        },
+        "go": {
+          "description": "Go is the default builder image for `from: go` tools.",
+          "type": "string"
+        },
+        "nix": {
+          "description": "Nix is the image providing the nix CLI for `from: nix` tools.",
+          "type": "string"
+        },
+        "nixpkgs": {
+          "description": "Nixpkgs is the default NixOS/nixpkgs branch for `from: nix` tools.",
+          "type": "string"
+        },
+        "runtime": {
+          "description": "Runtime runs the BuildKit container: auto, docker, or podman.",
+          "type": "string"
+        },
+        "toolbox": {
+          "description": "Toolbox runs fetch/extract steps on the build platform.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "defaults": {
+      "additionalProperties": false,
+      "properties": {
+        "base": {
+          "type": "string"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "platforms": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "kind": {
+      "enum": [
+        "OrgProfile"
+      ]
+    },
+    "mirrors": {
+      "description": "Mirrors rewrite download URL prefixes (e.g. to Artifactory, Nexus, or Pulp). Checksums still pin the content, so a mirror can't change it.",
+      "items": {
+        "additionalProperties": false,
+        "description": "Mirror replaces the URL prefix From with To.",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "policy": {
+      "additionalProperties": false,
+      "properties": {
+        "allowTOFU": {
+          "description": "AllowTOFU permits tools whose hash was recorded on first download with no publisher checksum or digest to compare against.",
+          "type": "boolean"
+        },
+        "allowedHosts": {
+          "description": "AllowedHosts restricts download hosts (exact, or \".suffix\" matches).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allowedRegistries": {
+          "description": "AllowedRegistries restricts image references by prefix, e.g. cgr.dev/chainguard/.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "requireNonRoot": {
+          "type": "boolean"
+        },
+        "requireSignedStacks": {
+          "description": "RequireSignedStacks requires stacks fetched from a registry to carry a signature from signing.verify's identity, checked when locking.",
+          "type": "boolean"
+        },
+        "requiredLabels": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "registry": {
+      "type": "string"
+    },
+    "sbom": {
+      "additionalProperties": false,
+      "properties": {
+        "scan": {
+          "description": "Scan adds a syft scan to the SBOM declared from the lockfile.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "signing": {
+      "additionalProperties": false,
+      "properties": {
+        "args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "key": {
+          "type": "string"
+        },
+        "mode": {
+          "description": "Mode is keyless (Sigstore OIDC), key (file or KMS URI), or none.",
+          "type": "string"
+        },
+        "verify": {
+          "additionalProperties": false,
+          "description": "Verify holds the identity verifiers expect, used by `clearcutt-factory verify --image`.",
+          "properties": {
+            "args": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "certificateIdentityRegexp": {
+              "type": "string"
+            },
+            "certificateOIDCIssuer": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "tags": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "vulnerabilities": {
+      "additionalProperties": false,
+      "properties": {
+        "failOn": {
+          "description": "FailOn blocks push/sign at or above this severity: negligible, low, medium, high, critical. Empty never fails.",
+          "type": "string"
+        },
+        "onlyFixed": {
+          "description": "OnlyFixed only counts vulnerabilities with a fix available toward FailOn.",
+          "type": "boolean"
+        },
+        "scanner": {
+          "description": "Scanner is grype or none.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind"
+  ],
+  "title": "ClearCutt Factory org profile (factory.org.yaml)",
+  "type": "object"
+}
