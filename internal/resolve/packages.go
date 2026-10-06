@@ -9,10 +9,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/northcutted/declarative-image-factory/internal/apk"
-	"github.com/northcutted/declarative-image-factory/internal/lock"
-	"github.com/northcutted/declarative-image-factory/internal/manifest"
-	"github.com/northcutted/declarative-image-factory/internal/native"
+	"github.com/northcutted/clearcutt-factory/internal/apk"
+	"github.com/northcutted/clearcutt-factory/internal/lock"
+	"github.com/northcutted/clearcutt-factory/internal/manifest"
+	"github.com/northcutted/clearcutt-factory/internal/native"
 )
 
 var apkArch = map[string]string{"amd64": "x86_64", "arm64": "aarch64"}

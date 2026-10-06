@@ -6,9 +6,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/northcutted/declarative-image-factory/internal/lock"
-	"github.com/northcutted/declarative-image-factory/internal/manifest"
-	"github.com/northcutted/declarative-image-factory/internal/nix"
+	"github.com/northcutted/clearcutt-factory/internal/lock"
+	"github.com/northcutted/clearcutt-factory/internal/manifest"
+	"github.com/northcutted/clearcutt-factory/internal/nix"
 )
 
 var commitRE = regexp.MustCompile(`^[0-9a-f]{40}$`)

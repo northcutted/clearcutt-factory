@@ -86,7 +86,7 @@ type Signing struct {
 	Mode string   `yaml:"mode,omitempty"`
 	Key  string   `yaml:"key,omitempty"`
 	Args []string `yaml:"args,omitempty"`
-	// Verify holds the identity verifiers expect, used by `factory verify --image`.
+	// Verify holds the identity verifiers expect, used by `clearcutt-factory verify --image`.
 	Verify VerifyIdentity `yaml:"verify,omitempty"`
 }
 

@@ -10,14 +10,14 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 
-	"github.com/northcutted/declarative-image-factory/internal/attest"
-	"github.com/northcutted/declarative-image-factory/internal/lock"
-	"github.com/northcutted/declarative-image-factory/internal/manifest"
-	"github.com/northcutted/declarative-image-factory/internal/policy"
-	"github.com/northcutted/declarative-image-factory/internal/rebase"
-	"github.com/northcutted/declarative-image-factory/internal/registry"
-	"github.com/northcutted/declarative-image-factory/internal/sbom"
-	"github.com/northcutted/declarative-image-factory/internal/scan"
+	"github.com/northcutted/clearcutt-factory/internal/attest"
+	"github.com/northcutted/clearcutt-factory/internal/lock"
+	"github.com/northcutted/clearcutt-factory/internal/manifest"
+	"github.com/northcutted/clearcutt-factory/internal/policy"
+	"github.com/northcutted/clearcutt-factory/internal/rebase"
+	"github.com/northcutted/clearcutt-factory/internal/registry"
+	"github.com/northcutted/clearcutt-factory/internal/sbom"
+	"github.com/northcutted/clearcutt-factory/internal/scan"
 )
 
 type RebaseOptions struct {
@@ -75,7 +75,7 @@ func Rebase(ctx context.Context, opts Options, ro RebaseOptions) error {
 		return err
 	}
 	if m.Kind != manifest.KindApp {
-		return fmt.Errorf("%s is a %s: rebase -f works on apps; images install packages onto their base, so update them with factory lock --update-base and rebuild", rel(m.Path), m.Kind)
+		return fmt.Errorf("%s is a %s: rebase -f works on apps; images install packages onto their base, so update them with clearcutt-factory lock --update-base and rebuild", rel(m.Path), m.Kind)
 	}
 	tag := "latest"
 	if len(m.Metadata.Tags) > 0 {

@@ -15,8 +15,8 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/northcutted/declarative-image-factory/internal/container"
-	"github.com/northcutted/declarative-image-factory/internal/registry"
+	"github.com/northcutted/clearcutt-factory/internal/container"
+	"github.com/northcutted/clearcutt-factory/internal/registry"
 )
 
 // Request describes one build.

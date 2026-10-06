@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/northcutted/declarative-image-factory/internal/container"
-	"github.com/northcutted/declarative-image-factory/internal/lock"
+	"github.com/northcutted/clearcutt-factory/internal/container"
+	"github.com/northcutted/clearcutt-factory/internal/lock"
 )
 
 // aptScript runs in a Debian or Ubuntu base. Debian sources are pointed at
@@ -19,7 +19,7 @@ import (
 const aptScript = `set -eu
 export DEBIAN_FRONTEND=noninteractive
 TS="$1"; shift
-command -v apt-get >/dev/null 2>&1 || { echo "factory: apt-get is not available in the base image" >&2; exit 3; }
+command -v apt-get >/dev/null 2>&1 || { echo "clearcutt-factory: apt-get is not available in the base image" >&2; exit 3; }
 . /etc/os-release
 echo "### os"
 echo "${ID:-} ${VERSION_ID:-}"

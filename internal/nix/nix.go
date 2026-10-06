@@ -16,8 +16,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/northcutted/declarative-image-factory/internal/container"
-	"github.com/northcutted/declarative-image-factory/internal/lock"
+	"github.com/northcutted/clearcutt-factory/internal/container"
+	"github.com/northcutted/clearcutt-factory/internal/lock"
 )
 
 const (

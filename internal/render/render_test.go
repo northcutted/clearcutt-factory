@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/northcutted/declarative-image-factory/internal/lock"
-	"github.com/northcutted/declarative-image-factory/internal/manifest"
+	"github.com/northcutted/clearcutt-factory/internal/lock"
+	"github.com/northcutted/clearcutt-factory/internal/manifest"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")
@@ -109,7 +109,7 @@ func TestRenderGolden(t *testing.T) {
 func TestRenderRejectsStaleLock(t *testing.T) {
 	m, l := fixture(t)
 	m.Spec.Tools[0].Version = "9.9.9"
-	if _, err := Render(m, l); err == nil || !strings.Contains(err.Error(), "run factory lock") {
+	if _, err := Render(m, l); err == nil || !strings.Contains(err.Error(), "run clearcutt-factory lock") {
 		t.Fatalf("expected stale lock error, got %v", err)
 	}
 }
@@ -278,7 +278,7 @@ func TestRenderApp(t *testing.T) {
 	}
 
 	m.Stack.Spec.Steps[0].Run = "changed"
-	if _, err := Render(m, l); err == nil || !strings.Contains(err.Error(), "run factory lock") {
+	if _, err := Render(m, l); err == nil || !strings.Contains(err.Error(), "run clearcutt-factory lock") {
 		t.Errorf("expected stale stack error, got %v", err)
 	}
 }

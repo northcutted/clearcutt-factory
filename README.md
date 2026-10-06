@@ -1,12 +1,18 @@
 <img src="assets/icon.svg" width="64" height="64" alt="">
 
-# declarative-image-factory
+# ClearCutt Factory
 
-`factory` turns a short YAML manifest into a purpose-built OCI image that is
-**reproducible bit-for-bit**, **signed**, and shipped with **SBOMs**,
+`clearcutt-factory` turns a short YAML manifest into a purpose-built OCI image
+that is **reproducible bit-for-bit**, **signed**, and shipped with **SBOMs**,
 **vulnerability reports**, and a **signed recipe** (the exact Containerfile,
 lockfile, and build settings) that anyone can use to rebuild it and get the
 same digest.
+
+It is the build side of [ClearCutt](https://github.com/northcutted/clearcutt),
+a family of tools for the OCI images you run: ClearCutt Factory builds and
+maintains them, and ClearCutt governs estates whatever built them (which
+images are built on which, how stale they are, and what can be proven about
+them).
 
 Distro packages come from the base image's own package manager — **apk**
 (Wolfi, Chainguard, Alpine), **apt** (Debian, Ubuntu), or **dnf** (Fedora,
@@ -16,16 +22,16 @@ images, Go programs, arbitrary build steps — is declared inline as a *tool*, s
 there is no package recipe to write for each third-party binary.
 
 ```
-image.yaml ──factory lock──▶ image.lock.yaml + image.Containerfile ──factory build──▶ image + attestations
- (intent)                     (every input pinned by hash)                           SBOM · vulns · recipe · signature
+image.yaml ──lock──▶ image.lock.yaml + image.Containerfile ──build──▶ image + attestations
+ (intent)            (every input pinned by hash)                    SBOM · vulns · recipe · signature
 ```
 
 Applications build the same way on **stacks** you define: a stack names the
 toolchain image, the build steps, and the run image apps ship on, so an app
 manifest is little more than its source directory (like Cloud Native
 Buildpacks, but the buildpack is yours). When the run image is rebuilt,
-**`factory rebase`** moves each app onto it in seconds without rebuilding the
-app, after checking that this is safe.
+**`clearcutt-factory rebase`** moves each app onto it in seconds without
+rebuilding the app, after checking that this is safe.
 
 ## Quick start
 
@@ -33,16 +39,16 @@ Requirements: Go, and Docker or Podman (BuildKit runs inside a container, pinned
 by digest). `syft`, `grype`, and `cosign` on `PATH` for scanning and signing.
 
 ```sh
-go install github.com/northcutted/declarative-image-factory/cmd/factory@latest
+go install github.com/northcutted/clearcutt-factory/cmd/clearcutt-factory@latest
 
-factory lock   -f examples/platform-tools/image.yaml   # pin everything; writes lock + Containerfile
-factory build  -f examples/platform-tools/image.yaml   # build, SBOM, scan, gate (local only)
-factory build  -f examples/platform-tools/image.yaml --push   # …and push, sign, attest
-factory verify -f examples/platform-tools/image.yaml --digest sha256:…   # rebuild from scratch, compare
-factory verify --image ghcr.io/acme/platform-tools@sha256:…              # rebuild from the signed recipe
+clearcutt-factory lock   -f examples/platform-tools/image.yaml   # pin everything; writes lock + Containerfile
+clearcutt-factory build  -f examples/platform-tools/image.yaml   # build, SBOM, scan, gate (local only)
+clearcutt-factory build  -f examples/platform-tools/image.yaml --push   # …and push, sign, attest
+clearcutt-factory verify -f examples/platform-tools/image.yaml --digest sha256:…   # rebuild from scratch, compare
+clearcutt-factory verify --image ghcr.io/acme/platform-tools@sha256:…              # rebuild from the signed recipe
 
-factory build  -f examples/hello-app/app.yaml           # an app, built on examples/stacks/go.yaml
-factory rebase -f examples/hello-app/app.yaml --push --update-lock   # move it onto the newest run image, test, re-pin
+clearcutt-factory build  -f examples/hello-app/app.yaml           # an app, built on examples/stacks/go.yaml
+clearcutt-factory rebase -f examples/hello-app/app.yaml --push --update-lock   # move it onto the newest run image, test, re-pin
 ```
 
 Commit `image.yaml`, `image.lock.yaml`, and `image.Containerfile`. Reviewers see
@@ -52,7 +58,7 @@ the Containerfile diff.
 ## The manifest
 
 ```yaml
-apiVersion: factory.dev/v1alpha1
+apiVersion: factory.clearcutt.dev/v1alpha1
 kind: Image
 extends: ../base.yaml            # optional: layer on a team/org base manifest
 metadata:
@@ -123,7 +129,7 @@ Tools install to `/usr/local/bin/<name>` with mode `0755` unless `dest:` and
 
 ## Packages
 
-`factory lock` resolves packages with the distribution's own solver, run inside
+`clearcutt-factory lock` resolves packages with the distribution's own solver, run inside
 the digest-pinned base image (apt and dnf run in a container; apk is resolved
 in Go from the signed APKINDEX). The lock records every package that will be
 installed — for apt and dnf, each file's URL and sha256 — and the build
@@ -139,7 +145,7 @@ The build never asks a repository what is current.
 Override detection with `spec.packageManager`. Each manager's leftovers that
 differ between runs (logs, caches, ldconfig's aux-cache, apt's binary caches,
 SQLite's shared-memory file) are removed in the install layer. Amazon Linux's
-rpm records the wall-clock install time, so `factory` rewrites those header
+rpm records the wall-clock install time, so `clearcutt-factory` rewrites those header
 fields to `SOURCE_DATE_EPOCH`, as newer rpm does natively.
 
 ## Apps and stacks
@@ -148,7 +154,7 @@ A **stack** is a platform team's recipe for building one kind of app. It is
 the "buildpack", written in YAML and owned by you:
 
 ```yaml
-apiVersion: factory.dev/v1alpha1
+apiVersion: factory.clearcutt.dev/v1alpha1
 kind: Stack
 metadata: {name: go}
 spec:
@@ -169,7 +175,7 @@ spec:
 An **app** names a stack and adds little else:
 
 ```yaml
-apiVersion: factory.dev/v1alpha1
+apiVersion: factory.clearcutt.dev/v1alpha1
 kind: App
 metadata: {name: hello-app}
 spec:
@@ -196,7 +202,7 @@ flow-style values that contain `{{name}}` (`["/app/{{name}}"]`).
 
 ## Rebasing
 
-`factory rebase --image repo:tag` swaps the base layers under an image's own
+`clearcutt-factory rebase --image repo:tag` swaps the base layers under an image's own
 layers for a newer build of its base, without rebuilding the image. By default
 it follows the base the image names in its annotations (the stack's run image
 tag), so after the platform team pushes a patched run image, rebasing every
@@ -204,14 +210,14 @@ app takes seconds and needs no source. `--onto` picks another base; `--from`
 names the old one for images without annotations (built with plain
 Dockerfiles, say). With a tag, `--push` moves that tag to the result.
 
-For apps, `factory rebase -f app.yaml` rebases the app's published image
+For apps, `clearcutt-factory rebase -f app.yaml` rebases the app's published image
 (`metadata.ref` and its first tag) onto its stack's run image and runs the
 app's smoke test on the result before pushing. `--update-lock` then pins
-`app.lock.yaml` to that base (`factory lock --update-base`), so the next build
+`app.lock.yaml` to that base (`clearcutt-factory lock --update-base`), so the next build
 from source doesn't quietly go back to the unpatched one. If the rebase is
 refused, the lock still moves and the command fails: rebuilding is the fix.
 
-Before rebasing, `factory` checks each platform (`--check` stops there):
+Before rebasing, `clearcutt-factory` checks each platform (`--check` stops there):
 
 * **The image's own layers only add files.** If they replace, delete, or hide
   a base file, write through a base symlink, or change package-manager state
@@ -224,13 +230,13 @@ Before rebasing, `factory` checks each platform (`--check` stops there):
   pass `--force`.
 
 How the image runs never changes: user, entrypoint, command, working
-directory, ports, and volumes stay as built, and `factory` notes where the new
+directory, ports, and volumes stay as built, and `clearcutt-factory` notes where the new
 base would differ. Environment variables and labels the image inherited
 unchanged from the old base follow the new one (a changed `PATH`, say).
 
 A rebase is a pure function of its inputs. The result carries a signed
 **rebase record** (the image, old and new base digests) instead of a recipe,
-so `factory verify --image` repeats the rebase and compares digests in seconds.
+so `clearcutt-factory verify --image` repeats the rebase and compares digests in seconds.
 SBOM and vulnerability attestations are made for the result as for builds.
 
 ## Running a fleet
@@ -246,12 +252,12 @@ The intended split, and the automation that keeps it current:
 | Security | VEX statements; fleet-wide audit (e.g. [ClearCutt](https://github.com/northcutted/clearcutt)) | When triaged |
 
 * **Weekly updates** ([`update-locks.yml`](.github/workflows/update-locks.yml)).
-  `factory lock --update` on every manifest, one pull request each, listing
+  `clearcutt-factory lock --update` on every manifest, one pull request each, listing
   exactly what moved (image digests, package and tool versions). CI on the
   pull request builds, smoke-tests, scans, and gates; merging publishes.
   Auto-merging these when the gates pass is reasonable.
 * **Base patches reach apps without app teams** ([`fleet.yml`](.github/workflows/fleet.yml)).
-  Daily and after every publish on `main`, `factory rebase -f <app> --push
+  Daily and after every publish on `main`, `clearcutt-factory rebase -f <app> --push
   --update-lock` for each app: rebase if safe, smoke-test, scan, push, sign,
   repeat from the signed record, then a pull request pinning the app's lock
   to the same base. An app that can't be rebased gets the same pull request
@@ -266,7 +272,7 @@ The intended split, and the automation that keeps it current:
   apps move with a one-line change and a rebuild.
 
 Pull requests opened with the default `GITHUB_TOKEN` don't start other
-workflows, so set a `FACTORY_BOT_TOKEN` secret (a GitHub App token, or a
+workflows, so set a `CLEARCUTT_BOT_TOKEN` secret (a GitHub App token, or a
 fine-grained token with contents and pull-requests write) for CI to run on
 them. Deploy by digest and let GitOps follow the tags; keep old run images
 (a rebase needs the old base's manifest) and old app digests (rollback).
@@ -309,7 +315,7 @@ found by walking up from the manifest (or `--org`). See
 * **One layer per tool** (`COPY --link`), so a change to one tool doesn't
   disturb the others.
 
-`factory verify` rebuilds without any cache and compares digests. On a mismatch
+`clearcutt-factory verify` rebuilds without any cache and compares digests. On a mismatch
 it names the first differing layer and the files that differ.
 
 ## What gets attached to a pushed image
@@ -331,7 +337,7 @@ Unsigned copies of all of these are written to `out/<name>/attestations/`, and
 [`.github/workflows/images.yml`](.github/workflows/images.yml) is a complete
 pipeline. On pull requests it builds, scans, and gates. On `main` it also pushes,
 signs keylessly, adds SLSA provenance, and then rebuilds on a second runner from
-the signed recipe alone. `factory` emits `image`, `repository`, and `digest` to
+the signed recipe alone. `clearcutt-factory` emits `image`, `repository`, and `digest` to
 `$GITHUB_OUTPUT`. [`update-locks.yml`](.github/workflows/update-locks.yml)
 and [`fleet.yml`](.github/workflows/fleet.yml) keep the fleet current (see
 [Running a fleet](#running-a-fleet)). Other CI systems call the same commands;
@@ -351,7 +357,7 @@ nothing is GitHub-specific.
   from source is rejected at lock time. They bring their own libraries (larger
   images), and scanners cover Nix less thoroughly than distro packages.
 * `from: build` steps are only as reproducible as the script; `verify` will tell you.
-* SLSA provenance must come from the build platform, not from `factory`.
+* SLSA provenance must come from the build platform, not from `clearcutt-factory`.
 * Vulnerability reports describe the day they were made. Rescanning and
   re-attesting on a schedule is not built in yet.
 * The local BuildKit cache volume is shared, so run one build at a time per machine.
@@ -366,7 +372,7 @@ nothing is GitHub-specific.
   registry.
 * The fleet workflow finds apps by their manifests in this repository. Apps
   in other repositories run the same job on their own, or a registry-wide
-  inventory (ClearCutt's base graph) drives `factory rebase --image`.
+  inventory (ClearCutt's base graph) drives `clearcutt-factory rebase --image`.
 * Smoke tests run images on the build machine, other architectures through
   emulation (QEMU in CI); `--no-test` skips them.
 
@@ -375,7 +381,7 @@ nothing is GitHub-specific.
 ```sh
 go test ./...
 go test ./internal/render -update   # refresh the golden Containerfiles
-FACTORY_E2E=1 go test ./internal/factory   # real lock + build + no-cache rebuild per package manager,
+CLEARCUTT_FACTORY_E2E=1 go test ./internal/factory   # real lock + build + no-cache rebuild per package manager,
                                            # and an app built on a stack, then rebased (needs docker or podman)
 ```
 

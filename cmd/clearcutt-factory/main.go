@@ -1,5 +1,5 @@
-// Command factory builds signed, attested, reproducible OCI images from a
-// declarative manifest.
+// Command clearcutt-factory builds signed, attested, reproducible OCI images
+// from a declarative manifest. It is part of ClearCutt.
 package main
 
 import (
@@ -12,36 +12,33 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"github.com/northcutted/declarative-image-factory/internal/factory"
+	"github.com/northcutted/clearcutt-factory/internal/factory"
 )
 
 var version = "" // set with -ldflags "-X main.version=…"
 
-const usage = `factory — declarative, reproducible, signed OCI images
+const usage = `clearcutt-factory: declarative, reproducible, signed OCI images (part of ClearCutt)
 
 Usage:
-  factory lock    [-f image.yaml] [--update | --update-base]
-                                                   pin every input (--update: re-resolve all of them;
-                                                   --update-base: only the base); write the lock and
-                                                   Containerfile
-  factory render  [-f image.yaml] [--check] [--context-dir DIR]
-                                                   regenerate (or check) the Containerfile
-  factory build   [-f image.yaml] [--push] [--out DIR] [--no-test] [--no-scan] [--no-sign] [--no-cache]
-                                                   build, smoke-test, SBOM, scan, gate; with --push also
-                                                   sign + attest
-  factory verify  [-f image.yaml] --digest sha256:…   rebuild from source and compare
-  factory verify  --image repo@sha256:… [--key K | --certificate-identity-regexp R --certificate-oidc-issuer I]
-                                                   rebuild from the image's signed recipe (or repeat its
-                                                   recorded rebase) and compare
-  factory rebase  --image repo[:tag|@sha256:…] [--onto BASE] [--from BASE] [--check] [--force]
-                  [--push] [--tag T]… [--out DIR] [--no-scan] [--no-sign]
-                                                   move the image's own layers onto a newer build of its
-                                                   base (default: the base it names, resolved again)
-  factory rebase  [-f app.yaml] [--update-lock] [--no-test] [same flags]
-                                                   rebase the app's published image onto its stack's run
-                                                   image and smoke-test it; --update-lock then pins the
-                                                   lock to that base
-  factory version
+  clearcutt-factory lock    [-f image.yaml] [--update | --update-base]
+      Pin every input and write the lock and Containerfile. --update re-resolves
+      all of them; --update-base only the base.
+  clearcutt-factory render  [-f image.yaml] [--check] [--context-dir DIR]
+      Regenerate (or check) the Containerfile.
+  clearcutt-factory build   [-f image.yaml] [--push] [--out DIR] [--no-test] [--no-scan] [--no-sign] [--no-cache]
+      Build, smoke-test, SBOM, scan, gate; with --push also sign and attest.
+  clearcutt-factory verify  [-f image.yaml] --digest sha256:…
+      Rebuild from source and compare.
+  clearcutt-factory verify  --image repo@sha256:… [--key K | --certificate-identity-regexp R --certificate-oidc-issuer I]
+      Rebuild from the image's signed recipe (or repeat its recorded rebase) and compare.
+  clearcutt-factory rebase  --image repo[:tag|@sha256:…] [--onto BASE] [--from BASE] [--check] [--force]
+                            [--push] [--tag T]… [--out DIR] [--no-scan] [--no-sign]
+      Move the image's own layers onto a newer build of its base (default: the
+      base it names, resolved again).
+  clearcutt-factory rebase  [-f app.yaml] [--update-lock] [--no-test] [same flags]
+      Rebase the app's published image onto its stack's run image and smoke-test
+      it; --update-lock then pins the lock to that base.
+  clearcutt-factory version
 
 Common flags:
   -f FILE     manifest, kind Image or App (default image.yaml, else app.yaml)

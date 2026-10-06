@@ -10,13 +10,13 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	"go.yaml.in/yaml/v3"
 
-	"github.com/northcutted/declarative-image-factory/internal/attest"
-	"github.com/northcutted/declarative-image-factory/internal/builder"
-	"github.com/northcutted/declarative-image-factory/internal/diff"
-	"github.com/northcutted/declarative-image-factory/internal/lock"
-	"github.com/northcutted/declarative-image-factory/internal/manifest"
-	"github.com/northcutted/declarative-image-factory/internal/registry"
-	"github.com/northcutted/declarative-image-factory/internal/render"
+	"github.com/northcutted/clearcutt-factory/internal/attest"
+	"github.com/northcutted/clearcutt-factory/internal/builder"
+	"github.com/northcutted/clearcutt-factory/internal/diff"
+	"github.com/northcutted/clearcutt-factory/internal/lock"
+	"github.com/northcutted/clearcutt-factory/internal/manifest"
+	"github.com/northcutted/clearcutt-factory/internal/registry"
+	"github.com/northcutted/clearcutt-factory/internal/render"
 )
 
 type VerifyOptions struct {

@@ -1,6 +1,6 @@
 # An app: source plus a stack. factory runs the stack's steps on this
 # directory and ships only their output (in /app) on the stack's run image.
-apiVersion: factory.dev/v1alpha1
+apiVersion: factory.clearcutt.dev/v1alpha1
 kind: App
 metadata:
   name: hello-app

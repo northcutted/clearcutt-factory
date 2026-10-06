@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/northcutted/declarative-image-factory/internal/lock"
-	"github.com/northcutted/declarative-image-factory/internal/manifest"
-	"github.com/northcutted/declarative-image-factory/internal/nix"
+	"github.com/northcutted/clearcutt-factory/internal/lock"
+	"github.com/northcutted/clearcutt-factory/internal/manifest"
+	"github.com/northcutted/clearcutt-factory/internal/nix"
 )
 
 // BOM is the subset of CycloneDX 1.6 that factory writes.
@@ -75,7 +75,7 @@ func newBOM(ref, platform, imageDigest string, ts time.Time, version string) *BO
 			Timestamp: ts.UTC().Format(time.RFC3339),
 			Tools: map[string]any{"components": []Component{{
 				Type: "application", Name: "factory", Version: version,
-				PURL: "pkg:github/northcutted/declarative-image-factory@" + version,
+				PURL: "pkg:github/northcutted/clearcutt-factory@" + version,
 			}}},
 			Component: &Component{
 				Type: "container", Name: ref, Version: imageDigest,
@@ -97,7 +97,7 @@ func Rebased(ref, platform, imageDigest string, created time.Time, base, from lo
 		b.Components = append(b.Components, Component{
 			Type: "container", Name: lock.RepoOf(x.img.Ref), Version: x.img.Digest,
 			PURL:       ociPURL(x.img.Ref, x.img.Digest, platform),
-			Properties: []Property{{"factory:source", x.source}, {"factory:verification", lock.VerifiedImageDigest}},
+			Properties: []Property{{"clearcutt-factory:source", x.source}, {"clearcutt-factory:verification", lock.VerifiedImageDigest}},
 		})
 	}
 	return b
@@ -107,9 +107,9 @@ func Rebased(ref, platform, imageDigest string, created time.Time, base, from lo
 func Declared(m *manifest.Manifest, l *lock.Lock, platform, imageDigest, version string) *BOM {
 	b := newBOM(m.Metadata.Ref, platform, imageDigest, time.Unix(l.SourceDateEpoch, 0), version)
 	add := func(c Component, source, verification string) {
-		c.Properties = append(c.Properties, Property{"factory:source", source})
+		c.Properties = append(c.Properties, Property{"clearcutt-factory:source", source})
 		if verification != "" {
-			c.Properties = append(c.Properties, Property{"factory:verification", verification})
+			c.Properties = append(c.Properties, Property{"clearcutt-factory:verification", verification})
 		}
 		b.Components = append(b.Components, c)
 	}
@@ -118,8 +118,8 @@ func Declared(m *manifest.Manifest, l *lock.Lock, platform, imageDigest, version
 		PURL: ociPURL(l.Base.Ref, l.Base.Digest, platform)}, "base", lock.VerifiedImageDigest)
 	if l.App != nil {
 		add(Component{Type: "application", Name: m.Metadata.Name, Properties: []Property{
-			{"factory:stack", l.App.Stack},
-			{"factory:build-image", l.App.Build.Pinned()},
+			{"clearcutt-factory:stack", l.App.Stack},
+			{"clearcutt-factory:build-image", l.App.Build.Pinned()},
 		}}, "app", "")
 	}
 
@@ -129,7 +129,7 @@ func Declared(m *manifest.Manifest, l *lock.Lock, platform, imageDigest, version
 			c.Licenses = []License{{Expression: p.License}}
 		}
 		if p.Checksum != "" {
-			c.Properties = append(c.Properties, Property{"factory:apk-checksum", p.Checksum})
+			c.Properties = append(c.Properties, Property{"clearcutt-factory:apk-checksum", p.Checksum})
 		}
 		if p.SHA256 != "" {
 			c.Hashes = []Hash{{"SHA-256", p.SHA256}}
@@ -171,11 +171,11 @@ func Declared(m *manifest.Manifest, l *lock.Lock, platform, imageDigest, version
 				b.Components = append(b.Components, Component{
 					Type: "library", Name: name, Version: version, PURL: nixPURL(p.Path),
 					Hashes: nixHash(p.NarHash),
-					Properties: []Property{{"factory:source", "tool:nix"}, {"factory:nix-store-path", p.Path},
-						{"factory:verification", lock.VerifiedNixSignature}},
+					Properties: []Property{{"clearcutt-factory:source", "tool:nix"}, {"clearcutt-factory:nix-store-path", p.Path},
+						{"clearcutt-factory:verification", lock.VerifiedNixSignature}},
 				})
 			}
-			c.Properties = append(c.Properties, Property{"factory:nix-store-path", out.Path})
+			c.Properties = append(c.Properties, Property{"clearcutt-factory:nix-store-path", out.Path})
 		case manifest.FromBuild:
 			c.PURL = fmt.Sprintf("pkg:generic/%s@%s", t.Name, t.Version)
 		}

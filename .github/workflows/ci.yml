@@ -17,5 +17,5 @@ jobs:
       - run: go test -race ./...
       - name: Example lockfiles and Containerfiles are current
         run: |
-          go install ./cmd/factory
-          for m in examples/*/image.yaml examples/*/app.yaml; do factory render -f "$m" --check; done
+          go install ./cmd/clearcutt-factory
+          for m in examples/*/image.yaml examples/*/app.yaml; do clearcutt-factory render -f "$m" --check; done

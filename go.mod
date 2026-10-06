@@ -1,4 +1,4 @@
-module github.com/northcutted/declarative-image-factory
+module github.com/northcutted/clearcutt-factory
 
 go 1.27.0
 

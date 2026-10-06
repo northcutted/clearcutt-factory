@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/northcutted/declarative-image-factory/internal/manifest"
+	"github.com/northcutted/clearcutt-factory/internal/manifest"
 )
 
 // Report is a scanner run, kept raw for the attestation.

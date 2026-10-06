@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	APIVersion = "factory.dev/v1alpha1"
+	APIVersion = "factory.clearcutt.dev/v1alpha1"
 	KindImage  = "Image"
 )
 

@@ -1,6 +1,6 @@
 # A purpose-built image for platform engineers: distro packages from Wolfi plus
-# third-party tools, each pinned and verified by factory lock.
-apiVersion: factory.dev/v1alpha1
+# third-party tools, each pinned and verified by clearcutt-factory lock.
+apiVersion: factory.clearcutt.dev/v1alpha1
 kind: Image
 metadata:
   name: platform-tools
@@ -59,7 +59,7 @@ spec:
   env:
     KUBECONFIG: /home/nonroot/.kube/config
   labels:
-    org.opencontainers.image.source: https://github.com/northcutted/declarative-image-factory
+    org.opencontainers.image.source: https://github.com/northcutted/clearcutt-factory
     org.opencontainers.image.description: kubectl, helm, gh, cosign, crane, and yq on Wolfi
   user: "65532"
   workdir: /home/nonroot

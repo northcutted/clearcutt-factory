@@ -25,11 +25,11 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 
-	"github.com/northcutted/declarative-image-factory/internal/attest"
-	"github.com/northcutted/declarative-image-factory/internal/lock"
-	"github.com/northcutted/declarative-image-factory/internal/manifest"
-	"github.com/northcutted/declarative-image-factory/internal/rebase"
-	"github.com/northcutted/declarative-image-factory/internal/registry"
+	"github.com/northcutted/clearcutt-factory/internal/attest"
+	"github.com/northcutted/clearcutt-factory/internal/lock"
+	"github.com/northcutted/clearcutt-factory/internal/manifest"
+	"github.com/northcutted/clearcutt-factory/internal/rebase"
+	"github.com/northcutted/clearcutt-factory/internal/registry"
 )
 
 func testLayer(t *testing.T, files map[string]string) v1.Layer {
@@ -131,7 +131,7 @@ func TestRebaseCommand(t *testing.T) {
 
 	dir := t.TempDir()
 	org := filepath.Join(dir, "factory.org.yaml")
-	if err := os.WriteFile(org, []byte("apiVersion: factory.dev/v1alpha1\nkind: OrgProfile\nsigning: {mode: none}\n"), 0o644); err != nil {
+	if err := os.WriteFile(org, []byte("apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nsigning: {mode: none}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
@@ -257,10 +257,10 @@ func TestRebaseApp(t *testing.T) {
 
 	dir := t.TempDir()
 	files := map[string]string{
-		"factory.org.yaml": "apiVersion: factory.dev/v1alpha1\nkind: OrgProfile\nregistry: " + host + "/apps\nsigning: {mode: none}\n",
-		"stack.yaml":       "apiVersion: factory.dev/v1alpha1\nkind: Stack\nmetadata: {name: s}\nspec:\n  build: golang:1\n  run: " + host + "/run:latest\n  platforms: [linux/amd64, linux/arm64]\n  steps: [{run: make}]\n",
-		"hello/app.yaml":   "apiVersion: factory.dev/v1alpha1\nkind: App\nmetadata: {name: hello}\nspec: {stack: ../stack.yaml}\n",
-		"bad/app.yaml":     "apiVersion: factory.dev/v1alpha1\nkind: App\nmetadata: {name: bad}\nspec: {stack: ../stack.yaml}\n",
+		"factory.org.yaml": "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nregistry: " + host + "/apps\nsigning: {mode: none}\n",
+		"stack.yaml":       "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Stack\nmetadata: {name: s}\nspec:\n  build: golang:1\n  run: " + host + "/run:latest\n  platforms: [linux/amd64, linux/arm64]\n  steps: [{run: make}]\n",
+		"hello/app.yaml":   "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: App\nmetadata: {name: hello}\nspec: {stack: ../stack.yaml}\n",
+		"bad/app.yaml":     "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: App\nmetadata: {name: bad}\nspec: {stack: ../stack.yaml}\n",
 	}
 	for n, body := range files {
 		p := filepath.Join(dir, n)
