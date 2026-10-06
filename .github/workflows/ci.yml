@@ -19,3 +19,17 @@ jobs:
         run: |
           go install ./cmd/clearcutt-factory
           for m in examples/*/image.yaml examples/*/app.yaml; do clearcutt-factory render -f "$m" --check; done
+
+  # Real locks and builds (apk, apt with Nix, dnf, and a Go app), each rebuilt
+  # without cache and compared, smoke-tested, and the app rebased.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go test ./internal/factory -run TestEndToEnd -count=1 -timeout 45m -v
+        env:
+          CLEARCUTT_FACTORY_E2E: "1"
+          GITHUB_TOKEN: ${{ github.token }}
