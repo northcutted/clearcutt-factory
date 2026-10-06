@@ -1,111 +1,198 @@
-# Builds every image and app under examples/. Pull requests build, scan, and gate;
-# main also pushes, signs (keyless, via this workflow's OIDC identity), attaches
-# SBOM / vulnerability / recipe attestations, adds SLSA provenance, and then
-# independently rebuilds from the signed recipe to prove reproducibility.
+# Builds every image and app manifest. Pull requests build, smoke-test, scan,
+# and gate; other events also push, sign keylessly (this workflow's OIDC
+# identity), attach SBOM / vulnerability / recipe attestations, add SLSA
+# provenance, and rebuild each newly published image on a second runner from
+# its signed recipe alone. Unchanged images aren't republished.
+#
+# Other repositories call it (see docs/adopting.md):
+#
+#   jobs:
+#     images:
+#       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.1.0
+#       permissions: {contents: read, packages: write, id-token: write, attestations: write}
+#       secrets: inherit
+#
+# Secrets (optional, with secrets: inherit): REGISTRY_USERNAME and
+# REGISTRY_PASSWORD for a registry other than ghcr.io.
 name: images
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      manifests:
+        description: Manifest globs, space-separated (bash globstar)
+        type: string
+        default: "**/image.yaml **/app.yaml"
+      registry:
+        description: Registry to log in to before pushing
+        type: string
+        default: ghcr.io
+      provenance:
+        description: Add SLSA build provenance (GitHub artifact attestations)
+        type: boolean
+        default: true
+      factory-version:
+        description: clearcutt-factory release to use
+        type: string
+        default: v0.1.0
 permissions:
   contents: read
+env:
+  # Callers use a release; this repository's own events build from source.
+  FACTORY_VERSION: ${{ inputs.factory-version || 'source' }}
+  MANIFESTS: ${{ inputs.manifests || 'examples/*/image.yaml examples/*/app.yaml' }}
+  REGISTRY: ${{ inputs.registry || 'ghcr.io' }}
+  PUSH: ${{ github.event_name != 'pull_request' }}
 jobs:
+  manifests:
+    runs-on: ubuntu-latest
+    outputs:
+      manifests: ${{ steps.find.outputs.manifests }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: find
+        shell: bash
+        run: |
+          shopt -s globstar nullglob
+          found=()
+          for pattern in $MANIFESTS; do for f in $pattern; do found+=("$f"); done; done
+          echo "manifests=$(printf '%s\n' "${found[@]}" | sort -u | jq -R -s -c 'split("\n") | map(select(. != ""))')" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: manifests
+    if: needs.manifests.outputs.manifests != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - {image: platform-tools, manifest: examples/platform-tools/image.yaml}
-          - {image: debian-tools, manifest: examples/debian-tools/image.yaml}
-          - {image: amazonlinux-tools, manifest: examples/amazonlinux-tools/image.yaml}
-          - {image: hello-app, manifest: examples/hello-app/app.yaml}
+        manifest: ${{ fromJSON(needs.manifests.outputs.manifests) }}
     permissions:
       contents: read
-      packages: write       # push to ghcr.io
-      id-token: write       # keyless signing and provenance
-      attestations: write   # provenance
+      packages: write # push to ghcr.io
+      id-token: write # keyless signing and provenance
+      attestations: write # provenance
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - if: env.FACTORY_VERSION != 'source'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version-file: go.mod
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-      - id: syft
-        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
-      - id: grype
-        uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
-      - name: Put syft and grype on PATH
-        env:
-          SYFT: ${{ steps.syft.outputs.cmd }}
-          GRYPE: ${{ steps.grype.outputs.cmd }}
-        run: |
-          dirname "$SYFT" >> "$GITHUB_PATH"
-          dirname "$GRYPE" >> "$GITHUB_PATH"
-      - run: go install ./cmd/clearcutt-factory
+          repository: northcutted/clearcutt-factory
+          ref: ${{ env.FACTORY_VERSION }}
+          path: .clearcutt-factory
+      - if: env.FACTORY_VERSION != 'source'
+        uses: ./.clearcutt-factory
+        with:
+          version: ${{ env.FACTORY_VERSION }}
+      - if: env.FACTORY_VERSION == 'source'
+        uses: ./
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0; other platforms build and smoke-test under emulation
 
       - name: Lock and Containerfile are current
-        run: clearcutt-factory render -f ${{ matrix.manifest }} --check
+        run: clearcutt-factory render -f "${{ matrix.manifest }}" --check
 
-      - name: Log in to ghcr.io
-        if: github.event_name != 'pull_request'
+      - name: Log in to ${{ env.REGISTRY }}
+        if: env.PUSH == 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          password: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
 
-      - name: Build, scan, gate (and push, sign, attest on main)
+      - name: Build, test, scan, gate (and push, sign, attest unless a pull request)
         id: build
-        run: clearcutt-factory build -f ${{ matrix.manifest }} ${{ github.event_name != 'pull_request' && '--push' || '' }}
+        run: |
+          args=(-f "${{ matrix.manifest }}")
+          if [ "$PUSH" = true ]; then args+=(--push); fi
+          clearcutt-factory build "${args[@]}"
 
       - name: SLSA build provenance
-        if: github.event_name != 'pull_request'
+        if: steps.build.outputs.published == 'true' && inputs.provenance != false
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ steps.build.outputs.repository }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
+      - id: slug
+        if: always()
+        env:
+          MANIFEST: ${{ matrix.manifest }}
+        run: echo "slug=$(echo "$MANIFEST" | tr '/.' '--')" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: ${{ matrix.image }}
+          name: ${{ steps.slug.outputs.slug }}
           path: |
-            out/${{ matrix.image }}/result.json
-            out/${{ matrix.image }}/attestations/
+            out/*/result.json
+            out/*/attestations/
+          if-no-files-found: ignore
 
-  # A second, independent machine rebuilds from the signed recipe alone.
+  # A second, independent machine rebuilds each newly published image from its
+  # signed recipe alone.
   reproduce:
-    if: github.event_name != 'pull_request'
-    needs: build
+    needs: [manifests, build]
+    if: github.event_name != 'pull_request' && needs.manifests.outputs.manifests != '[]'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: read # new ghcr.io packages start private
     strategy:
       fail-fast: false
       matrix:
-        image: [platform-tools, debian-tools, amazonlinux-tools, hello-app]
+        manifest: ${{ fromJSON(needs.manifests.outputs.manifests) }}
+    permissions:
+      contents: read
+      packages: read # private packages
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - if: env.FACTORY_VERSION != 'source'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version-file: go.mod
+          repository: northcutted/clearcutt-factory
+          ref: ${{ env.FACTORY_VERSION }}
+          path: .clearcutt-factory
+      - if: env.FACTORY_VERSION != 'source'
+        uses: ./.clearcutt-factory
+        with:
+          version: ${{ env.FACTORY_VERSION }}
+          tools: "false"
+      - if: env.FACTORY_VERSION == 'source'
+        uses: ./
+        with:
+          tools: "false"
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-      - run: go install ./cmd/clearcutt-factory
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          password: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
+      - id: slug
+        env:
+          MANIFEST: ${{ matrix.manifest }}
+        run: echo "slug=$(echo "$MANIFEST" | tr '/.' '--')" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        continue-on-error: true
         with:
-          name: ${{ matrix.image }}
+          name: ${{ steps.slug.outputs.slug }}
           path: build-result
       - name: Rebuild from the recipe attestation and compare digests
-        working-directory: examples
-        run: clearcutt-factory verify --image "$(jq -r .image ../build-result/result.json)"
+        env:
+          MANIFEST: ${{ matrix.manifest }}
+        run: |
+          result=$(find build-result -name result.json 2>/dev/null | head -n 1)
+          if [ -z "$result" ] || [ "$(jq -r .published "$result")" != true ]; then
+            echo "not newly published in this run; nothing to reproduce"
+            exit 0
+          fi
+          # verify --image reads the signer identity from the manifest's org profile.
+          dir=$(dirname "$MANIFEST")
+          while [ ! -f "$dir/factory.org.yaml" ] && [ "$dir" != . ] && [ "$dir" != / ]; do dir=$(dirname "$dir"); done
+          org=()
+          if [ -f "$dir/factory.org.yaml" ]; then org=(--org "$dir/factory.org.yaml"); fi
+          clearcutt-factory verify --image "$(jq -r .image "$result")" "${org[@]}"

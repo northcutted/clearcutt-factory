@@ -1,19 +1,42 @@
 # Re-resolves every input of every image and app once a week and opens one
 # pull request per manifest listing what moved (image digests, package and
-# tool versions). CI on the pull request builds, smoke-tests, scans, and
-# gates the change; merging it publishes the rebuilt image.
+# tool versions). Nothing moved, nothing proposed: an update that resolves the
+# same content keeps the lock, and its stale pull request closes. CI on the
+# pull request builds, smoke-tests, scans, and gates the change; merging it
+# publishes the rebuilt image.
 #
 # Pull requests opened with the default GITHUB_TOKEN don't start other
 # workflows. Set a CLEARCUTT_BOT_TOKEN secret (a GitHub App token, or a
 # fine-grained token with contents and pull-requests write) so CI runs on
-# them.
+# them, and allow Actions to create pull requests in the repository settings.
+#
+# Other repositories call it (see docs/adopting.md):
+#
+#   jobs:
+#     update:
+#       uses: northcutted/clearcutt-factory/.github/workflows/update-locks.yml@v0.1.0
+#       permissions: {contents: write, pull-requests: write}
+#       secrets: inherit
 name: update-locks
 on:
   schedule:
     - cron: "23 6 * * 1" # Mondays
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      manifests:
+        description: Manifest globs, space-separated (bash globstar)
+        type: string
+        default: "**/image.yaml **/app.yaml"
+      factory-version:
+        description: clearcutt-factory release to use
+        type: string
+        default: v0.1.0
 permissions:
   contents: read
+env:
+  FACTORY_VERSION: ${{ inputs.factory-version || 'source' }}
+  MANIFESTS: ${{ inputs.manifests || 'examples/*/image.yaml examples/*/app.yaml' }}
 jobs:
   manifests:
     runs-on: ubuntu-latest
@@ -22,10 +45,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: find
-        run: echo "manifests=$(find examples \( -name image.yaml -o -name app.yaml \) | sort | jq -R -s -c 'split("\n")[:-1]')" >> "$GITHUB_OUTPUT"
+        shell: bash
+        run: |
+          shopt -s globstar nullglob
+          found=()
+          for pattern in $MANIFESTS; do for f in $pattern; do found+=("$f"); done; done
+          echo "manifests=$(printf '%s\n' "${found[@]}" | sort -u | jq -R -s -c 'split("\n") | map(select(. != ""))')" >> "$GITHUB_OUTPUT"
 
   update:
     needs: manifests
+    if: needs.manifests.outputs.manifests != '[]'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -41,24 +70,36 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ secrets.CLEARCUTT_BOT_TOKEN || github.token }}
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - if: env.FACTORY_VERSION != 'source'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version-file: go.mod
+          repository: northcutted/clearcutt-factory
+          ref: ${{ env.FACTORY_VERSION }}
+          path: .clearcutt-factory
+      - if: env.FACTORY_VERSION != 'source'
+        uses: ./.clearcutt-factory
+        with:
+          version: ${{ env.FACTORY_VERSION }}
+          tools: "false"
+      - if: env.FACTORY_VERSION == 'source'
+        uses: ./
+        with:
+          tools: "false"
+      - run: echo "FACTORY_DIR=$([ "$FACTORY_VERSION" = source ] && echo . || echo .clearcutt-factory)" >> "$GITHUB_ENV"
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0; apt and dnf resolve inside the base, per platform
-      - run: go install ./cmd/clearcutt-factory
 
       - name: Re-resolve every input
         env:
           GITHUB_TOKEN: ${{ github.token }} # GitHub API lookups (release digests, nixpkgs revisions) without the anonymous rate limit
         run: clearcutt-factory lock -f "${{ matrix.manifest }}" --update | tee "$RUNNER_TEMP/lock.out"
 
-      - name: Open or update the pull request
+      - name: Open, update, or close the pull request
         env:
           GH_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN || github.token }}
           MANIFEST: ${{ matrix.manifest }}
         run: |
           dir=$(dirname "$MANIFEST")
-          name=$(basename "$dir")
+          name=$(echo "$dir" | tr '/' '-')
           {
             echo "Weekly \`clearcutt-factory lock --update\` of \`$MANIFEST\`:"
             echo
@@ -68,4 +109,4 @@ jobs:
             echo
             echo "CI builds, smoke-tests, scans, and gates this change. Merging publishes the rebuilt image."
           } > "$RUNNER_TEMP/body.md"
-          .github/scripts/open-pr.sh "factory/update/$name" "Update the pinned inputs of $name" "$RUNNER_TEMP/body.md" "$dir"
+          "$FACTORY_DIR/.github/scripts/open-pr.sh" "factory/update/$name" "Update the pinned inputs of $dir" "$RUNNER_TEMP/body.md" "$dir"
