@@ -20,6 +20,9 @@ var version = "" // set with -ldflags "-X main.version=…"
 const usage = `clearcutt-factory: declarative, reproducible, signed OCI images (part of ClearCutt)
 
 Usage:
+  clearcutt-factory init    [--dir .] [--repo OWNER/NAME] [--registry REGISTRY] [--force]
+      Set up a repository: an org profile, an example image, and a GitHub
+      Actions workflow that publishes, updates, and rebases with ClearCutt Factory.
   clearcutt-factory lock    [-f image.yaml] [--update | --update-base]
       Pin every input and write the lock and Containerfile. --update re-resolves
       all of them; --update-base only the base.
@@ -38,6 +41,9 @@ Usage:
   clearcutt-factory rebase  [-f app.yaml] [--update-lock] [--no-test] [same flags]
       Rebase the app's published image onto its stack's run image and smoke-test
       it; --update-lock then pins the lock to that base.
+  clearcutt-factory stack push [-f stack.yaml] --ref REGISTRY/REPOSITORY:TAG [--no-sign]
+      Publish a stack so apps in any repository can name it (spec.stack: REF),
+      and sign it.
   clearcutt-factory version
 
 Common flags:
@@ -151,6 +157,35 @@ func run(ctx context.Context, args []string) error {
 			return err
 		}
 		return factory.Rebase(ctx, opts, ro)
+
+	case "init":
+		var io factory.InitOptions
+		fs.StringVar(&io.Dir, "dir", ".", "")
+		fs.StringVar(&io.Repo, "repo", "", "")
+		fs.StringVar(&io.Registry, "registry", "", "")
+		fs.BoolVar(&io.Force, "force", false, "")
+		if err := parse(fs, args); err != nil {
+			return err
+		}
+		return factory.Init(ctx, opts, io)
+
+	case "stack":
+		if len(args) == 0 || args[0] != "push" {
+			return usageError{}
+		}
+		ref := fs.String("ref", "", "")
+		noSign := fs.Bool("no-sign", false, "")
+		if err := parse(fs, args[1:]); err != nil {
+			return err
+		}
+		file := "stack.yaml"
+		if flagSet(fs, "f") {
+			file = opts.ManifestPath
+		}
+		if *ref == "" {
+			return errors.New("stack push needs --ref REGISTRY/REPOSITORY:TAG")
+		}
+		return factory.StackPush(ctx, opts, file, *ref, *noSign)
 
 	case "version", "--version":
 		fmt.Println(versionString())

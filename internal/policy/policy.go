@@ -33,6 +33,9 @@ func Check(m *manifest.Manifest, o *manifest.Org, l *lock.Lock) error {
 	images := []lock.Image{l.Base, l.Builder.BuildKit, l.Builder.Frontend, l.Builder.Toolbox}
 	if l.App != nil {
 		images = append(images, l.App.Build)
+		if l.App.StackArtifact != nil {
+			images = append(images, *l.App.StackArtifact)
+		}
 	}
 	for _, t := range l.Tools {
 		if t.Image != nil {

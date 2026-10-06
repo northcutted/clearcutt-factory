@@ -1,0 +1,282 @@
+{
+  "$id": "https://raw.githubusercontent.com/northcutted/clearcutt-factory/main/schemas/manifest.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Manifest is the intent: what the image should contain. Versions may be loose; the lockfile pins everything.",
+  "properties": {
+    "apiVersion": {
+      "const": "factory.clearcutt.dev/v1alpha1"
+    },
+    "extends": {
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "Image",
+        "App"
+      ]
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "properties": {
+        "base": {
+          "type": "string"
+        },
+        "buildEnv": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "cmd": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "entrypoint": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "exclude": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "files": {
+          "items": {
+            "additionalProperties": false,
+            "description": "File copies a file or directory from next to the manifest into the image.",
+            "properties": {
+              "dst": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string"
+              },
+              "src": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dst",
+              "src"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "packageManager": {
+          "description": "PackageManager overrides detection from the base image: apk, apt, or dnf.",
+          "type": "string"
+        },
+        "packages": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "platforms": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "repositories": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "type": "string"
+        },
+        "stack": {
+          "description": "App only: the stack to build with (a stack file, or a stack published with clearcutt-factory stack push, by reference), the source directory (default: the manifest's directory), source paths to leave out, and variables for the stack's build steps.",
+          "type": "string"
+        },
+        "test": {
+          "additionalProperties": false,
+          "description": "Test is a smoke test run in each built or rebased platform image before anything is pushed.",
+          "properties": {
+            "command": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "http": {
+              "additionalProperties": false,
+              "description": "HTTPTest probes a port the container listens on.",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "port"
+              ],
+              "type": "object"
+            },
+            "timeout": {
+              "description": "Timeout is a duration like 30s (default 60s; emulated platforms are slow).",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "tools": {
+          "items": {
+            "additionalProperties": false,
+            "description": "Tool is anything not installed from the distro's package repository.",
+            "properties": {
+              "archMap": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "asset": {
+                "type": "string"
+              },
+              "checksum": {
+                "type": "string"
+              },
+              "checksums": {
+                "type": "string"
+              },
+              "dest": {
+                "type": "string"
+              },
+              "extract": {
+                "description": "url + github-release",
+                "type": "string"
+              },
+              "from": {
+                "type": "string"
+              },
+              "image": {
+                "description": "oci: source image; go/build: builder image",
+                "type": "string"
+              },
+              "mode": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "nixpkgs": {
+                "description": "nix: NixOS/nixpkgs branch, tag, or commit, or a full github: flake ref",
+                "type": "string"
+              },
+              "package": {
+                "description": "go: Go package path; nix: nixpkgs attribute (e.g. ripgrep, python3Packages.black)",
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "repo": {
+                "description": "github-release",
+                "type": "string"
+              },
+              "run": {
+                "description": "build",
+                "type": "string"
+              },
+              "sha256": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  }
+                ]
+              },
+              "tag": {
+                "type": "string"
+              },
+              "url": {
+                "description": "url",
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "from",
+              "name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "user": {
+          "type": "string"
+        },
+        "vex": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "workdir": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "title": "ClearCutt Factory image or app manifest",
+  "type": "object"
+}

@@ -34,8 +34,8 @@ const (
 	// accepted when verifying images published then.
 	legacyRecipePredicateType = "https://github.com/northcutted/declarative-image-factory/recipe/v1"
 	legacyRebasePredicateType = "https://github.com/northcutted/declarative-image-factory/rebase/v1"
-	CycloneDXType       = "https://cyclonedx.org/bom"
-	VulnType            = "https://cosign.sigstore.dev/attestation/vuln/v1"
+	CycloneDXType             = "https://cyclonedx.org/bom"
+	VulnType                  = "https://cosign.sigstore.dev/attestation/vuln/v1"
 
 	// maxEmbeddedContext caps the context bytes embedded in the recipe; larger
 	// contexts record hashes only and rebuilds need the source checkout.
@@ -234,6 +234,25 @@ type Cosign struct {
 	Args   []string
 	Stdout io.Writer
 	Stderr io.Writer
+}
+
+// Run runs a cosign command with the signing key and arguments.
+func (c Cosign) Run(ctx context.Context, args ...string) error { return c.run(ctx, args...) }
+
+// VerifySignature verifies ref's cosign signature against args (a key, or
+// a certificate identity and issuer).
+func VerifySignature(ctx context.Context, ref string, args []string) error {
+	bin, err := exec.LookPath("cosign")
+	if err != nil {
+		return errors.New("cosign not found on PATH")
+	}
+	cmd := exec.CommandContext(ctx, bin, append(append([]string{"verify", "--output", "json"}, args...), ref)...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("cosign verify: %w\n%s", err, stderr.String())
+	}
+	return nil
 }
 
 func (c Cosign) run(ctx context.Context, args ...string) error {

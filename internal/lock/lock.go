@@ -50,6 +50,8 @@ type App struct {
 	Stack string `yaml:"stack" json:"stack"`
 	// StackDigest ties the lock to the stack definition it was made with.
 	StackDigest string `yaml:"stackDigest" json:"stackDigest"`
+	// StackArtifact pins a stack fetched from a registry.
+	StackArtifact *Image `yaml:"stackArtifact,omitempty" json:"stackArtifact,omitempty"`
 	// Build is the image the stack's steps run in.
 	Build Image `yaml:"build" json:"build"`
 	// RunPlatforms are the run image's per-platform digests, written into

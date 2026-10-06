@@ -48,6 +48,9 @@ type Result struct {
 	Signed          bool              `json:"signed"`
 	// Tested reports that the smoke test passed on every platform.
 	Tested bool `json:"tested"`
+	// Published is false when the registry already had this digest with its
+	// attestations (an unchanged rebuild), so only the tags moved.
+	Published bool `json:"published"`
 }
 
 type platformOutputs struct {
@@ -60,7 +63,7 @@ type platformOutputs struct {
 // Build renders, builds, scans, gates, and (with Push) pushes, signs, and
 // attests the image.
 func Build(ctx context.Context, opts Options, bo BuildOptions) error {
-	m, org, l, err := loadLocked(opts)
+	m, org, l, err := loadLocked(ctx, opts)
 	if err != nil {
 		return err
 	}
@@ -174,18 +177,8 @@ func Build(ctx context.Context, opts Options, bo BuildOptions) error {
 	}
 
 	if bo.Push {
-		ref, err := registry.Push(ctx, art, repo, m.Metadata.Tags)
-		if err != nil {
+		if result.Image, result.Published, result.Signed, err = publish(ctx, opts, org, art, repo, m.Metadata.Tags, attest.RecipePredicateType, recipePath, outputs, bo.NoSign); err != nil {
 			return err
-		}
-		result.Image = ref
-		opts.printf("pushed %s", ref)
-		if org.Signing.Mode != "none" && !bo.NoSign {
-			if err := signAndAttest(ctx, opts, org, repo, ref, attest.RecipePredicateType, recipePath, outputs); err != nil {
-				return err
-			}
-			result.Signed = true
-			opts.printf("signed %s and attached its attestations", ref)
 		}
 		if err := githubOutput(result); err != nil {
 			return err
@@ -310,6 +303,48 @@ func buildRecipe(opts Options, m *manifest.Manifest, l *lock.Lock, out *render.O
 	}, nil
 }
 
+// publish pushes the artifact, signs it, and attaches its attestations.
+// When the registry already has this digest with its index attestation (an
+// unchanged rebuild), it only moves the tags, so republishing doesn't pile
+// up signatures and attestations on the same image.
+func publish(ctx context.Context, opts Options, org *manifest.Org, art *registry.Artifact, repo string, tags []string, predicateType, predicatePath string, outputs []platformOutputs, noSign bool) (ref string, published, signed bool, err error) {
+	ref = repo + "@" + art.Digest
+	sign := org.Signing.Mode != "none" && !noSign
+	exists, err := registry.Exists(ctx, ref)
+	if err != nil {
+		return "", false, false, err
+	}
+	if exists && (!sign || attested(ctx, org, ref, predicateType)) {
+		if err := registry.Tag(ctx, ref, tags); err != nil {
+			return "", false, false, err
+		}
+		opts.printf("%s is already published; moved its tags (%s)", ref, strings.Join(tags, ", "))
+		return ref, false, sign, nil
+	}
+	if _, err := registry.Push(ctx, art, repo, tags); err != nil {
+		return "", false, false, err
+	}
+	opts.printf("pushed %s", ref)
+	if sign {
+		if err := signAndAttest(ctx, opts, org, repo, ref, predicateType, predicatePath, outputs); err != nil {
+			return "", false, false, err
+		}
+		opts.printf("signed %s and attached its attestations", ref)
+	}
+	return ref, true, sign, nil
+}
+
+// attested reports whether ref already carries a verified attestation of
+// predicateType from the org's signer.
+func attested(ctx context.Context, org *manifest.Org, ref, predicateType string) bool {
+	args := verifyArgs(org)
+	if len(args) == 0 {
+		return false
+	}
+	_, err := attest.VerifyPredicate(ctx, ref, predicateType, args)
+	return err == nil
+}
+
 // signAndAttest signs the pushed image and attaches the index-level
 // predicate (recipe or rebase record) and each platform's SBOM and
 // vulnerability report.
@@ -345,7 +380,7 @@ func githubOutput(r Result) error {
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(f, "image=%s\nrepository=%s\ndigest=%s\n", r.Image, r.Repository, r.Digest); err != nil {
+	if _, err := fmt.Fprintf(f, "image=%s\nrepository=%s\ndigest=%s\npublished=%t\n", r.Image, r.Repository, r.Digest, r.Published); err != nil {
 		_ = f.Close()
 		return err
 	}

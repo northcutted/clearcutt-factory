@@ -1,11 +1,14 @@
 package manifest
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"path"
 	"path/filepath"
 	"strings"
+
+	"go.yaml.in/yaml/v3"
 )
 
 const (
@@ -76,6 +79,49 @@ type Step struct {
 
 // DefaultAppDir is where an app's files go unless the stack says otherwise.
 const DefaultAppDir = "/app"
+
+// StackArtifactType identifies a stack published to a registry.
+const StackArtifactType = "application/vnd.clearcutt.factory.stack.v1+yaml"
+
+// StackArtifact is where a registry stack came from.
+type StackArtifact struct {
+	Ref    string // as written in spec.stack
+	Digest string // of the artifact
+}
+
+// IsStackFile reports whether spec.stack names a file (else it is a
+// registry reference).
+func IsStackFile(s string) bool {
+	return strings.HasSuffix(s, ".yaml") || strings.HasSuffix(s, ".yml")
+}
+
+// Resolved returns the stack with its build and run images as references
+// (factory manifest paths resolved through the org), ready to publish.
+func (s *Stack) Resolved(o *Org) (*Stack, error) {
+	out := *s
+	var err error
+	if out.Spec.Build, err = s.imageRef(s.Spec.Build, o); err != nil {
+		return nil, err
+	}
+	if out.Spec.Run, err = s.imageRef(s.Spec.Run, o); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Marshal renders the stack as YAML.
+func (s *Stack) Marshal() []byte {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	_ = enc.Encode(struct {
+		APIVersion string        `yaml:"apiVersion"`
+		Kind       string        `yaml:"kind"`
+		Metadata   StackMetadata `yaml:"metadata"`
+		Spec       StackSpec     `yaml:"spec"`
+	}{APIVersion, KindStack, s.Metadata, s.Spec})
+	return buf.Bytes()
+}
 
 // LoadStack reads and validates a stack file.
 func LoadStack(p string) (*Stack, error) {
@@ -150,6 +196,9 @@ func (s *Stack) imageRef(v string, o *Org) (string, error) {
 // from it. App values win over the stack's.
 func (m *Manifest) applyStack(o *Org) error {
 	if m.Spec.StackPath == "" {
+		if m.Spec.Stack != "" {
+			return fmt.Errorf("spec.stack %s is a registry reference that hasn't been fetched", m.Spec.Stack)
+		}
 		return errors.New("spec.stack is required for kind App")
 	}
 	if m.Spec.Base != "" {
@@ -158,6 +207,9 @@ func (m *Manifest) applyStack(o *Org) error {
 	st, err := LoadStack(m.Spec.StackPath)
 	if err != nil {
 		return err
+	}
+	if m.StackFrom != nil && (IsStackFile(st.Spec.Build) || IsStackFile(st.Spec.Run)) {
+		return fmt.Errorf("stack %s names manifest files for its images; publish it with clearcutt-factory stack push, which resolves them", m.Spec.Stack)
 	}
 	if st.RunRef, err = st.imageRef(st.Spec.Run, o); err != nil {
 		return err
