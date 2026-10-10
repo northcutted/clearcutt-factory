@@ -1,6 +1,6 @@
 # Installs clearcutt-factory, and cosign, syft, and grype, which it calls.
 #
-#   - uses: northcutted/clearcutt-factory@v0.1.0
+#   - uses: northcutted/clearcutt-factory@v0.1.1
 #
 # At a release tag, the action downloads that release's binary and verifies
 # its Sigstore signature (made by this repository's release workflow at that

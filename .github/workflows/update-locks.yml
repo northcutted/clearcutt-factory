@@ -14,7 +14,7 @@
 #
 #   jobs:
 #     update:
-#       uses: northcutted/clearcutt-factory/.github/workflows/update-locks.yml@v0.1.0
+#       uses: northcutted/clearcutt-factory/.github/workflows/update-locks.yml@v0.1.1
 #       permissions: {contents: write, pull-requests: write}
 #       secrets: inherit
 name: update-locks
@@ -31,7 +31,7 @@ on:
       factory-version:
         description: clearcutt-factory release to use
         type: string
-        default: v0.1.0
+        default: v0.1.1
 permissions:
   contents: read
 env:

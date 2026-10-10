@@ -166,7 +166,7 @@ For workflows of your own, the action installs a signature-verified binary
 plus cosign, syft, and grype:
 
 ```yaml
-- uses: northcutted/clearcutt-factory@v0.1.0
+- uses: northcutted/clearcutt-factory@v0.1.1
 - run: clearcutt-factory build -f images/example/image.yaml
 ```
 

@@ -8,7 +8,7 @@
 #
 #   jobs:
 #     images:
-#       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.1.0
+#       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.1.1
 #       permissions: {contents: read, packages: write, id-token: write, attestations: write}
 #       secrets: inherit
 #
@@ -37,7 +37,7 @@ on:
       factory-version:
         description: clearcutt-factory release to use
         type: string
-        default: v0.1.0
+        default: v0.1.1
 permissions:
   contents: read
 env:
