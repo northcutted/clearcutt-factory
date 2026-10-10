@@ -32,7 +32,8 @@ Usage:
       Build, smoke-test, SBOM, scan, gate; with --push also sign and attest.
   clearcutt-factory verify  [-f image.yaml] --digest sha256:…
       Rebuild from source and compare.
-  clearcutt-factory verify  --image repo@sha256:… [--key K | --certificate-identity-regexp R --certificate-oidc-issuer I]
+  clearcutt-factory verify  --image repo@sha256:… [--key K | --certificate-identity[-regexp] R --certificate-oidc-issuer I
+                            [--certificate-github-workflow-repository OWNER/REPO]]
       Rebuild from the image's signed recipe (or repeat its recorded rebase) and compare.
   clearcutt-factory rebase  --image repo[:tag|@sha256:…] [--onto BASE] [--from BASE] [--check] [--force]
                             [--push] [--tag T]… [--out DIR] [--no-scan] [--no-sign]
@@ -116,13 +117,15 @@ func run(ctx context.Context, args []string) error {
 
 	case "verify":
 		var vo factory.VerifyOptions
-		var key, identity, issuer string
+		var key, identity, identityRegexp, issuer, workflowRepo string
 		fs.StringVar(&vo.Image, "image", "", "")
 		fs.StringVar(&vo.Digest, "digest", "", "")
 		fs.StringVar(&vo.OutDir, "out", "out", "")
 		fs.StringVar(&key, "key", "", "")
-		fs.StringVar(&identity, "certificate-identity-regexp", "", "")
+		fs.StringVar(&identity, "certificate-identity", "", "")
+		fs.StringVar(&identityRegexp, "certificate-identity-regexp", "", "")
 		fs.StringVar(&issuer, "certificate-oidc-issuer", "", "")
+		fs.StringVar(&workflowRepo, "certificate-github-workflow-repository", "", "")
 		if err := parse(fs, args); err != nil {
 			return err
 		}
@@ -132,10 +135,16 @@ func run(ctx context.Context, args []string) error {
 			vo.VerifyArgs = append(vo.VerifyArgs, "--key", key)
 		}
 		if identity != "" {
-			vo.VerifyArgs = append(vo.VerifyArgs, "--certificate-identity-regexp", identity)
+			vo.VerifyArgs = append(vo.VerifyArgs, "--certificate-identity", identity)
+		}
+		if identityRegexp != "" {
+			vo.VerifyArgs = append(vo.VerifyArgs, "--certificate-identity-regexp", identityRegexp)
 		}
 		if issuer != "" {
 			vo.VerifyArgs = append(vo.VerifyArgs, "--certificate-oidc-issuer", issuer)
+		}
+		if workflowRepo != "" {
+			vo.VerifyArgs = append(vo.VerifyArgs, "--certificate-github-workflow-repository", workflowRepo)
 		}
 		return factory.Verify(ctx, opts, vo)
 

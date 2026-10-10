@@ -55,7 +55,7 @@ func Init(ctx context.Context, opts Options, io InitOptions) error {
 	if releaseRE.MatchString(opts.Version) {
 		ref = opts.Version
 	}
-	r := strings.NewReplacer("{{ref}}", ref, "{{repo}}", repo, "{{repoRegexp}}", regexp.QuoteMeta(repo), "{{registry}}", registry)
+	r := strings.NewReplacer("{{ref}}", ref, "{{repo}}", repo, "{{identityRegexp}}", workflowIdentityRegexp(ref), "{{registry}}", registry)
 
 	var wrote []string
 	for _, f := range []struct{ path, body string }{
@@ -90,6 +90,17 @@ Next:
   GitHub App or fine-grained token with contents and pull-requests write) so
   CI runs on the pull requests the weekly and daily jobs open.`)
 	return nil
+}
+
+// workflowIdentityRegexp matches the certificate identity of ClearCutt
+// Factory's signing reusable workflows (images.yml and fleet.yml) at the
+// ref the generated workflow calls them by: any release tag, or main.
+func workflowIdentityRegexp(ref string) string {
+	at := `refs/tags/v\d+\.\d+\.\d+$`
+	if !releaseRE.MatchString(ref) {
+		at = `refs/heads/` + regexp.QuoteMeta(ref) + `$`
+	}
+	return `^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet)\.yml@` + at
 }
 
 // githubRepo reads owner/name from the origin remote, if it is on GitHub.
@@ -129,8 +140,17 @@ defaults:
 signing:
   mode: keyless # Sigstore, with the CI workflow's OIDC identity
   verify:
-    certificateIdentityRegexp: ^https://github\.com/{{repoRegexp}}/
+    # Images are signed inside ClearCutt Factory's reusable workflows, so the
+    # certificate names those workflows. Any repository can call them, so
+    # sourceRepository binds signatures to runs in this repository.
+    certificateIdentityRegexp: {{identityRegexp}}
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
+    sourceRepository: https://github.com/{{repo}}
+  # Stacks from a platform repository have their own signer, for
+  # policy.requireSignedStacks:
+  # stacks:
+  #   certificateIdentity: https://github.com/OWNER/platform/.github/workflows/stacks.yml@refs/heads/main
+  #   certificateOIDCIssuer: https://token.actions.githubusercontent.com
 
 vulnerabilities:
   scanner: grype

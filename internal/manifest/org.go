@@ -32,6 +32,8 @@ type Org struct {
 	Mirrors []Mirror `yaml:"mirrors,omitempty"`
 
 	Path string `yaml:"-"`
+	// Trust is the trust policy signing.trustPolicy names, once loaded.
+	Trust *TrustPolicy `yaml:"-"`
 }
 
 // Mirror replaces the URL prefix From with To.
@@ -86,15 +88,51 @@ type Signing struct {
 	Mode string   `yaml:"mode,omitempty"`
 	Key  string   `yaml:"key,omitempty"`
 	Args []string `yaml:"args,omitempty"`
-	// Verify holds the identity verifiers expect, used by `clearcutt-factory verify --image`.
+	// Verify is who signs this repository's images. `verify --image`, the
+	// already-published check, and repeating rebases verify against it.
 	Verify VerifyIdentity `yaml:"verify,omitempty"`
+	// Stacks is who may sign the stacks manifests here build on, for
+	// policy.requireSignedStacks. Stacks usually come from a platform
+	// repository, so they need their own signer; empty means Verify.
+	Stacks VerifyIdentity `yaml:"stacks,omitempty"`
+	// TrustPolicy is a ClearCutt trust policy file (apiVersion
+	// clearcutt.dev/v1, kind TrustPolicy), relative to this profile, shared
+	// with clearcutt-verify. When set, its image signers replace verify and
+	// its stack signers replace stacks.
+	TrustPolicy string `yaml:"trustPolicy,omitempty"`
 }
 
+// VerifyIdentity is one signer: a public key, or a keyless certificate
+// identity with its OIDC issuer.
+//
+// Images signed in ClearCutt Factory's reusable workflows carry the called
+// workflow as their certificate identity, and any repository can call them,
+// so a keyless identity should also say which repository's runs count:
+// sourceRepository, or sourceMatchesImage (the repository the image names as
+// its source), optionally limited to sourceRepositoryOwner. cosign checks
+// the certificate's GitHub workflow repository against it.
 type VerifyIdentity struct {
-	Key                       string   `yaml:"key,omitempty"`
-	CertificateIdentityRegexp string   `yaml:"certificateIdentityRegexp,omitempty"`
-	CertificateOIDCIssuer     string   `yaml:"certificateOIDCIssuer,omitempty"`
-	Args                      []string `yaml:"args,omitempty"`
+	Key                       string `yaml:"key,omitempty"`
+	CertificateIdentity       string `yaml:"certificateIdentity,omitempty"`
+	CertificateIdentityRegexp string `yaml:"certificateIdentityRegexp,omitempty"`
+	CertificateOIDCIssuer     string `yaml:"certificateOIDCIssuer,omitempty"`
+	// SourceRepository is the repository whose workflow runs sign, e.g.
+	// https://github.com/acme/checkout.
+	SourceRepository string `yaml:"sourceRepository,omitempty"`
+	// SourceRepositoryOwner accepts runs in any of the owner's repositories,
+	// e.g. https://github.com/acme; it limits sourceMatchesImage.
+	SourceRepositoryOwner string `yaml:"sourceRepositoryOwner,omitempty"`
+	// SourceMatchesImage requires the run to be in the repository the image
+	// names as its source (org.opencontainers.image.source).
+	SourceMatchesImage bool `yaml:"sourceMatchesImage,omitempty"`
+	// SourceRef is the ref the run was on, e.g. refs/heads/main.
+	SourceRef string   `yaml:"sourceRef,omitempty"`
+	Args      []string `yaml:"args,omitempty"`
+}
+
+// IsZero reports whether no signer is set.
+func (v VerifyIdentity) IsZero() bool {
+	return v.Key == "" && v.CertificateIdentity == "" && v.CertificateIdentityRegexp == "" && v.CertificateOIDCIssuer == "" && len(v.Args) == 0
 }
 
 type SBOM struct {
@@ -170,6 +208,11 @@ func (o *Org) validate() error {
 	if f := o.Vulnerabilities.FailOn; f != "" && SeverityRank(f) == 0 {
 		errs = append(errs, fmt.Errorf("vulnerabilities.failOn %q must be negligible, low, medium, high, or critical", f))
 	}
+	for name, v := range map[string]VerifyIdentity{"signing.verify": o.Signing.Verify, "signing.stacks": o.Signing.Stacks} {
+		if err := v.validate(); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", name, err))
+		}
+	}
 	for i, m := range o.Mirrors {
 		if m.From == "" || m.To == "" {
 			errs = append(errs, fmt.Errorf("mirrors[%d]: from and to are required", i))
@@ -224,8 +267,18 @@ func LoadOrg(path, startDir string) (*Org, error) {
 	if o.Signing.Key != "" && !strings.Contains(o.Signing.Key, "://") && !filepath.IsAbs(o.Signing.Key) {
 		o.Signing.Key = filepath.Join(filepath.Dir(o.Path), o.Signing.Key)
 	}
-	if k := o.Signing.Verify.Key; k != "" && !strings.Contains(k, "://") && !filepath.IsAbs(k) {
-		o.Signing.Verify.Key = filepath.Join(filepath.Dir(o.Path), k)
+	for _, v := range []*VerifyIdentity{&o.Signing.Verify, &o.Signing.Stacks} {
+		if k := v.Key; k != "" && !strings.Contains(k, "://") && !filepath.IsAbs(k) {
+			v.Key = filepath.Join(filepath.Dir(o.Path), k)
+		}
+	}
+	if t := o.Signing.TrustPolicy; t != "" {
+		if !filepath.IsAbs(t) {
+			t = filepath.Join(filepath.Dir(o.Path), t)
+		}
+		if o.Trust, err = LoadTrustPolicy(t); err != nil {
+			return nil, fmt.Errorf("%s: signing.trustPolicy: %w", path, err)
+		}
 	}
 	o.setDefaults()
 	if err := o.validate(); err != nil {

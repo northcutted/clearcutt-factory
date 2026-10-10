@@ -3,6 +3,32 @@
 ClearCutt Factory is pre-1.0; see [docs/stability.md](docs/stability.md) for
 what may change between releases.
 
+## Unreleased
+
+**Signatures from the reusable workflows verify in other repositories
+([#11](https://github.com/northcutted/clearcutt-factory/issues/11)).** The
+reusable workflows sign with their own identity, so the identity `init`
+wrote never matched: in a calling repository, `verify --image` failed in the
+reproduce and fleet jobs, and unchanged images were republished on every run.
+A signer can now bind signatures to the repository whose run made them
+(`sourceRepository`, or `sourceMatchesImage` with `sourceRepositoryOwner`, and
+`sourceRef`), checked by cosign, and accept an exact `certificateIdentity`.
+`init` writes the reusable workflows' identity bound to the repository.
+Existing org profiles: replace `certificateIdentityRegexp` in `signing.verify`
+as `docs/adopting.md` shows.
+
+**A stack signer of its own
+([#12](https://github.com/northcutted/clearcutt-factory/issues/12)).**
+`signing.stacks` is who may sign registry stacks for
+`policy.requireSignedStacks`; it defaults to `signing.verify`.
+
+**One trust policy shared with clearcutt-verify.** `signing.trustPolicy` names
+a `clearcutt.dev/v1` `TrustPolicy` file whose signers (with roles `image` and
+`stack`) replace `verify` and `stacks`; clearcutt-verify reads the same file.
+
+`verify --image` takes `--certificate-identity` and
+`--certificate-github-workflow-repository`.
+
 ## v0.1.0
 
 The first release of ClearCutt Factory, the build side of

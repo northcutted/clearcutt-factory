@@ -97,7 +97,58 @@ spec:
 The app's lock pins the stack's digest, so a moved tag changes nothing until
 `clearcutt-factory lock --update` (the weekly job) proposes it. Set
 `policy.requireSignedStacks: true` to accept only stacks signed by
-`signing.verify`'s identity.
+`signing.stacks` (the platform repository's identity; `signing.verify` when
+unset).
+
+## Who signs, and binding signatures to your repository
+
+The reusable workflows sign inside ClearCutt Factory's workflows, so the
+certificate's identity is the called workflow
+(`https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@refs/tags/v0.1.1`),
+not your repository. Anyone can call those workflows and get the same
+identity, so an identity alone would accept images built in any repository.
+The certificate also records the repository whose run signed (Fulcio's GitHub
+workflow repository extension), and `sourceRepository` makes cosign require
+it. `init` writes both:
+
+```yaml
+signing:
+  mode: keyless
+  verify:          # this repository's images
+    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet)\.yml@refs/tags/v\d+\.\d+\.\d+$
+    certificateOIDCIssuer: https://token.actions.githubusercontent.com
+    sourceRepository: https://github.com/acme/checkout
+  stacks:          # who may sign the stacks apps here build on
+    certificateIdentity: https://github.com/acme/platform/.github/workflows/stacks.yml@refs/heads/main
+    certificateOIDCIssuer: https://token.actions.githubusercontent.com
+```
+
+`sourceMatchesImage: true` instead requires the run to be in the repository
+the image names as its source (`org.opencontainers.image.source`), and
+`sourceRepositoryOwner` limits that to one owner's repositories; `sourceRef`
+requires a ref. Pinning the workflows by commit SHA changes the identity's
+`@…` suffix: adjust the regexp to match.
+
+**One trust policy for the organization.** Instead of `verify` and `stacks`,
+`signing.trustPolicy` can name a ClearCutt trust policy, the same file
+[clearcutt-verify](https://github.com/northcutted/clearcutt-verify) reads to
+check the estate
+([schema](https://github.com/northcutted/clearcutt-verify/blob/main/contract/trust-policy.v1.schema.json)):
+
+```yaml
+apiVersion: clearcutt.dev/v1
+kind: TrustPolicy
+signers:
+  - name: factory-builds              # images (the default role)
+    identityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet)\.yml@refs/tags/v\d+\.\d+\.\d+$
+    issuer: https://token.actions.githubusercontent.com
+    sourceRepositoryOwner: https://github.com/acme
+    sourceMatchesImage: true
+  - name: platform-stacks
+    roles: [stack]
+    identity: https://github.com/acme/platform/.github/workflows/stacks.yml@refs/heads/main
+    issuer: https://token.actions.githubusercontent.com
+```
 
 ## The reusable workflows
 
@@ -133,13 +184,18 @@ clearcutt-factory rebase -f $APP --push --update-lock   # scheduled: keep apps o
 ```
 
 For keyless signing elsewhere, set `signing.verify` to your CI's OIDC
-identity; or sign with a key (`signing.mode: key`, a file or any cosign KMS
+identity (the `source…` fields are GitHub Actions only); or sign with a key (`signing.mode: key`, a file or any cosign KMS
 URI). `builder.addr` points builds at an existing BuildKit (in Kubernetes,
 say) instead of starting a container.
 
 ## Governing what you built
 
-[ClearCutt](https://github.com/northcutted/clearcutt) reads the images back:
-which images are built on which, how stale each one is, and what can be
-proven about them. Factory images record their base by layer digest, so
-ClearCutt proves those relationships rather than taking anyone's word.
+[clearcutt-verify](https://github.com/northcutted/clearcutt-verify) reads
+the images back: which images are built on which, how stale each one is, and
+what can be proven about them. It verifies factory's signatures, SBOM,
+vulnerability, recipe, and rebase attestations against the same trust policy,
+can rebuild each image with `clearcutt-factory verify --image`, and lists the
+images built on a base (`estate dependents`) so a platform repository can wake
+exactly the apps a new run image affects.
+[clearcutt-portal](https://github.com/northcutted/clearcutt-portal) publishes
+its report as a website.
