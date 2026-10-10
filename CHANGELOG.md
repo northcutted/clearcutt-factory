@@ -3,6 +3,15 @@
 ClearCutt Factory is pre-1.0; see [docs/stability.md](docs/stability.md) for
 what may change between releases.
 
+## Unreleased
+
+**SLSA provenance for every published image.** `images.yml` skipped
+provenance on this repository's own push builds (its `provenance` input is
+empty outside `workflow_call`, and the condition read empty as false). It now
+attests any published digest that lacks provenance, so an image pushed without
+it (the step failed, or was skipped) gets it on the next run, and unchanged
+images that have it get no new attestation.
+
 ## v0.1.1
 
 **Signatures from the reusable workflows verify in other repositories
