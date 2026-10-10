@@ -3,7 +3,7 @@
 ClearCutt Factory is pre-1.0; see [docs/stability.md](docs/stability.md) for
 what may change between releases.
 
-## Unreleased
+## v0.1.1
 
 **Signatures from the reusable workflows verify in other repositories
 ([#11](https://github.com/northcutted/clearcutt-factory/issues/11)).** The
