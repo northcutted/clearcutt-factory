@@ -24,5 +24,8 @@ spec:
     org.opencontainers.image.description: Debian trixie with git, curl, jq, ripgrep, and kubectl
   user: "65532"
   entrypoint: [/bin/bash]
+  # Triage of the Go advisories of 2026-10-08 for the Go tools this image
+  # ships, until their upstream builds move to Go 1.26.9/1.27.2.
+  vex: [../vex/go-2026-10.openvex.json]
   test:
     command: [/usr/local/bin/rg, --version]

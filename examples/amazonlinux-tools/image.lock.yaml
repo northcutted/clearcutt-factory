@@ -2,7 +2,7 @@
 apiVersion: factory.clearcutt.dev/v1alpha1
 kind: Lock
 inputsDigest: sha256:c31233c64f601086378cb85130fde3b6838124290715ae8e5e978973c2f8afed
-sourceDateEpoch: 1791072000
+sourceDateEpoch: 1791504000
 builder:
   buildkit:
     ref: moby/buildkit:v0.33.1
@@ -12,7 +12,7 @@ builder:
     digest: sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
   toolbox:
     ref: cgr.dev/chainguard/wolfi-base:latest
-    digest: sha256:9c2092b053779e14c82fb50f77b37bcc38b7d2c83972352d5813280f9d035b03
+    digest: sha256:1c451d46a0d5c4e9f2b38e0e8d3e299564a1aa95c21973efcc1980a9d1d2e73e
 base:
   ref: amazonlinux:2023
   digest: sha256:8ed3c0a996841537f75607e7d1de2114d8150391f75792e8da9268738547e73f
