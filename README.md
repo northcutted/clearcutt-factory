@@ -8,11 +8,13 @@ that is **reproducible bit-for-bit**, **signed**, and shipped with **SBOMs**,
 lockfile, and build settings) that anyone can use to rebuild it and get the
 same digest.
 
-It is the build side of [ClearCutt](https://github.com/northcutted/clearcutt),
-a family of tools for the OCI images you run: ClearCutt Factory builds and
-maintains them, and ClearCutt governs estates whatever built them (which
-images are built on which, how stale they are, and what can be proven about
-them).
+It is the build side of ClearCutt, a family of tools for the OCI images you
+run: ClearCutt Factory builds and maintains them;
+[clearcutt-verify](https://github.com/northcutted/clearcutt-verify) checks
+an estate whatever built it (which images are built on which, how stale they
+are, what can be proven about them) and writes a report;
+[clearcutt-portal](https://github.com/northcutted/clearcutt-portal) publishes
+that report as a website.
 
 Distro packages come from the base image's own package manager — **apk**
 (Wolfi, Chainguard, Alpine), **apt** (Debian, Ubuntu), or **dnf** (Fedora,
@@ -218,7 +220,8 @@ properties are what make it safe to rebase.
 which resolves manifest paths to image references and signs it), and apps in
 any repository name it: `stack: ghcr.io/acme/stacks/go:1`. The app's lock pins
 the stack's digest until `lock --update` moves it, and
-`policy.requireSignedStacks` accepts only stacks signed by the org's signer.
+`policy.requireSignedStacks` accepts only stacks signed by the org's stack
+signer (`signing.stacks`).
 
 Apps can't declare packages, tools, or files: anything an app needs from the
 OS belongs in the stack's run image, which is itself a factory image. Quote
@@ -273,7 +276,7 @@ The intended split, and the automation that keeps it current:
 | Platform team | Run and base images (`kind: Image`) and their locks | Weekly updates, CVE fixes |
 | Platform team, one owner per language | Stacks | Toolchain bumps; every app on the stack rebuilds |
 | App teams | `app.yaml`, the source, `app.lock.yaml` | Their own releases |
-| Security | VEX statements; fleet-wide audit (e.g. [ClearCutt](https://github.com/northcutted/clearcutt)) | When triaged |
+| Security | VEX statements; fleet-wide audit (e.g. [clearcutt-verify](https://github.com/northcutted/clearcutt-verify)) | When triaged |
 
 * **Weekly updates** ([`update-locks.yml`](.github/workflows/update-locks.yml)).
   `clearcutt-factory lock --update` on every manifest, one pull request each, listing
@@ -312,7 +315,7 @@ found by walking up from the manifest (or `--org`). See
 | `registry`, `tags` | Where images go and how they are tagged |
 | `defaults` | Base image, platforms, and labels for every manifest |
 | `builder` | Pinned BuildKit, Dockerfile frontend, toolbox, Go and Nix images, default nixpkgs branch; `runtime: docker\|podman`; `addr:` for a remote buildkitd (e.g. in Kubernetes) |
-| `signing` | `keyless` (Sigstore OIDC), `key` (file or any cosign KMS URI), or `none`; extra cosign args (private Sigstore, no tlog); the identity verifiers expect |
+| `signing` | `keyless` (Sigstore OIDC), `key` (file or any cosign KMS URI), or `none`; extra cosign args (private Sigstore, no tlog); who signs this repository's images (`verify`, bound to the workflow run's repository with `sourceRepository`) and its stacks (`stacks`), or a shared ClearCutt `trustPolicy` file ([adopting](docs/adopting.md#who-signs-and-binding-signatures-to-your-repository)) |
 | `sbom` | Whether to add a syft scan to the declared SBOM |
 | `vulnerabilities` | Scanner and the `failOn` severity gate, optionally `onlyFixed` |
 | `policy` | Non-root, required labels, TOFU, allowed download hosts (tools and packages) and registries |
@@ -394,7 +397,7 @@ nothing is GitHub-specific.
   registry.
 * The fleet workflow finds apps by their manifests in this repository. Apps
   in other repositories run the same job on their own, or a registry-wide
-  inventory (ClearCutt's base graph) drives `clearcutt-factory rebase --image`.
+  inventory (clearcutt-verify's `estate dependents`) drives `clearcutt-factory rebase --image`.
 * Smoke tests run images on the build machine, other architectures through
   emulation (QEMU in CI); `--no-test` skips them.
 

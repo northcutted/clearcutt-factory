@@ -415,3 +415,30 @@ func WriteDockerConfig(path string, registries []string) error {
 	}
 	return os.WriteFile(path, b, 0o600)
 }
+
+// SourceLabel is the OCI label (and annotation) naming the repository an
+// image was built from.
+const SourceLabel = "org.opencontainers.image.source"
+
+// Source returns the repository the artifact names as its source: the
+// manifest annotation, else the first platform image's label.
+func (a *Artifact) Source() string {
+	if a.Index != nil {
+		if m, err := a.Index.IndexManifest(); err == nil && m.Annotations[SourceLabel] != "" {
+			return m.Annotations[SourceLabel]
+		}
+	}
+	imgs, err := a.Platforms()
+	if err != nil {
+		return ""
+	}
+	for _, p := range imgs {
+		if m, err := p.Image.Manifest(); err == nil && m.Annotations[SourceLabel] != "" {
+			return m.Annotations[SourceLabel]
+		}
+		if cf, err := p.Image.ConfigFile(); err == nil && cf.Config.Labels[SourceLabel] != "" {
+			return cf.Config.Labels[SourceLabel]
+		}
+	}
+	return ""
+}

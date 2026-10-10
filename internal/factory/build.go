@@ -314,7 +314,7 @@ func publish(ctx context.Context, opts Options, org *manifest.Org, art *registry
 	if err != nil {
 		return "", false, false, err
 	}
-	if exists && (!sign || attested(ctx, org, ref, predicateType)) {
+	if exists && (!sign || attested(ctx, org, ref, predicateType, art.Source())) {
 		if err := registry.Tag(ctx, ref, tags); err != nil {
 			return "", false, false, err
 		}
@@ -335,13 +335,14 @@ func publish(ctx context.Context, opts Options, org *manifest.Org, art *registry
 }
 
 // attested reports whether ref already carries a verified attestation of
-// predicateType from the org's signer.
-func attested(ctx context.Context, org *manifest.Org, ref, predicateType string) bool {
-	args := verifyArgs(org)
-	if len(args) == 0 {
+// predicateType from one of the org's image signers. source is the
+// repository the image names as its source.
+func attested(ctx context.Context, org *manifest.Org, ref, predicateType, source string) bool {
+	signers, err := signerArgs(org, manifest.RoleImage, source)
+	if err != nil || len(signers) == 0 {
 		return false
 	}
-	_, err := attest.VerifyPredicate(ctx, ref, predicateType, args)
+	_, err = firstVerified(signers, func(args []string) ([]byte, error) { return attest.VerifyPredicate(ctx, ref, predicateType, args) })
 	return err == nil
 }
 

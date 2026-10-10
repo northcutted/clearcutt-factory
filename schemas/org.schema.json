@@ -158,15 +158,18 @@
           "description": "Mode is keyless (Sigstore OIDC), key (file or KMS URI), or none.",
           "type": "string"
         },
-        "verify": {
+        "stacks": {
           "additionalProperties": false,
-          "description": "Verify holds the identity verifiers expect, used by `clearcutt-factory verify --image`.",
+          "description": "Stacks is who may sign the stacks manifests here build on, for policy.requireSignedStacks. Stacks usually come from a platform repository, so they need their own signer; empty means Verify.",
           "properties": {
             "args": {
               "items": {
                 "type": "string"
               },
               "type": "array"
+            },
+            "certificateIdentity": {
+              "type": "string"
             },
             "certificateIdentityRegexp": {
               "type": "string"
@@ -175,6 +178,67 @@
               "type": "string"
             },
             "key": {
+              "type": "string"
+            },
+            "sourceMatchesImage": {
+              "description": "SourceMatchesImage requires the run to be in the repository the image names as its source (org.opencontainers.image.source).",
+              "type": "boolean"
+            },
+            "sourceRef": {
+              "description": "SourceRef is the ref the run was on, e.g. refs/heads/main.",
+              "type": "string"
+            },
+            "sourceRepository": {
+              "description": "SourceRepository is the repository whose workflow runs sign, e.g. https://github.com/acme/checkout.",
+              "type": "string"
+            },
+            "sourceRepositoryOwner": {
+              "description": "SourceRepositoryOwner accepts runs in any of the owner's repositories, e.g. https://github.com/acme; it limits sourceMatchesImage.",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "trustPolicy": {
+          "description": "TrustPolicy is a ClearCutt trust policy file (apiVersion clearcutt.dev/v1, kind TrustPolicy), relative to this profile, shared with clearcutt-verify. When set, its image signers replace verify and its stack signers replace stacks.",
+          "type": "string"
+        },
+        "verify": {
+          "additionalProperties": false,
+          "description": "Verify is who signs this repository's images. `verify --image`, the already-published check, and repeating rebases verify against it.",
+          "properties": {
+            "args": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "certificateIdentity": {
+              "type": "string"
+            },
+            "certificateIdentityRegexp": {
+              "type": "string"
+            },
+            "certificateOIDCIssuer": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            },
+            "sourceMatchesImage": {
+              "description": "SourceMatchesImage requires the run to be in the repository the image names as its source (org.opencontainers.image.source).",
+              "type": "boolean"
+            },
+            "sourceRef": {
+              "description": "SourceRef is the ref the run was on, e.g. refs/heads/main.",
+              "type": "string"
+            },
+            "sourceRepository": {
+              "description": "SourceRepository is the repository whose workflow runs sign, e.g. https://github.com/acme/checkout.",
+              "type": "string"
+            },
+            "sourceRepositoryOwner": {
+              "description": "SourceRepositoryOwner accepts runs in any of the owner's repositories, e.g. https://github.com/acme; it limits sourceMatchesImage.",
               "type": "string"
             }
           },

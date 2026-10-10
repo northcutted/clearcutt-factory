@@ -26,6 +26,13 @@ signing:
   verify:
     certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
+    # Bind signatures to runs in this repository: images signed by reusable
+    # workflows carry the called workflow's identity, whoever called it.
+    sourceRepository: https://github.com/northcutted/clearcutt-factory
+  # stacks:                # who may sign registry stacks (policy.requireSignedStacks); default: verify
+  #   certificateIdentity: https://github.com/acme/platform/.github/workflows/stacks.yml@refs/heads/main
+  #   certificateOIDCIssuer: https://token.actions.githubusercontent.com
+  # trustPolicy: trust.yaml  # or one clearcutt.dev/v1 TrustPolicy shared with clearcutt-verify
 
 vulnerabilities:
   scanner: grype

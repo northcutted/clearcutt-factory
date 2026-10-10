@@ -6,8 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/northcutted/clearcutt-factory/internal/manifest"
 )
 
 func TestInit(t *testing.T) {
@@ -24,10 +27,31 @@ func TestInit(t *testing.T) {
 	}
 	org, _ := os.ReadFile(filepath.Join(dir, "factory.org.yaml"))
 	wf, _ := os.ReadFile(filepath.Join(dir, ".github/workflows/clearcutt-factory.yml"))
-	for _, want := range []string{"registry: ghcr.io/acme ", `^https://github\.com/Acme/platform-images/`, "clearcutt-factory/v1.2.3/schemas/org.schema.json"} {
+	for _, want := range []string{"registry: ghcr.io/acme ", "sourceRepository: https://github.com/Acme/platform-images", "clearcutt-factory/v1.2.3/schemas/org.schema.json"} {
 		if !strings.Contains(string(org), want) {
 			t.Errorf("org profile lacks %q:\n%s", want, org)
 		}
+	}
+	// The identity is that of factory's signing reusable workflows, at the
+	// release tags the workflow calls them by (#11).
+	o, err := manifest.LoadOrg(filepath.Join(dir, "factory.org.yaml"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile(o.Signing.Verify.CertificateIdentityRegexp)
+	for san, want := range map[string]bool{
+		"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@refs/tags/v1.2.3":       true,
+		"https://github.com/northcutted/clearcutt-factory/.github/workflows/fleet.yml@refs/tags/v1.3.0":        true,
+		"https://github.com/northcutted/clearcutt-factory/.github/workflows/update-locks.yml@refs/tags/v1.2.3": false,
+		"https://github.com/Acme/platform-images/.github/workflows/clearcutt-factory.yml@refs/heads/main":      false,
+	} {
+		if re.MatchString(san) != want {
+			t.Errorf("identity regexp %s on %s: want %v", re, san, want)
+		}
+	}
+	args, err := signerArgs(o, manifest.RoleImage, "")
+	if err != nil || len(args) != 1 || !strings.Contains(strings.Join(args[0], " "), "--certificate-github-workflow-repository Acme/platform-images") {
+		t.Errorf("signer args %q, %v", args, err)
 	}
 	if !strings.Contains(string(wf), "northcutted/clearcutt-factory/.github/workflows/images.yml@v1.2.3") {
 		t.Errorf("workflow:\n%s", wf)

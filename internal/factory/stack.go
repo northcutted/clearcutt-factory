@@ -104,13 +104,16 @@ func verifyStack(ctx context.Context, m *manifest.Manifest, org *manifest.Org) e
 	if m.StackFrom == nil || !org.Policy.RequireSignedStacks {
 		return nil
 	}
-	args := verifyArgs(org)
-	if len(args) == 0 {
-		return errors.New("policy.requireSignedStacks needs signing.verify in the org profile")
+	signers, err := signerArgs(org, manifest.RoleStack, "")
+	if err != nil {
+		return fmt.Errorf("policy.requireSignedStacks: %w", err)
+	}
+	if len(signers) == 0 {
+		return errors.New("policy.requireSignedStacks needs a stack signer: signing.stacks (or signing.verify, or stack signers in signing.trustPolicy) in the org profile")
 	}
 	ref := lock.RepoOf(m.StackFrom.Ref) + "@" + m.StackFrom.Digest
-	if err := attest.VerifySignature(ctx, ref, args); err != nil {
-		return fmt.Errorf("stack %s is not signed by the org's signer (policy.requireSignedStacks): %w", ref, err)
+	if _, err := firstVerified(signers, func(args []string) (struct{}, error) { return struct{}{}, attest.VerifySignature(ctx, ref, args) }); err != nil {
+		return fmt.Errorf("stack %s is not signed by the org's stack signer (policy.requireSignedStacks): %w", ref, err)
 	}
 	return nil
 }

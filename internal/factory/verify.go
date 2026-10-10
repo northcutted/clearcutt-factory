@@ -88,18 +88,26 @@ func Verify(ctx context.Context, opts Options, vo VerifyOptions) error {
 		if org, err = manifest.LoadOrg(opts.OrgPath, "."); err != nil {
 			return err
 		}
-		args := vo.VerifyArgs
-		if len(args) == 0 {
-			args = verifyArgs(org)
+		signers := [][]string{vo.VerifyArgs}
+		if len(vo.VerifyArgs) == 0 {
+			source := ""
+			if needsImageSource(org, manifest.RoleImage) {
+				if art, err := registry.Fetch(ctx, vo.Image); err == nil {
+					source = art.Source()
+				}
+			}
+			if signers, err = signerArgs(org, manifest.RoleImage, source); err != nil {
+				return fmt.Errorf("no signer to verify %s against: %w", vo.Image, err)
+			}
 		}
-		if len(args) == 0 {
-			return errors.New("no signer identity to verify the recipe against: set signing.verify in the org profile or pass --key / --certificate-identity-regexp with --certificate-oidc-issuer")
+		if len(signers) == 0 {
+			return errors.New("no signer identity to verify the recipe against: set signing.verify (or signing.trustPolicy) in the org profile, or pass --key / --certificate-identity(-regexp) with --certificate-oidc-issuer")
 		}
 		opts.printf("verifying the recipe or rebase attestation on %s", vo.Image)
-		recipe, err := attest.VerifyRecipe(ctx, vo.Image, args)
+		recipe, err := firstVerified(signers, func(args []string) (*attest.Recipe, error) { return attest.VerifyRecipe(ctx, vo.Image, args) })
 		if err != nil {
 			// A rebased image carries a rebase record instead of a recipe.
-			rec, rerr := attest.VerifyRebase(ctx, vo.Image, args)
+			rec, rerr := firstVerified(signers, func(args []string) (*attest.Rebase, error) { return attest.VerifyRebase(ctx, vo.Image, args) })
 			if rerr != nil {
 				return fmt.Errorf("no verified recipe or rebase attestation on %s:\n%v\n%v", vo.Image, err, rerr)
 			}
@@ -181,11 +189,48 @@ func safeName(s string) string {
 	}, s)
 }
 
-func verifyArgs(o *manifest.Org) []string {
-	v := o.Signing.Verify
+// signerArgs returns cosign's verification arguments for each signer the
+// org trusts to sign role (an image or a stack), one set per signer.
+// imageSource is the repository the image names as its source, for signers
+// with sourceMatchesImage. A signer whose constraints can't be met is
+// skipped; if none is left, the reasons are returned.
+func signerArgs(o *manifest.Org, role, imageSource string) ([][]string, error) {
+	var ids []manifest.VerifyIdentity
+	switch {
+	case o.Trust != nil:
+		ids = o.Trust.For(role)
+	case role == manifest.RoleStack && !o.Signing.Stacks.IsZero():
+		ids = []manifest.VerifyIdentity{o.Signing.Stacks}
+	case !o.Signing.Verify.IsZero():
+		ids = []manifest.VerifyIdentity{o.Signing.Verify}
+	}
+	var out [][]string
+	var errs []error
+	for _, v := range ids {
+		args, err := identityArgs(v, imageSource)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		out = append(out, args)
+	}
+	if len(out) == 0 {
+		return nil, errors.Join(errs...)
+	}
+	return out, nil
+}
+
+// identityArgs turns one signer into cosign arguments. cosign checks one
+// exact GitHub workflow repository, so sourceMatchesImage and
+// sourceRepositoryOwner are first resolved to the repository the run must
+// have been in.
+func identityArgs(v manifest.VerifyIdentity, imageSource string) ([]string, error) {
 	var args []string
 	if v.Key != "" {
 		args = append(args, "--key", v.Key)
+	}
+	if v.CertificateIdentity != "" {
+		args = append(args, "--certificate-identity", v.CertificateIdentity)
 	}
 	if v.CertificateIdentityRegexp != "" {
 		args = append(args, "--certificate-identity-regexp", v.CertificateIdentityRegexp)
@@ -193,5 +238,67 @@ func verifyArgs(o *manifest.Org) []string {
 	if v.CertificateOIDCIssuer != "" {
 		args = append(args, "--certificate-oidc-issuer", v.CertificateOIDCIssuer)
 	}
-	return append(args, v.Args...)
+	repo := strings.TrimSuffix(v.SourceRepository, "/")
+	if v.SourceMatchesImage {
+		src := strings.TrimSuffix(strings.TrimSuffix(imageSource, "/"), ".git")
+		switch {
+		case src == "":
+			return nil, fmt.Errorf("the signer requires the run to be in the image's source repository, and the image names none (%s)", registry.SourceLabel)
+		case repo != "" && repo != src:
+			return nil, fmt.Errorf("the image names %s as its source, not %s", src, repo)
+		}
+		repo = src
+	}
+	if owner := strings.TrimSuffix(v.SourceRepositoryOwner, "/"); owner != "" {
+		if repo == "" {
+			return nil, errors.New("sourceRepositoryOwner needs sourceRepository or sourceMatchesImage: cosign checks one exact repository")
+		}
+		if !strings.HasPrefix(repo, owner+"/") {
+			return nil, fmt.Errorf("%s is not one of %s's repositories", repo, owner)
+		}
+	}
+	if repo != "" {
+		name, ok := strings.CutPrefix(repo, "https://github.com/")
+		if !ok || strings.Count(name, "/") != 1 {
+			return nil, fmt.Errorf("source repository %q is not https://github.com/OWNER/REPO", repo)
+		}
+		args = append(args, "--certificate-github-workflow-repository", name)
+	}
+	if v.SourceRef != "" {
+		args = append(args, "--certificate-github-workflow-ref", v.SourceRef)
+	}
+	return append(args, v.Args...), nil
+}
+
+// needsImageSource reports whether any signer for role checks the image's
+// source repository.
+func needsImageSource(o *manifest.Org, role string) bool {
+	ids := []manifest.VerifyIdentity{o.Signing.Verify}
+	if o.Trust != nil {
+		ids = o.Trust.For(role)
+	}
+	for _, v := range ids {
+		if v.SourceMatchesImage {
+			return true
+		}
+	}
+	return false
+}
+
+// firstVerified runs check with each signer's arguments and returns the
+// first success, or every failure.
+func firstVerified[T any](signers [][]string, check func(args []string) (T, error)) (T, error) {
+	var zero T
+	var errs []error
+	for _, args := range signers {
+		v, err := check(args)
+		if err == nil {
+			return v, nil
+		}
+		errs = append(errs, err)
+	}
+	if len(errs) == 0 {
+		return zero, errors.New("no signer to verify against")
+	}
+	return zero, errors.Join(errs...)
 }
