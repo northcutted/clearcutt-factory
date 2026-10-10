@@ -111,8 +111,27 @@ jobs:
           if [ "$PUSH" = true ]; then args+=(--push); fi
           clearcutt-factory build "${args[@]}"
 
+      # Provenance for every published digest that lacks it: a fresh push, or
+      # an image an earlier run pushed without it (the step failed, or was
+      # off). Unchanged images that have it get no new attestation.
+      # format() because inputs is empty outside workflow_call, and null
+      # compares equal to false.
+      - name: Check for SLSA build provenance
+        id: provenance
+        if: env.PUSH == 'true' && steps.build.outputs.digest != '' && format('{0}', inputs.provenance) != 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISHED: ${{ steps.build.outputs.published }}
+          REF: ${{ steps.build.outputs.repository }}@${{ steps.build.outputs.digest }}
+        run: |
+          if [ "$PUBLISHED" = true ] || ! gh attestation verify "oci://$REF" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$REF already has SLSA build provenance"
+          fi
+
       - name: SLSA build provenance
-        if: steps.build.outputs.published == 'true' && inputs.provenance != false
+        if: steps.provenance.outputs.needed == 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ steps.build.outputs.repository }}
