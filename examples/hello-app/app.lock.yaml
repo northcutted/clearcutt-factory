@@ -2,7 +2,7 @@
 apiVersion: factory.clearcutt.dev/v1alpha1
 kind: Lock
 inputsDigest: sha256:32ee646dd14c497c50b06a7e9884c6537e1ac3e83995885f8e6b47a61025c9d1
-sourceDateEpoch: 1791158400
+sourceDateEpoch: 1791504000
 builder:
   buildkit:
     ref: moby/buildkit:v0.33.1
@@ -12,7 +12,7 @@ builder:
     digest: sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
   toolbox:
     ref: cgr.dev/chainguard/wolfi-base:latest
-    digest: sha256:9c2092b053779e14c82fb50f77b37bcc38b7d2c83972352d5813280f9d035b03
+    digest: sha256:1c451d46a0d5c4e9f2b38e0e8d3e299564a1aa95c21973efcc1980a9d1d2e73e
 base:
   ref: cgr.dev/chainguard/static:latest
   digest: sha256:fe55470f22d3259488d9d3739168d8f04da67755f0b69382bc26eda4a7d3d327
@@ -21,7 +21,7 @@ app:
   stackDigest: sha256:cfdf348cb280bd00ac1307d8a82683b9bc0275987b1179ed676e065ab6756c7c
   build:
     ref: golang:1
-    digest: sha256:e0174e51e81218523251d85d248a90d24c3d5e81543b4f07a5d66229397db190
+    digest: sha256:e432b43af23a9328d56a7c499be0476810aa344acbcf65fc7c455d4ff5a40602
   runPlatforms:
     linux/amd64: sha256:a40219f3b0c2719e4e4220310e80a2230a4b95881644292c130e3a8e8287fc6c
     linux/arm64: sha256:daed076c904e5dc26f5ff87d77aa4cea8b7ca76e906b561915dafe5b086377dc
