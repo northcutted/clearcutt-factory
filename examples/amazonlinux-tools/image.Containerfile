@@ -7,19 +7,19 @@
 # (moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea):
 #   buildctl build --frontend dockerfile.v0 --local context=. --local dockerfile=. \
 #     --opt platform=linux/amd64,linux/arm64 \
-#     --opt build-arg:SOURCE_DATE_EPOCH=1791072000 \
+#     --opt build-arg:SOURCE_DATE_EPOCH=1791504000 \
 #     --output type=oci,dest=image.tar,rewrite-timestamp=true
 # from a context staged with `clearcutt-factory render --context-dir`.
 
 ARG TARGETARCH
 
 # ---- tool: kubectl (url 1.37.1, verified: checksum-file) ----
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:9c2092b053779e14c82fb50f77b37bcc38b7d2c83972352d5813280f9d035b03 AS tool-kubectl-amd64
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:1c451d46a0d5c4e9f2b38e0e8d3e299564a1aa95c21973efcc1980a9d1d2e73e AS tool-kubectl-amd64
 ARG SOURCE_DATE_EPOCH
 ADD --checksum=sha256:65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8 https://dl.k8s.io/release/v1.37.1/bin/linux/amd64/kubectl /src/kubectl
 RUN install -D -m 0755 /src/kubectl /out/usr/local/bin/kubectl
 
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:9c2092b053779e14c82fb50f77b37bcc38b7d2c83972352d5813280f9d035b03 AS tool-kubectl-arm64
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:1c451d46a0d5c4e9f2b38e0e8d3e299564a1aa95c21973efcc1980a9d1d2e73e AS tool-kubectl-arm64
 ARG SOURCE_DATE_EPOCH
 ADD --checksum=sha256:ff749f4b78d9c4f1ec87307df9b50119ed819e2094aa9810cb9acffc3286c8c7 https://dl.k8s.io/release/v1.37.1/bin/linux/arm64/kubectl /src/kubectl
 RUN install -D -m 0755 /src/kubectl /out/usr/local/bin/kubectl
