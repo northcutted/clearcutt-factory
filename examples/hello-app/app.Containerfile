@@ -7,7 +7,7 @@
 # (moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea):
 #   buildctl build --frontend dockerfile.v0 --local context=. --local dockerfile=. \
 #     --opt platform=linux/amd64,linux/arm64 \
-#     --opt build-arg:SOURCE_DATE_EPOCH=1791504000 \
+#     --opt build-arg:SOURCE_DATE_EPOCH=1791676800 \
 #     --output type=oci,dest=image.tar,rewrite-timestamp=true,$ANNOTATIONS
 # from a context staged with `clearcutt-factory render --context-dir`, where
 # $ANNOTATIONS (comma-separated) records the base for `clearcutt-factory rebase`:
