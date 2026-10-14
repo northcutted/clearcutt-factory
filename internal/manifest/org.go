@@ -123,7 +123,8 @@ type VerifyIdentity struct {
 	// e.g. https://github.com/acme; it limits sourceMatchesImage.
 	SourceRepositoryOwner string `yaml:"sourceRepositoryOwner,omitempty"`
 	// SourceMatchesImage requires the run to be in the repository the image
-	// names as its source (org.opencontainers.image.source).
+	// names as its source (org.opencontainers.image.source). Images only: a
+	// stack names no source, so a stack signer binds with sourceRepository.
 	SourceMatchesImage bool `yaml:"sourceMatchesImage,omitempty"`
 	// SourceRef is the ref the run was on, e.g. refs/heads/main.
 	SourceRef string   `yaml:"sourceRef,omitempty"`
@@ -161,7 +162,8 @@ type Policy struct {
 	// AllowedRegistries restricts image references by prefix, e.g. cgr.dev/chainguard/.
 	AllowedRegistries []string `yaml:"allowedRegistries,omitempty"`
 	// RequireSignedStacks requires stacks fetched from a registry to carry
-	// a signature from signing.verify's identity, checked when locking.
+	// a signature from the org's stack signer: signing.stacks (else
+	// signing.verify), or the stack signers of signing.trustPolicy.
 	RequireSignedStacks bool `yaml:"requireSignedStacks,omitempty"`
 }
 
@@ -211,6 +213,24 @@ func (o *Org) validate() error {
 	for name, v := range map[string]VerifyIdentity{"signing.verify": o.Signing.Verify, "signing.stacks": o.Signing.Stacks} {
 		if err := v.validate(); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", name, err))
+		}
+	}
+	// A stack names no source repository, so sourceMatchesImage can't bind
+	// a stack's signature to a run: a stack signer names its repository.
+	const imagesOnly = "sourceMatchesImage only applies to images (a stack names no source repository)"
+	if o.Signing.Stacks.SourceMatchesImage {
+		errs = append(errs, fmt.Errorf("signing.stacks: %s; use sourceRepository", imagesOnly))
+	}
+	if o.Policy.RequireSignedStacks {
+		switch {
+		case o.Trust != nil:
+			for i, s := range o.Trust.Signers {
+				if s.SourceMatchesImage && s.may(RoleStack) {
+					errs = append(errs, fmt.Errorf("policy.requireSignedStacks: signing.trustPolicy signers[%d] %s signs stacks, but %s; give stacks a signer with sourceRepository", i, s.Name, imagesOnly))
+				}
+			}
+		case o.Signing.Stacks.IsZero() && o.Signing.Verify.SourceMatchesImage:
+			errs = append(errs, fmt.Errorf("policy.requireSignedStacks: signing.verify signs stacks while signing.stacks is unset, but %s; set signing.stacks", imagesOnly))
 		}
 	}
 	for i, m := range o.Mirrors {
@@ -264,14 +284,10 @@ func LoadOrg(path, startDir string) (*Org, error) {
 		return nil, fmt.Errorf("%s: expected apiVersion %q and kind %q", path, APIVersion, KindOrg)
 	}
 	o.Path, _ = filepath.Abs(path)
-	if o.Signing.Key != "" && !strings.Contains(o.Signing.Key, "://") && !filepath.IsAbs(o.Signing.Key) {
-		o.Signing.Key = filepath.Join(filepath.Dir(o.Path), o.Signing.Key)
-	}
-	for _, v := range []*VerifyIdentity{&o.Signing.Verify, &o.Signing.Stacks} {
-		if k := v.Key; k != "" && !strings.Contains(k, "://") && !filepath.IsAbs(k) {
-			v.Key = filepath.Join(filepath.Dir(o.Path), k)
-		}
-	}
+	dir := filepath.Dir(o.Path)
+	o.Signing.Key = keyPath(dir, o.Signing.Key)
+	o.Signing.Verify.Key = keyPath(dir, o.Signing.Verify.Key)
+	o.Signing.Stacks.Key = keyPath(dir, o.Signing.Stacks.Key)
 	if t := o.Signing.TrustPolicy; t != "" {
 		if !filepath.IsAbs(t) {
 			t = filepath.Join(filepath.Dir(o.Path), t)
@@ -285,6 +301,15 @@ func LoadOrg(path, startDir string) (*Org, error) {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return o, nil
+}
+
+// keyPath resolves a key file relative to dir, the directory of the file
+// that names it. KMS and other cosign URIs (with "://") stay as they are.
+func keyPath(dir, k string) string {
+	if k == "" || strings.Contains(k, "://") || filepath.IsAbs(k) {
+		return k
+	}
+	return filepath.Join(dir, k)
 }
 
 func findUp(dir, name string) (string, error) {

@@ -117,7 +117,7 @@
           "type": "boolean"
         },
         "requireSignedStacks": {
-          "description": "RequireSignedStacks requires stacks fetched from a registry to carry a signature from signing.verify's identity, checked when locking.",
+          "description": "RequireSignedStacks requires stacks fetched from a registry to carry a signature from the org's stack signer: signing.stacks (else signing.verify), or the stack signers of signing.trustPolicy.",
           "type": "boolean"
         },
         "requiredLabels": {
@@ -181,7 +181,7 @@
               "type": "string"
             },
             "sourceMatchesImage": {
-              "description": "SourceMatchesImage requires the run to be in the repository the image names as its source (org.opencontainers.image.source).",
+              "description": "SourceMatchesImage requires the run to be in the repository the image names as its source (org.opencontainers.image.source). Images only: a stack names no source, so a stack signer binds with sourceRepository.",
               "type": "boolean"
             },
             "sourceRef": {
@@ -226,7 +226,7 @@
               "type": "string"
             },
             "sourceMatchesImage": {
-              "description": "SourceMatchesImage requires the run to be in the repository the image names as its source (org.opencontainers.image.source).",
+              "description": "SourceMatchesImage requires the run to be in the repository the image names as its source (org.opencontainers.image.source). Images only: a stack names no source, so a stack signer binds with sourceRepository.",
               "type": "boolean"
             },
             "sourceRef": {

@@ -3,6 +3,7 @@ package manifest
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -26,7 +27,8 @@ const (
 )
 
 // TrustedSigner is one signer and what it may sign. Its fields match
-// clearcutt-verify's trusted signers.
+// clearcutt-verify's trusted signers. A key file is relative to the trust
+// policy; a cosign KMS URI is used as is.
 type TrustedSigner struct {
 	// Name labels the signer in messages.
 	Name string `yaml:"name,omitempty"`
@@ -42,7 +44,8 @@ type TrustedSigner struct {
 	SourceMatchesImage    bool     `yaml:"sourceMatchesImage,omitempty"`
 }
 
-// LoadTrustPolicy reads and checks a trust policy file.
+// LoadTrustPolicy reads and checks a trust policy file. Key files are
+// relative to it.
 func LoadTrustPolicy(path string) (*TrustPolicy, error) {
 	t, err := decodeFile[TrustPolicy](path)
 	if err != nil {
@@ -51,8 +54,14 @@ func LoadTrustPolicy(path string) (*TrustPolicy, error) {
 	if t.APIVersion != TrustAPIVersion || t.Kind != KindTrust {
 		return nil, fmt.Errorf("%s: expected apiVersion %q and kind %q", path, TrustAPIVersion, KindTrust)
 	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
 	var errs []error
-	for i, s := range t.Signers {
+	for i := range t.Signers {
+		t.Signers[i].Key = keyPath(filepath.Dir(abs), t.Signers[i].Key)
+		s := t.Signers[i]
 		for _, r := range s.Roles {
 			if r != RoleImage && r != RoleStack {
 				errs = append(errs, fmt.Errorf("signers[%d]: role %q must be image or stack", i, r))
@@ -72,15 +81,33 @@ func LoadTrustPolicy(path string) (*TrustPolicy, error) {
 func (t *TrustPolicy) For(role string) []VerifyIdentity {
 	var out []VerifyIdentity
 	for _, s := range t.Signers {
-		roles := s.Roles
-		if len(roles) == 0 {
-			roles = []string{RoleImage}
-		}
-		if slices.Contains(roles, role) {
+		if s.may(role) {
 			out = append(out, s.Verify())
 		}
 	}
 	return out
+}
+
+func (s TrustedSigner) may(role string) bool {
+	if len(s.Roles) == 0 {
+		return role == RoleImage
+	}
+	return slices.Contains(s.Roles, role)
+}
+
+// Signers returns who the org trusts to sign role (an image or a stack):
+// the trust policy's signers for it when signing.trustPolicy is set, else
+// signing.verify, which signing.stacks replaces for stacks.
+func (o *Org) Signers(role string) []VerifyIdentity {
+	switch {
+	case o.Trust != nil:
+		return o.Trust.For(role)
+	case role == RoleStack && !o.Signing.Stacks.IsZero():
+		return []VerifyIdentity{o.Signing.Stacks}
+	case !o.Signing.Verify.IsZero():
+		return []VerifyIdentity{o.Signing.Verify}
+	}
+	return nil
 }
 
 // Verify is the signer as a verify identity.

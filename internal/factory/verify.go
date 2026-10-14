@@ -195,18 +195,9 @@ func safeName(s string) string {
 // with sourceMatchesImage. A signer whose constraints can't be met is
 // skipped; if none is left, the reasons are returned.
 func signerArgs(o *manifest.Org, role, imageSource string) ([][]string, error) {
-	var ids []manifest.VerifyIdentity
-	switch {
-	case o.Trust != nil:
-		ids = o.Trust.For(role)
-	case role == manifest.RoleStack && !o.Signing.Stacks.IsZero():
-		ids = []manifest.VerifyIdentity{o.Signing.Stacks}
-	case !o.Signing.Verify.IsZero():
-		ids = []manifest.VerifyIdentity{o.Signing.Verify}
-	}
 	var out [][]string
 	var errs []error
-	for _, v := range ids {
+	for _, v := range o.Signers(role) {
 		args, err := identityArgs(v, imageSource)
 		if err != nil {
 			errs = append(errs, err)
@@ -273,11 +264,7 @@ func identityArgs(v manifest.VerifyIdentity, imageSource string) ([]string, erro
 // needsImageSource reports whether any signer for role checks the image's
 // source repository.
 func needsImageSource(o *manifest.Org, role string) bool {
-	ids := []manifest.VerifyIdentity{o.Signing.Verify}
-	if o.Trust != nil {
-		ids = o.Trust.For(role)
-	}
-	for _, v := range ids {
+	for _, v := range o.Signers(role) {
 		if v.SourceMatchesImage {
 			return true
 		}

@@ -98,7 +98,9 @@ The app's lock pins the stack's digest, so a moved tag changes nothing until
 `clearcutt-factory lock --update` (the weekly job) proposes it. Set
 `policy.requireSignedStacks: true` to accept only stacks signed by
 `signing.stacks` (the platform repository's identity; `signing.verify` when
-unset).
+unset). Every command that uses the stack (`lock`, `render`, `build`,
+`verify`, `rebase`) checks the version the lock pins, so a pull request that
+edits the lock to an unsigned version fails CI too.
 
 ## Who signs, and binding signatures to your repository
 
@@ -126,8 +128,11 @@ signing:
 `sourceMatchesImage: true` instead requires the run to be in the repository
 the image names as its source (`org.opencontainers.image.source`), and
 `sourceRepositoryOwner` limits that to one owner's repositories; `sourceRef`
-requires a ref. Pinning the workflows by commit SHA changes the identity's
-`@…` suffix: adjust the regexp to match.
+requires a ref. It binds images only: a stack names no source, so a stack
+signer names its repository with `sourceRepository` (or is a workflow in it,
+as above), and with `policy.requireSignedStacks` a stack signer with
+`sourceMatchesImage` is an error. Pinning the workflows by commit SHA changes
+the identity's `@…` suffix: adjust the regexp to match.
 
 **One trust policy for the organization.** Instead of `verify` and `stacks`,
 `signing.trustPolicy` can name a ClearCutt trust policy, the same file
@@ -149,6 +154,9 @@ signers:
     identity: https://github.com/acme/platform/.github/workflows/stacks.yml@refs/heads/main
     issuer: https://token.actions.githubusercontent.com
 ```
+
+A signer's `key:` file is relative to the trust policy, as keys in `signing`
+are relative to the org profile.
 
 ## The reusable workflows
 

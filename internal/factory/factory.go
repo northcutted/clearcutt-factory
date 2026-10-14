@@ -38,7 +38,9 @@ func (o Options) logf(format string, a ...any)   { _, _ = fmt.Fprintf(o.Stderr, 
 
 // load reads the manifest and its org profile, fetching a registry stack
 // at the digest its lock pins (or, with fresh or no pin, where its
-// reference points now).
+// reference points now) and, under policy.requireSignedStacks, checking
+// its signature. Every command that reads a manifest loads it here, so a
+// lock edited to pin an unsigned stack fails wherever the stack is used.
 func load(ctx context.Context, opts Options, fresh bool) (*manifest.Manifest, *manifest.Org, error) {
 	m, err := manifest.Load(opts.ManifestPath)
 	if err != nil {
@@ -49,6 +51,9 @@ func load(ctx context.Context, opts Options, fresh bool) (*manifest.Manifest, *m
 		return nil, nil, err
 	}
 	if err := fetchAppStack(ctx, m, fresh); err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", opts.ManifestPath, err)
+	}
+	if err := verifyStack(ctx, m, org); err != nil {
 		return nil, nil, fmt.Errorf("%s: %w", opts.ManifestPath, err)
 	}
 	if err := m.ApplyOrg(org); err != nil {
@@ -91,9 +96,6 @@ type LockOptions struct {
 func Lock(ctx context.Context, opts Options, lo LockOptions) error {
 	m, org, err := load(ctx, opts, lo.Update)
 	if err != nil {
-		return err
-	}
-	if err := verifyStack(ctx, m, org); err != nil {
 		return err
 	}
 	_, err = lockManifest(ctx, opts, m, org, lo)

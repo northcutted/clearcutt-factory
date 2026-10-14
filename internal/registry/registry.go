@@ -231,14 +231,27 @@ func Exists(ctx context.Context, ref string) (bool, error) {
 		return false, err
 	}
 	_, err = remote.Head(r, opts(ctx)...)
-	var terr *transport.Error
+	if err != nil && !notFound(err) {
+		// Some registries reject HEAD; ask again with GET, as Digest does.
+		if _, gerr := remote.Get(r, opts(ctx)...); gerr == nil || notFound(gerr) {
+			err = gerr
+		} else {
+			err = fmt.Errorf("%w (and with GET: %w)", err, gerr)
+		}
+	}
 	switch {
 	case err == nil:
 		return true, nil
-	case errors.As(err, &terr) && terr.StatusCode == http.StatusNotFound:
+	case notFound(err):
 		return false, nil
 	}
 	return false, fmt.Errorf("checking %s: %w", ref, err)
+}
+
+// notFound reports whether err is the registry's 404.
+func notFound(err error) bool {
+	var terr *transport.Error
+	return errors.As(err, &terr) && terr.StatusCode == http.StatusNotFound
 }
 
 // Tag points each tag of ref's repository at ref (by digest).
