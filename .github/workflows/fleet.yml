@@ -4,9 +4,11 @@
 #
 # Each app's published image is rebased (when safe), smoke-tested, scanned,
 # gated, pushed, signed, and checked by repeating the rebase from its signed
-# record. A pull request then pins the app's lock to the same base, so the
-# next build from source doesn't move it back. An app that can't be rebased
-# gets the same pull request (building it is the fix) and its job fails.
+# record; a match is attested on the image (…/reproduction/v1, method
+# rebase-repeat). A pull request then pins the app's lock to the same base,
+# so the next build from source doesn't move it back. An app that can't be
+# rebased gets the same pull request (building it is the fix) and its job
+# fails.
 #
 # The pull requests are opened as a GitHub App, CLEARCUTT_BOT_TOKEN, or the
 # workflow's GITHUB_TOKEN, as update-locks.yml describes. Other repositories
@@ -160,16 +162,17 @@ jobs:
             echo "image=$(jq -r '.image // empty' "$result")" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Repeat the rebase from its signed record
+      - name: Repeat the rebase from its signed record, and attest a match
         if: steps.rebase.outputs.image != ''
         env:
           APP: ${{ matrix.app }}
+          IMAGE: ${{ steps.rebase.outputs.image }}
         run: |
           dir=$(dirname "$APP")
           while [ ! -f "$dir/factory.org.yaml" ] && [ "$dir" != . ] && [ "$dir" != / ]; do dir=$(dirname "$dir"); done
           org=()
           if [ -f "$dir/factory.org.yaml" ]; then org=(--org "$dir/factory.org.yaml"); fi
-          clearcutt-factory verify --image "${{ steps.rebase.outputs.image }}" "${org[@]}"
+          clearcutt-factory verify --image "$IMAGE" --attest "${org[@]}"
 
       - name: Pin the lock to the same base
         env:

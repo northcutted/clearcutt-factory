@@ -15,6 +15,17 @@ only the repository's contents and pull requests. The App wins over
 `CLEARCUTT_BOT_TOKEN`, which still works, and either over `GITHUB_TOKEN`.
 `docs/adopting.md` shows how to create the App.
 
+**Reproductions are attested
+([#16](https://github.com/northcutted/clearcutt-factory/issues/16)).**
+`verify --image --attest` signs a `…/reproduction/v1` attestation onto an
+image that reproduced: how (`recipe-rebuild` or `rebase-repeat`), the digest
+it gave, the recipe or rebase record it started from (by statement digest),
+the factory and BuildKit versions, the run and machine, and when.
+`images.yml`'s second-runner rebuild and `fleet.yml`'s repeat of each rebase
+attest their matches, so verifiers can show that an image was reproduced
+without rebuilding it. The reproduce job now asks for `packages: write` and
+`id-token: write`, which callers of `images.yml` already grant.
+
 **Secrets reach the reusable workflows from other organizations.**
 `secrets: inherit` passes secrets only to workflows in the caller's own
 organization or enterprise, so the workflow `init` wrote never handed

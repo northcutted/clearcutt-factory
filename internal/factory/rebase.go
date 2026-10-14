@@ -504,24 +504,25 @@ func (p *rebasePlan) build() (*registry.Artifact, map[string]*rebase.Rebased, er
 }
 
 // verifyRebase repeats a recorded rebase and compares the digest.
-func verifyRebase(ctx context.Context, opts Options, rec *attest.Rebase, expected string) error {
+// verifyRebase repeats a recorded rebase and returns the digest it gives,
+// which must be expected.
+func verifyRebase(ctx context.Context, opts Options, rec *attest.Rebase, expected string) (string, error) {
 	if rec.Result.Digest != expected {
-		return fmt.Errorf("rebase record was made for %s, not %s", rec.Result.Digest, expected)
+		return "", fmt.Errorf("rebase record was made for %s, not %s", rec.Result.Digest, expected)
 	}
 	plan, err := planRebase(ctx, rebaseInputs{image: rec.Image, fromPlatforms: rec.From, onto: rec.Onto.Ref, ontoName: rec.Onto.Name})
 	if err != nil {
-		return err
+		return "", err
 	}
 	opts.printf("repeating the rebase of %s onto %s", rec.Image, rec.Onto.Ref)
 	art, _, err := plan.build()
 	if err != nil {
-		return err
+		return "", err
 	}
 	if art.Digest != expected {
-		return fmt.Errorf("NOT reproducible: expected %s, the rebase gives %s", expected, art.Digest)
+		return "", fmt.Errorf("NOT reproducible: expected %s, the rebase gives %s", expected, art.Digest)
 	}
-	opts.printf("reproducible: rebase gives %s again", art.Digest)
-	return nil
+	return art.Digest, nil
 }
 
 func digestOf(ref string) string {

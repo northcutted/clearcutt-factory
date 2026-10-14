@@ -286,9 +286,9 @@ The intended split, and the automation that keeps it current:
 * **Base patches reach apps without app teams** ([`fleet.yml`](.github/workflows/fleet.yml)).
   Daily and after each push to `main` publishes, `clearcutt-factory rebase -f <app> --push
   --update-lock` for each app: rebase if safe, smoke-test, scan, push, sign,
-  repeat from the signed record, then a pull request pinning the app's lock
-  to the same base. An app that can't be rebased gets the same pull request
-  (merging rebuilds it) and a failed job.
+  repeat from the signed record (and attest the match), then a pull request
+  pinning the app's lock to the same base. An app that can't be rebased gets
+  the same pull request (merging rebuilds it) and a failed job.
 * **CVE response** is the same path on demand: fix the run image (re-lock,
   merge), and the fleet job moves every app onto it in minutes.
 * **Toolchain and stack changes** rebuild rather than rebase (the app's own
@@ -362,17 +362,61 @@ it names the first differing layer and the files that differ.
 | SBOM (CycloneDX) | each platform image | syft scan merged with components declared by the lock (purls, hashes, download URLs, verification method) |
 | Vulnerabilities (`cosign …/vuln/v1`) | each platform image | grype results with VEX applied |
 | Rebase record (`…/rebase/v1`) | index of a rebased image (instead of a recipe) | the image that was rebased, each platform's old base, the new base; enough to repeat the rebase |
+| Reproduction (`…/reproduction/v1`) | index, once reproduced (`verify --image --attest`) | how (`recipe-rebuild` or `rebase-repeat`), the digest it gave, the recipe or rebase record it started from, factory and BuildKit versions, the run and machine, when |
 | SLSA provenance | index | from the CI platform (see [`images.yml`](.github/workflows/images.yml)) |
 
 Unsigned copies of all of these are written to `out/<name>/attestations/`, and
 `out/<name>/result.json` summarizes the build for CI.
+
+**Reproductions.** `clearcutt-factory verify --image IMAGE --attest` rebuilds
+the image from its signed recipe without cache (or repeats its signed rebase
+record) and, when the digest matches, signs a statement saying so onto the
+image with the org's `signing` settings, as builds sign their recipes. The
+reusable workflows do it on a second runner after each publish (`images.yml`)
+and after each rebase (`fleet.yml`), so a verifier can see that an image was
+reproduced, how, where, and when, without rebuilding it. The predicate
+(`https://github.com/northcutted/clearcutt-factory/reproduction/v1`):
+
+```json
+{
+  "method": "recipe-rebuild",
+  "image": "ghcr.io/acme/platform-tools@sha256:4f…",
+  "digest": "sha256:4f…",
+  "from": {
+    "predicateType": "https://github.com/northcutted/clearcutt-factory/recipe/v1",
+    "digest": {"sha256": "9a…"}
+  },
+  "factory": {"version": "v0.2.0"},
+  "buildkit": "moby/buildkit:v0.33.1@sha256:…",
+  "builder": {
+    "id": "https://github.com/acme/platform/actions/runs/123/attempts/1",
+    "workflow": "acme/platform/.github/workflows/clearcutt-factory.yml@refs/heads/main",
+    "job": "reproduce",
+    "runner": "github-hosted",
+    "os": "linux",
+    "arch": "amd64"
+  },
+  "reproducedAt": "2026-10-13T06:41:09Z"
+}
+```
+
+`digest` is what the reproduction gave, always the subject's digest (only
+matches are attested). `from` names the recipe or rebase record by the
+sha256 of its in-toto statement (the signed DSSE payload). A verifier should
+check that the attestation is signed by a signer it trusts for the image,
+that `digest` is the subject's, and that `from` is a recipe or rebase record
+on the same image that it verified too. `builder` comes from the
+environment of the job that reproduced it, and the certificate binds the
+attestation to that run's workflow and repository; it shows the image
+rebuilt on a fresh machine, not who else could rebuild it. For that,
+rebuild it yourself with `verify --image`.
 
 ## CI
 
 [`.github/workflows/images.yml`](.github/workflows/images.yml) is a complete
 pipeline. On pull requests it builds, scans, and gates. On `main` it also pushes,
 signs keylessly, adds SLSA provenance, and then rebuilds on a second runner from
-the signed recipe alone. `clearcutt-factory` emits `image`, `repository`, and `digest` to
+the signed recipe alone and attests the match. `clearcutt-factory` emits `image`, `repository`, and `digest` to
 `$GITHUB_OUTPUT`. [`update-locks.yml`](.github/workflows/update-locks.yml)
 and [`fleet.yml`](.github/workflows/fleet.yml) keep the fleet current (see
 [Running a fleet](#running-a-fleet)). Other CI systems call the same commands;

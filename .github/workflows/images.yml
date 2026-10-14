@@ -2,7 +2,8 @@
 # and gate; other events also push, sign keylessly (this workflow's OIDC
 # identity), attach SBOM / vulnerability / recipe attestations, add SLSA
 # provenance, and rebuild each newly published image on a second runner from
-# its signed recipe alone. Unchanged images aren't republished.
+# its signed recipe alone, attesting the match. Unchanged images aren't
+# republished.
 #
 # Other repositories call it (see docs/adopting.md):
 #
@@ -178,7 +179,9 @@ jobs:
 
   # A second, independent machine rebuilds each newly published image from its
   # signed recipe alone: also when another manifest failed to build (that
-  # build's failure still fails the run).
+  # build's failure still fails the run). When the digest matches, it signs
+  # a reproduction attestation (…/reproduction/v1) onto the image, so
+  # verifiers can see it was independently reproduced, where, and when.
   reproduce:
     needs: [manifests, build]
     if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.manifests.result == 'success' && needs.manifests.outputs.manifests != '[]' }}
@@ -189,7 +192,8 @@ jobs:
         manifest: ${{ fromJSON(needs.manifests.outputs.manifests) }}
     permissions:
       contents: read
-      packages: read # private packages
+      packages: write # read private packages; attach the reproduction attestation
+      id-token: write # sign it keylessly
     defaults:
       run:
         shell: bash
@@ -225,7 +229,7 @@ jobs:
         with:
           name: ${{ steps.slug.outputs.slug }}
           path: build-result
-      - name: Rebuild from the recipe attestation and compare digests
+      - name: Rebuild from the recipe attestation, compare digests, and attest a match
         env:
           MANIFEST: ${{ matrix.manifest }}
         run: |
@@ -239,4 +243,4 @@ jobs:
           while [ ! -f "$dir/factory.org.yaml" ] && [ "$dir" != . ] && [ "$dir" != / ]; do dir=$(dirname "$dir"); done
           org=()
           if [ -f "$dir/factory.org.yaml" ]; then org=(--org "$dir/factory.org.yaml"); fi
-          clearcutt-factory verify --image "$(jq -r .image "$result")" "${org[@]}"
+          clearcutt-factory verify --image "$(jq -r .image "$result")" --attest "${org[@]}"

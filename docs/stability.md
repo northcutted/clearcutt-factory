@@ -21,7 +21,7 @@ never to `main`.
 | Manifest, stack, and org profile formats (`factory.clearcutt.dev/v1alpha1`) | Fields may change in a minor release. A breaking change gets a new `apiVersion` and changelog notes on moving to it. |
 | Lockfile format | Same, and `clearcutt-factory lock` rewrites old locks it can still read. A change that alters how images are built makes locks stale, so `lock` runs once more. |
 | Generated Containerfiles | May change between minor releases. A changed Containerfile builds a different digest from the same lock, so after upgrading, re-render (`render`) and let CI publish once. |
-| Attestation predicates (`…/recipe/v1`, `…/rebase/v1`) | Versioned by URI. `verify --image` keeps accepting old versions. |
+| Attestation predicates (`…/recipe/v1`, `…/rebase/v1`, `…/reproduction/v1`) | Versioned by URI. `verify --image` keeps accepting old versions. |
 | CLI commands and flags | Removals and renames are announced a minor release ahead where possible. |
 | Reusable workflow inputs | Same as the CLI. |
 

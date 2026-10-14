@@ -1,7 +1,9 @@
 package attest
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -58,9 +60,15 @@ func TestRecipeFromEnvelopes(t *testing.T) {
 		return string(e)
 	}
 	out := env(other) + "\nnot json\n" + env(st) + "\n"
-	raw, err := predicateFromEnvelopes([]byte(out), RecipePredicateType)
+	raw, ev, err := predicateFromEnvelopes([]byte(out), RecipePredicateType)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The statement is named by the digest of the signed payload.
+	payload, _ := json.Marshal(st)
+	sum := sha256.Sum256(payload)
+	if ev.PredicateType != RecipePredicateType || ev.Digest["sha256"] != hex.EncodeToString(sum[:]) {
+		t.Errorf("evidence %+v", ev)
 	}
 	var r Recipe
 	if err := json.Unmarshal(raw, &r); err != nil {

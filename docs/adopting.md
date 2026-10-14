@@ -82,7 +82,8 @@ Push, then in the repository (or organization) settings:
 
 On `main`, each changed image is pushed, signed keylessly, attested (SBOM,
 vulnerabilities, recipe, SLSA provenance), and rebuilt on a second runner from
-its signed recipe. Unchanged images aren't republished.
+its signed recipe, which attests the match (a reproduction attestation).
+Unchanged images aren't republished.
 
 ### A GitHub App for the automation
 

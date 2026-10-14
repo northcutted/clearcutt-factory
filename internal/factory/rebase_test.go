@@ -4,6 +4,9 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log"
@@ -11,6 +14,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -191,9 +196,12 @@ func TestRebaseCommand(t *testing.T) {
 	if err := json.Unmarshal(b, &rec); err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyRebase(ctx, opts, &rec, res.Digest); err != nil {
-		t.Fatal(err)
+	if got, err := verifyRebase(ctx, opts, &rec, res.Digest); err != nil || got != res.Digest {
+		t.Fatalf("repeating the rebase gave %s, %v", got, err)
 	}
+
+	// verify --attest repeats it from the signed record and attests that.
+	t.Run("attest", func(t *testing.T) { testAttestReproduction(t, dir, res.Image) })
 
 	// Rebasing the rebased image again is a no-op: it names the new base.
 	out.Reset()
@@ -436,5 +444,94 @@ func TestRegistryStack(t *testing.T) {
 	}
 	if m, _, err = load(ctx, opts, true); err != nil || m.StackFrom.Digest == pinned || m.Stack.BuildRef != "golang:2" {
 		t.Errorf("fresh load: %v, %+v", err, m.StackFrom)
+	}
+}
+
+// testAttestReproduction runs verify --image --attest on a rebased image
+// with a stand-in cosign that serves the image's rebase record and records
+// what it is asked to attest.
+func testAttestReproduction(t *testing.T, dir, image string) {
+	ctx := context.Background()
+	statement, err := os.ReadFile(filepath.Join(dir, "out", "hello-rebase", "attestations", "rebase.intoto.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, work := t.TempDir(), t.TempDir()
+	envelope, _ := json.Marshal(map[string]string{"payloadType": "application/vnd.in-toto+json", "payload": base64.StdEncoding.EncodeToString(statement)})
+	if err := os.WriteFile(filepath.Join(work, "envelope.json"), envelope, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cosign := `#!/bin/sh
+case "$1" in
+verify-attestation)
+  case "$*" in
+  *` + attest.RebasePredicateType + `*) cat "$WORK/envelope.json"; echo ;;
+  *) echo "no matching attestations" >&2; exit 1 ;;
+  esac ;;
+attest)
+  printf '%s\n' "$@" > "$WORK/args"
+  while [ $# -gt 0 ]; do [ "$1" = --predicate ] && cp "$2" "$WORK/predicate.json"; shift; done ;;
+*) exit 1 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "cosign"), []byte(cosign), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("WORK", work)
+	for k, v := range map[string]string{
+		"GITHUB_ACTIONS": "true", "GITHUB_SERVER_URL": "https://github.com", "GITHUB_REPOSITORY": "acme/checkout",
+		"GITHUB_RUN_ID": "42", "GITHUB_RUN_ATTEMPT": "2", "GITHUB_JOB": "reproduce", "RUNNER_ENVIRONMENT": "github-hosted",
+		"GITHUB_WORKFLOW_REF": "acme/checkout/.github/workflows/clearcutt-factory.yml@refs/heads/main",
+	} {
+		t.Setenv(k, v)
+	}
+	org := filepath.Join(work, "factory.org.yaml")
+	if err := os.WriteFile(org, []byte("apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nsigning:\n  mode: keyless\n  verify: {certificateIdentity: https://example.test/wf, certificateOIDCIssuer: https://issuer.example.test}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	opts := Options{OrgPath: org, Version: "v9.9.9", Stdout: &out, Stderr: io.Discard}
+	digest := digestOf(image)
+	if err := Verify(ctx, opts, VerifyOptions{Image: image, OutDir: filepath.Join(work, "out"), Attest: true}); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	// clearcutt-verify reads the result from the last line.
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if last := lines[len(lines)-1]; last != "reproducible: rebase gives "+digest+" again" {
+		t.Errorf("last line %q", last)
+	}
+
+	args, _ := os.ReadFile(filepath.Join(work, "args"))
+	if want := "attest\n--type\n" + attest.ReproductionPredicateType + "\n--predicate\n"; !strings.HasPrefix(string(args), want) || !strings.Contains(string(args), "\n"+image+"\n--yes\n") {
+		t.Errorf("cosign attest arguments:\n%s", args)
+	}
+	var r attest.Reproduction
+	b, _ := os.ReadFile(filepath.Join(work, "predicate.json"))
+	if err := json.Unmarshal(b, &r); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(statement)
+	want := attest.Reproduction{
+		Method: MethodRebaseRepeat, Image: image, Digest: digest,
+		From:    attest.Evidence{PredicateType: attest.RebasePredicateType, Digest: map[string]string{"sha256": hex.EncodeToString(sum[:])}},
+		Factory: attest.FactoryInfo{Version: "v9.9.9"},
+		Builder: attest.Builder{
+			ID: "https://github.com/acme/checkout/actions/runs/42/attempts/2", Job: "reproduce", Runner: "github-hosted",
+			Workflow: "acme/checkout/.github/workflows/clearcutt-factory.yml@refs/heads/main", OS: runtime.GOOS, Arch: runtime.GOARCH,
+		},
+		ReproducedAt: r.ReproducedAt,
+	}
+	if !reflect.DeepEqual(r, want) {
+		t.Errorf("reproduction\n got %+v\nwant %+v", r, want)
+	}
+	if _, err := time.Parse(time.RFC3339, r.ReproducedAt); err != nil {
+		t.Errorf("reproducedAt %q: %v", r.ReproducedAt, err)
+	}
+
+	// Rebuilding from source attests nothing: the attestation is about the
+	// signed recipe or record.
+	if err := Verify(ctx, opts, VerifyOptions{Image: image, FromSource: true, Attest: true}); err == nil || !strings.Contains(err.Error(), "--attest needs --image without -f") {
+		t.Errorf("verify -f --attest: %v", err)
 	}
 }
