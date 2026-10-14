@@ -43,6 +43,9 @@ type RebaseOptions struct {
 	NoScan bool
 	NoSign bool
 	NoTest bool
+	// ForceTags moves the tags to a result published before even when they
+	// hold a newer image (a deliberate rollback).
+	ForceTags bool
 	// UpdateLock (manifest mode) then pins the app's lock to the base the
 	// image is on, so the next build from source doesn't move it back. If
 	// the rebase is refused, the lock still moves: building is the fix.
@@ -269,7 +272,7 @@ func rebaseImage(ctx context.Context, opts Options, org *manifest.Org, ro Rebase
 	}
 
 	if ro.Push {
-		if result.Image, result.Published, result.Signed, err = publish(ctx, opts, org, art, plan.repo, tags, attest.RebasePredicateType, recordPath, outputs, ro.NoSign); err != nil {
+		if result.Image, result.Published, result.Signed, err = publish(ctx, opts, org, art, plan.repo, tags, attest.RebasePredicateType, recordPath, outputs, ro.NoSign, ro.ForceTags); err != nil {
 			return "", err
 		}
 		if err := githubOutput(result); err != nil {

@@ -304,6 +304,17 @@ fine-grained token with contents and pull-requests write) for CI to run on
 them. Deploy by digest and let GitOps follow the tags; keep old run images
 (a rebase needs the old base's manifest) and old app digests (rollback).
 
+**Tags only move forward.** Until an app's pin pull request merges, a build
+from unchanged source uses the old lock and reproduces the image the fleet
+rebased. Publishing an image the registry already has moves its tags to it,
+except a tag that holds a newer image: this image rebased onto a newer build
+of its base (its own layers on another base, while its base's tag has moved
+on), or an image created later (built from a newer lock: a build's created
+time is its lock's `SOURCE_DATE_EPOCH`). That tag stays, with a warning.
+`--force-tags` (on `build` and `rebase`) moves it anyway, for a deliberate
+rollback. A build from changed source is a new image and is tagged as usual,
+so merge pin pull requests promptly.
+
 ## The org profile
 
 Everything that differs between organizations lives in `factory.org.yaml`,

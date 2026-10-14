@@ -32,6 +32,9 @@ type BuildOptions struct {
 	NoSign  bool
 	NoCache bool
 	NoTest  bool
+	// ForceTags moves the tags to an image published before even when they
+	// hold a newer one (a deliberate rollback).
+	ForceTags bool
 }
 
 // Result is written to <out>/<name>/result.json for CI to consume.
@@ -177,7 +180,7 @@ func Build(ctx context.Context, opts Options, bo BuildOptions) error {
 	}
 
 	if bo.Push {
-		if result.Image, result.Published, result.Signed, err = publish(ctx, opts, org, art, repo, m.Metadata.Tags, attest.RecipePredicateType, recipePath, outputs, bo.NoSign); err != nil {
+		if result.Image, result.Published, result.Signed, err = publish(ctx, opts, org, art, repo, m.Metadata.Tags, attest.RecipePredicateType, recipePath, outputs, bo.NoSign, bo.ForceTags); err != nil {
 			return err
 		}
 		if err := githubOutput(result); err != nil {
@@ -306,8 +309,9 @@ func buildRecipe(opts Options, m *manifest.Manifest, l *lock.Lock, out *render.O
 // publish pushes the artifact, signs it, and attaches its attestations.
 // When the registry already has this digest with its index attestation (an
 // unchanged rebuild), it only moves the tags, so republishing doesn't pile
-// up signatures and attestations on the same image.
-func publish(ctx context.Context, opts Options, org *manifest.Org, art *registry.Artifact, repo string, tags []string, predicateType, predicatePath string, outputs []platformOutputs, noSign bool) (ref string, published, signed bool, err error) {
+// up signatures and attestations on the same image. Tags holding a newer
+// image stay where they are unless forceTags is set (see moveTags).
+func publish(ctx context.Context, opts Options, org *manifest.Org, art *registry.Artifact, repo string, tags []string, predicateType, predicatePath string, outputs []platformOutputs, noSign, forceTags bool) (ref string, published, signed bool, err error) {
 	ref = repo + "@" + art.Digest
 	sign := org.Signing.Mode != "none" && !noSign
 	exists, err := registry.Exists(ctx, ref)
@@ -315,10 +319,15 @@ func publish(ctx context.Context, opts Options, org *manifest.Org, art *registry
 		return "", false, false, err
 	}
 	if exists && (!sign || attested(ctx, org, ref, predicateType, art.Source())) {
-		if err := registry.Tag(ctx, ref, tags); err != nil {
+		moved, err := moveTags(ctx, opts, art, repo, tags, forceTags)
+		if err != nil {
 			return "", false, false, err
 		}
-		opts.printf("%s is already published; moved its tags (%s)", ref, strings.Join(tags, ", "))
+		if len(moved) > 0 {
+			opts.printf("%s is already published; moved its tags (%s)", ref, strings.Join(moved, ", "))
+		} else {
+			opts.printf("%s is already published", ref)
+		}
 		return ref, false, sign, nil
 	}
 	if _, err := registry.Push(ctx, art, repo, tags); err != nil {
