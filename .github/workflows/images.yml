@@ -10,10 +10,11 @@
 #     images:
 #       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.1.1
 #       permissions: {contents: read, packages: write, id-token: write, attestations: write}
-#       secrets: inherit
 #
-# Secrets (optional, with secrets: inherit): REGISTRY_USERNAME and
-# REGISTRY_PASSWORD for a registry other than ghcr.io.
+# Secrets (optional): REGISTRY_USERNAME and REGISTRY_PASSWORD for a registry
+# other than ghcr.io. Pass them by name (secrets: {REGISTRY_USERNAME: …});
+# secrets: inherit reaches only workflows in the caller's organization or
+# enterprise.
 name: images
 on:
   push:
@@ -38,6 +39,13 @@ on:
         description: clearcutt-factory release to use
         type: string
         default: v0.1.1
+    secrets:
+      REGISTRY_USERNAME:
+        description: Registry user, for a registry other than ghcr.io
+        required: false
+      REGISTRY_PASSWORD:
+        description: Registry password or token, for a registry other than ghcr.io
+        required: false
 permissions:
   contents: read
 # One run at a time per ref (and manifests), so two pushes can't race on the

@@ -301,10 +301,13 @@ The intended split, and the automation that keeps it current:
 Pull requests opened with the default `GITHUB_TOKEN` are
 `github-actions[bot]`'s, and GitHub holds the CI runs they trigger until a
 maintainer approves them on the pull request (the runs show as
-`action_required`), so nothing gates the change on its own. Set a
-`CLEARCUTT_BOT_TOKEN` secret (a GitHub App token, or a fine-grained token with
-contents and pull-requests write): the jobs then open pull requests as that
-identity, and CI starts on them by itself.
+`action_required`), so nothing gates the change on its own. Give the jobs an
+identity of their own and CI starts by itself: a **GitHub App**
+(a `CLEARCUTT_APP_ID` variable and a `CLEARCUTT_APP_PRIVATE_KEY` secret), from
+which each job mints a token that expires within the hour and reaches only
+its repository's contents and pull requests; or a `CLEARCUTT_BOT_TOKEN` secret
+(a fine-grained token with contents and pull-requests write). The App wins
+when both are set ([adopting](docs/adopting.md#a-github-app-for-the-automation)).
 
 Deploy by digest and let GitOps follow the tags; keep old run images (a
 rebase needs the old base's manifest) and old app digests (rollback).

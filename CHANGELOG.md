@@ -5,6 +5,24 @@ what may change between releases.
 
 ## Unreleased
 
+**A GitHub App can open the bot's pull requests
+([#17](https://github.com/northcutted/clearcutt-factory/issues/17)).**
+`update-locks.yml` and `fleet.yml` take a GitHub App (its Client ID or App ID
+in the `app-id` input or a `CLEARCUTT_APP_ID` variable, and its key in a
+`CLEARCUTT_APP_PRIVATE_KEY` secret) and mint a token in each job with
+`actions/create-github-app-token`: it expires within the hour and reaches
+only the repository's contents and pull requests. The App wins over
+`CLEARCUTT_BOT_TOKEN`, which still works, and either over `GITHUB_TOKEN`.
+`docs/adopting.md` shows how to create the App.
+
+**Secrets reach the reusable workflows from other organizations.**
+`secrets: inherit` passes secrets only to workflows in the caller's own
+organization or enterprise, so the workflow `init` wrote never handed
+`CLEARCUTT_BOT_TOKEN` or the registry credentials to ClearCutt Factory's
+workflows. The reusable workflows now declare their optional secrets, and
+`init` passes them by name. Existing workflows: replace `secrets: inherit`
+with the names, as `docs/adopting.md` shows.
+
 **SLSA provenance for every published image.** `images.yml` skipped
 provenance on this repository's own push builds (its `provenance` input is
 empty outside `workflow_call`, and the condition read empty as false). It now

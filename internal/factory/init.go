@@ -85,10 +85,13 @@ func Init(ctx context.Context, opts Options, io InitOptions) error {
 Next:
   clearcutt-factory lock  -f images/example/image.yaml   # pin every input
   clearcutt-factory build -f images/example/image.yaml   # build, test, scan locally
-  Commit and push. On GitHub: Settings → Actions → General → allow GitHub
-  Actions to create pull requests, and add a CLEARCUTT_BOT_TOKEN secret (a
-  GitHub App or fine-grained token with contents and pull-requests write) so
-  CI runs on the pull requests the weekly and daily jobs open.`)
+  Commit and push. On GitHub, so that CI runs on the pull requests the weekly
+  and daily jobs open: install a GitHub App with contents and pull-requests
+  write, and set a CLEARCUTT_APP_ID variable (its Client ID) and a
+  CLEARCUTT_APP_PRIVATE_KEY secret; or add a CLEARCUTT_BOT_TOKEN secret (a
+  fine-grained token with the same permissions). Without either, allow GitHub
+  Actions to create pull requests (Settings → Actions → General) and approve
+  their CI runs by hand. See docs/adopting.md.`)
 	return nil
 }
 
@@ -182,6 +185,13 @@ spec:
 
 const workflowTemplate = `# Builds, publishes, and maintains this repository's images and apps with
 # ClearCutt Factory: https://github.com/northcutted/clearcutt-factory
+#
+# CI starts on the pull requests the weekly and daily jobs open only when they
+# come from a GitHub App (a CLEARCUTT_APP_ID variable holding its Client ID,
+# and a CLEARCUTT_APP_PRIVATE_KEY secret) or a CLEARCUTT_BOT_TOKEN secret:
+# https://github.com/northcutted/clearcutt-factory/blob/{{ref}}/docs/adopting.md#a-github-app-for-the-automation
+# Secrets are passed by name because secrets: inherit reaches only workflows
+# in this repository's own organization or enterprise.
 name: clearcutt-factory
 on:
   push:
@@ -198,18 +208,26 @@ jobs:
     if: github.event_name != 'schedule'
     uses: northcutted/clearcutt-factory/.github/workflows/images.yml@{{ref}}
     permissions: {contents: read, packages: write, id-token: write, attestations: write}
-    secrets: inherit
+    secrets:
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }} # only for a registry other than ghcr.io
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
 
   update-locks:
     if: github.event.schedule == '23 6 * * 1' || github.event_name == 'workflow_dispatch'
     uses: northcutted/clearcutt-factory/.github/workflows/update-locks.yml@{{ref}}
     permissions: {contents: write, pull-requests: write}
-    secrets: inherit
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
 
   fleet:
     needs: images
     if: always() && (github.event.schedule == '41 5 * * *' || (github.event_name == 'push' && needs.images.result == 'success'))
     uses: northcutted/clearcutt-factory/.github/workflows/fleet.yml@{{ref}}
     permissions: {contents: write, pull-requests: write, packages: write, id-token: write}
-    secrets: inherit
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
 `
