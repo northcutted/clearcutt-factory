@@ -12,6 +12,16 @@ attests any published digest that lacks provenance, so an image pushed without
 it (the step failed, or was skipped) gets it on the next run, and unchanged
 images that have it get no new attestation.
 
+**A refused rebase moves the build image too
+([#29](https://github.com/northcutted/clearcutt-factory/issues/29)).** When
+`rebase -f app.yaml --update-lock` was refused, it moved only the run image's
+pin, so the rebuild meant to replace the app ran in the old build image and
+could link libraries the new run image no longer has (`libxml2.so.2` after
+the run image moved to `libxml2.so.16`, say). The lock now also moves to the
+stack's newest build image, and a registry stack to its newest version; the
+builder pins stay. After a successful rebase the build image stays pinned,
+as before: the app's layer was built with it.
+
 ## v0.1.1
 
 **Signatures from the reusable workflows verify in other repositories

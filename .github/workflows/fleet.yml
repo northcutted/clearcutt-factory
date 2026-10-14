@@ -5,7 +5,8 @@
 # gated, pushed, signed, and checked by repeating the rebase from its signed
 # record. A pull request then pins the app's lock to the same base, so the
 # next build from source doesn't move it back. An app that can't be rebased
-# gets the same pull request (building it is the fix) and its job fails.
+# gets a pull request that also moves its stack's build image (building it
+# is the fix) and its job fails.
 #
 # See update-locks.yml about CLEARCUTT_BOT_TOKEN. Other repositories call it
 # from their own schedule (see docs/adopting.md):
@@ -135,7 +136,7 @@ jobs:
           dir=$(dirname "$APP")
           name=$(echo "$dir" | tr '/' '-')
           if [ "$FAILED" = true ]; then
-            intro="The published image could not be rebased. This moves the lock to the newest run image, so merging rebuilds the app on it from source."
+            intro="The published image could not be rebased. This moves the lock to the newest run image and the stack's newest build image, so merging rebuilds the app from source with the toolchain made for that run image."
           else
             intro="The published image is on the newest run image. This pins the lock to the same base, so the next build from source doesn't move it back."
           fi
