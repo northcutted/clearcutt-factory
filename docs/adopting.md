@@ -11,7 +11,7 @@ Download a release binary for Linux or macOS from
 check its signature, made by the release workflow at that tag:
 
 ```sh
-v=v0.1.0 asset=clearcutt-factory-darwin-arm64
+v=v0.1.1 asset=clearcutt-factory-darwin-arm64
 curl -fsSLO https://github.com/northcutted/clearcutt-factory/releases/download/$v/$asset
 curl -fsSLO https://github.com/northcutted/clearcutt-factory/releases/download/$v/$asset.sigstore.json
 cosign verify-blob --bundle $asset.sigstore.json \
@@ -20,7 +20,7 @@ cosign verify-blob --bundle $asset.sigstore.json \
 install -m 0755 $asset /usr/local/bin/clearcutt-factory
 ```
 
-Or build it: `go install github.com/northcutted/clearcutt-factory/cmd/clearcutt-factory@v0.1.0`.
+Or build it: `go install github.com/northcutted/clearcutt-factory/cmd/clearcutt-factory@v0.1.1`.
 
 Building needs Docker or Podman (BuildKit runs in a container). Scanning and
 signing need `syft`, `grype`, and `cosign` on `PATH`.
@@ -37,7 +37,7 @@ It writes three files and keeps any that exist (`--force` overwrites):
 
 | File | What it is |
 |---|---|
-| `factory.org.yaml` | Your registry (default `ghcr.io/<owner>`), signer identity (this repository's workflows, keyless), vulnerability gate, and policy |
+| `factory.org.yaml` | Your registry (default `ghcr.io/<owner>`), signer identity (keyless: ClearCutt Factory's reusable workflows, bound to runs in this repository; see [Who signs](#who-signs-and-binding-signatures-to-your-repository)), vulnerability gate, and policy |
 | `images/example/image.yaml` | An example image to replace |
 | `.github/workflows/clearcutt-factory.yml` | Calls the reusable workflows: build, test, and scan on pull requests; publish on `main`; weekly lock updates; daily app rebases |
 
@@ -65,9 +65,10 @@ Push, then in the repository settings:
 1. **Actions → General → Workflow permissions:** allow GitHub Actions to
    create and approve pull requests (the weekly and daily jobs open them).
 2. **Secrets → `CLEARCUTT_BOT_TOKEN`:** a GitHub App token, or a fine-grained
-   token with contents and pull-requests write. Pull requests opened with the
-   default `GITHUB_TOKEN` don't start workflows, so without it CI won't run on
-   the bot's pull requests. (Closing and reopening one as yourself starts it.)
+   token with contents and pull-requests write. Without it the jobs open pull
+   requests as `github-actions[bot]`, and GitHub holds the CI runs those
+   trigger until a maintainer approves them on each pull request (the runs
+   show as `action_required`). With it, CI starts on them by itself.
 3. For a registry other than `ghcr.io`: set the reusable workflows' `registry`
    input and add `REGISTRY_USERNAME` and `REGISTRY_PASSWORD` secrets.
 

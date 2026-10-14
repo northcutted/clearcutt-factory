@@ -40,6 +40,14 @@ on:
         default: v0.1.1
 permissions:
   contents: read
+# One run at a time per ref (and manifests), so two pushes can't race on the
+# tags. Publishing runs wait rather than cancel; a newer one replaces any run
+# still waiting, which is fine because each run builds every manifest at its
+# own commit. A pull request's newer run cancels the older one. The prefix
+# keeps the group apart from a caller's own.
+concurrency:
+  group: clearcutt-factory-images-${{ github.ref }}-${{ inputs.manifests }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   # Callers use a release; this repository's own events build from source.
   FACTORY_VERSION: ${{ inputs.factory-version || 'source' }}
@@ -116,6 +124,13 @@ jobs:
       # off). Unchanged images that have it get no new attestation.
       # format() because inputs is empty outside workflow_call, and null
       # compares equal to false.
+      #
+      # The attestation is signed by this workflow, which in a calling
+      # repository is the called workflow, not the caller's own: gh accepts
+      # that only with --signer-workflow, and --repo still requires the run to
+      # be in the repository being built. Any ref of the workflow counts;
+      # requiring the one in use would attest every unchanged image again
+      # after each upgrade.
       - name: Check for SLSA build provenance
         id: provenance
         if: env.PUSH == 'true' && steps.build.outputs.digest != '' && format('{0}', inputs.provenance) != 'false'
@@ -123,8 +138,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PUBLISHED: ${{ steps.build.outputs.published }}
           REF: ${{ steps.build.outputs.repository }}@${{ steps.build.outputs.digest }}
+          SIGNER: northcutted/clearcutt-factory/.github/workflows/images.yml
         run: |
-          if [ "$PUBLISHED" = true ] || ! gh attestation verify "oci://$REF" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          if [ "$PUBLISHED" = true ] || ! gh attestation verify "oci://$REF" --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER" >/dev/null 2>&1; then
             echo "needed=true" >> "$GITHUB_OUTPUT"
           else
             echo "$REF already has SLSA build provenance"
@@ -153,10 +169,11 @@ jobs:
           if-no-files-found: ignore
 
   # A second, independent machine rebuilds each newly published image from its
-  # signed recipe alone.
+  # signed recipe alone: also when another manifest failed to build (that
+  # build's failure still fails the run).
   reproduce:
     needs: [manifests, build]
-    if: github.event_name != 'pull_request' && needs.manifests.outputs.manifests != '[]'
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.manifests.result == 'success' && needs.manifests.outputs.manifests != '[]' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
