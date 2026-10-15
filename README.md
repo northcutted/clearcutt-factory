@@ -200,7 +200,7 @@ metadata: {name: hello-app}
 spec:
   stack: ../stacks/go.yaml
   source: .                 # default: the manifest's directory
-  exclude: [docs/]          # .gitignore-style; .git and /out are always left out
+  exclude: [docs/]          # .gitignore-style; .git, /out, and factory's own files are always left out
   buildEnv: {MAIN: ./cmd/server}
   env: {PORT: "8080"}       # env, labels, user, workdir, entrypoint, cmd override the stack's
 ```
@@ -210,7 +210,12 @@ spec:
 lock pins the build and run images and records the stack's digest, so a stack
 change makes every app's lock stale. The generated `app.Containerfile` runs
 the steps in the pinned build image and copies only `/out` onto the pinned run
-image with `COPY --link`. The app's layer therefore never touches the run
+image with `COPY --link`. The steps run as root whatever user the build image
+names (so a build image that meets `policy.requireNonRoot` works): that stage
+never ships, and the app runs as the stack's or app's `user`. The source the
+steps see leaves out `.git`, `/out`, and factory's own files when they are in
+it (the app's lock and Containerfile, and the org profile), so a pull request
+that only pins a new base doesn't change it. The app's layer therefore never touches the run
 image's files, and the image records its base in the standard
 `org.opencontainers.image.base.name`/`.base.digest` annotations. Those two
 properties are what make it safe to rebase.

@@ -236,3 +236,99 @@ spec:
 		t.Errorf("rebased image is missing the new base's file or the app: %v", len(got))
 	}
 }
+
+// TestEndToEndAppNonRootBuild builds an app on a stack whose build image runs
+// as a non-root user, as policy.requireNonRoot requires of the images a
+// platform builds for its stacks. The steps create /out, write to the
+// source, and use a cache mount, and factory's own files (lock,
+// Containerfile, org profile) must not be in the source.
+func TestEndToEndAppNonRootBuild(t *testing.T) {
+	if os.Getenv("CLEARCUTT_FACTORY_E2E") == "" {
+		t.Skip("set CLEARCUTT_FACTORY_E2E=1 to run (needs network and docker or podman)")
+	}
+	home, _ := os.UserHomeDir()
+	base := filepath.Join(home, ".cache", "factory-e2e-test", "nonroot")
+	_ = os.RemoveAll(base)
+	t.Cleanup(func() {
+		if !t.Failed() {
+			_ = os.RemoveAll(base)
+		}
+	})
+	dir := filepath.Join(base, "src")
+	files := map[string]string{
+		// cgr.dev/chainguard/busybox runs as 65532.
+		"stacks/sh.yaml": `apiVersion: factory.clearcutt.dev/v1alpha1
+kind: Stack
+metadata: {name: sh}
+spec:
+  build: cgr.dev/chainguard/busybox:latest
+  run: cgr.dev/chainguard/busybox:latest
+  caches: [/var/cache/e2e]
+  steps:
+    - run: |
+        for f in app.lock.yaml app.Containerfile factory.org.yaml; do
+          if [ -e "$f" ]; then echo "factory's $f is in the source" >&2; exit 1; fi
+        done
+        echo hello > greeting
+        date > /var/cache/e2e/last
+    - run: |
+        cp greeting /out/
+        printf '#!/bin/sh\ncat /app/greeting\n' > /out/hello
+        chmod 755 /out/hello
+  user: "65532"
+  entrypoint: ["/app/{{name}}"]
+`,
+		"hello/factory.org.yaml": "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nregistry: registry.example/e2e\nsigning: {mode: none}\npolicy: {requireNonRoot: true}\n",
+		"hello/app.yaml":         "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: App\nmetadata: {name: hello}\nspec:\n  stack: ../stacks/sh.yaml\n  platforms: [linux/" + runtime.GOARCH + "]\n  test: {command: [/app/hello]}\n",
+	}
+	for n, body := range files {
+		p := filepath.Join(dir, n)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opts := Options{ManifestPath: filepath.Join(dir, "hello", "app.yaml"), Version: "test", Stdout: io.Discard, Stderr: io.Discard}
+	if testing.Verbose() {
+		opts.Stdout, opts.Stderr = os.Stdout, os.Stderr
+	}
+	ctx := context.Background()
+	if err := Lock(ctx, opts, LockOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(base, "out")
+	if err := Build(ctx, opts, BuildOptions{OutDir: out, NoScan: true}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(out, "hello", "result.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res Result
+	if err := json.Unmarshal(b, &res); err != nil {
+		t.Fatal(err)
+	}
+	if !res.Tested {
+		t.Error("the smoke test did not run")
+	}
+	if err := Verify(ctx, opts, VerifyOptions{Digest: res.Digest, FromSource: true, OutDir: out}); err != nil {
+		t.Fatal(err)
+	}
+	built, err := registry.OpenLayout(res.Layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plats, err := built.Platforms()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cf, err := plats[0].Image.ConfigFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cf.Config.User != "65532" {
+		t.Errorf("the app runs as %q, want the stack's user 65532", cf.Config.User)
+	}
+}
