@@ -18,6 +18,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/partial"
 	"github.com/google/go-containerregistry/pkg/v1/static"
 	"github.com/google/go-containerregistry/pkg/v1/types"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 // OCI annotations naming the image an image was built on.
@@ -48,7 +49,88 @@ type Rebased struct {
 // set USER to the old base's user looks the same as one that inherited it,
 // and following the new base there could run it as root. The created time
 // is the later of the app's and the new base's.
+//
+// The manifest is written as BuildKit writes what it builds (see AsBuilt),
+// so a rebase gives the image a build of the app on newBase gives.
 func Image(app, oldBase, newBase v1.Image, baseName string) (*Rebased, error) {
+	return AsBuilt.Image(app, oldBase, newBase, baseName)
+}
+
+// Index is AsBuilt.Index.
+func Index(app v1.ImageIndex, rebased map[v1.Hash]v1.Image, baseName string) (v1.ImageIndex, error) {
+	return AsBuilt.Index(app, rebased, baseName)
+}
+
+// Format is how a rebase writes the manifests and index it assembles. Only
+// the bytes differ, but they are what the digest is computed from.
+type Format struct{ legacy bool }
+
+var (
+	// AsBuilt writes them as BuildKit writes a build: the OCI image-spec
+	// types indented by two spaces, with the new base's layers described as
+	// BuildKit describes a base's layers (see asBuilt). A rebase then equals
+	// a build of the app on the new base bit for bit, as long as the base's
+	// change leaves the environment and labels the app inherited alone.
+	AsBuilt = Format{}
+	// Legacy is how factory v0.1.1 and earlier wrote them: compact JSON,
+	// with the new base's layer descriptors copied as they are. It exists to
+	// repeat the rebases those versions recorded.
+	Legacy = Format{legacy: true}
+)
+
+// buildKitLayerAnnotations are the annotations BuildKit keeps on the layers
+// of a base it builds on (eStargz and OverlayBD ones; additionalAnnotations
+// in moby/buildkit's cache/refs.go, the same through v0.33). Every other one
+// is dropped, including the buildkit/rewritten-timestamp that BuildKit put
+// on the base's own layers when it built the base.
+var buildKitLayerAnnotations = []string{
+	"containerd.io/snapshot/stargz/toc.digest",
+	"io.containers.estargz.uncompressed-size",
+	"containerd.io/snapshot/overlaybd.localcommitpath",
+	"containerd.io/snapshot/overlaybd/blob-digest",
+	"containerd.io/snapshot/overlaybd/blob-size",
+	"containerd.io/snapshot/overlaybd/blob-fs-type",
+}
+
+// asBuilt describes a base layer the way a BuildKit build on that base
+// does: media type, digest, size, and only the annotations BuildKit keeps.
+func asBuilt(d v1.Descriptor) v1.Descriptor {
+	out := v1.Descriptor{MediaType: d.MediaType, Size: d.Size, Digest: d.Digest, URLs: d.URLs}
+	for _, k := range buildKitLayerAnnotations {
+		if v, ok := d.Annotations[k]; ok {
+			if out.Annotations == nil {
+				out.Annotations = map[string]string{}
+			}
+			out.Annotations[k] = v
+		}
+	}
+	return out
+}
+
+func (f Format) baseLayer(d v1.Descriptor) v1.Descriptor {
+	if f.legacy {
+		return d
+	}
+	return asBuilt(d)
+}
+
+// marshal writes a manifest or an index. BuildKit marshals the OCI
+// image-spec types (whose fields are in another order than
+// go-containerregistry's) with json.MarshalIndent.
+func marshal[T ocispec.Manifest | ocispec.Index](f Format, v any) ([]byte, error) {
+	b, err := json.Marshal(v)
+	if err != nil || f.legacy {
+		return b, err
+	}
+	var o T
+	if err := json.Unmarshal(b, &o); err != nil {
+		return nil, err
+	}
+	return json.MarshalIndent(o, "", "  ")
+}
+
+// Image puts app's layers above oldBase onto newBase in format f (see Image).
+func (f Format) Image(app, oldBase, newBase v1.Image, baseName string) (*Rebased, error) {
 	am, err := app.Manifest()
 	if err != nil {
 		return nil, err
@@ -148,7 +230,7 @@ func Image(app, oldBase, newBase v1.Image, baseName string) (*Rebased, error) {
 		return nil
 	}
 	for _, d := range nm.Layers {
-		if err := add(newBase, d); err != nil {
+		if err := add(newBase, f.baseLayer(d)); err != nil {
 			return nil, err
 		}
 	}
@@ -167,7 +249,7 @@ func Image(app, oldBase, newBase v1.Image, baseName string) (*Rebased, error) {
 	m.Annotations[AnnotationBaseName] = baseName
 	m.Annotations[AnnotationBaseDigest] = newDigest.String()
 
-	mb, err := json.Marshal(m)
+	mb, err := marshal[ocispec.Manifest](f, m)
 	if err != nil {
 		return nil, err
 	}
@@ -196,9 +278,9 @@ func BasedOn(img, base *v1.Manifest) error {
 
 // Index rebuilds app's index with each platform image replaced by its
 // rebased image (keyed by the old manifest digest), keeping order, platforms,
-// and annotations. Attestation manifests describe the old images, so they
-// are dropped.
-func Index(app v1.ImageIndex, rebased map[v1.Hash]v1.Image, baseName string) (v1.ImageIndex, error) {
+// and annotations, and writes it in format f. Attestation manifests describe
+// the old images, so they are dropped.
+func (f Format) Index(app v1.ImageIndex, rebased map[v1.Hash]v1.Image, baseName string) (v1.ImageIndex, error) {
 	im, err := app.IndexManifest()
 	if err != nil {
 		return nil, err
@@ -231,7 +313,7 @@ func Index(app v1.ImageIndex, rebased map[v1.Hash]v1.Image, baseName string) (v1
 	if len(out.Annotations) == 0 {
 		out.Annotations = nil
 	}
-	b, err := json.Marshal(out)
+	b, err := marshal[ocispec.Index](f, out)
 	if err != nil {
 		return nil, err
 	}

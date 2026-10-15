@@ -470,10 +470,29 @@ func (p *rebasePlan) analyze() (map[string]*rebase.Report, error) {
 
 // build assembles the rebased image (an index when the input was one).
 func (p *rebasePlan) build() (*registry.Artifact, map[string]*rebase.Rebased, error) {
+	return p.buildAs(rebase.AsBuilt)
+}
+
+// repeat assembles a recorded rebase again. factory v0.1.1 and earlier wrote
+// rebased manifests differently (rebase.Legacy), so when the rebase doesn't
+// give expected, the old format may.
+func (p *rebasePlan) repeat(opts Options, expected string) (*registry.Artifact, error) {
+	art, _, err := p.build()
+	if err != nil || art.Digest == expected {
+		return art, err
+	}
+	if old, _, err := p.buildAs(rebase.Legacy); err == nil && old.Digest == expected {
+		opts.printf("(in the format of factory v0.1.1 and earlier)")
+		return old, nil
+	}
+	return art, nil
+}
+
+func (p *rebasePlan) buildAs(f rebase.Format) (*registry.Artifact, map[string]*rebase.Rebased, error) {
 	out := map[string]*rebase.Rebased{}
 	byOld := map[v1.Hash]v1.Image{}
 	for _, pp := range p.platforms {
-		r, err := rebase.Image(pp.app.Image, pp.oldBase, pp.newBase, p.onto.Name)
+		r, err := f.Image(pp.app.Image, pp.oldBase, pp.newBase, p.onto.Name)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", pp.platform, err)
 		}
@@ -485,7 +504,7 @@ func (p *rebasePlan) build() (*registry.Artifact, map[string]*rebase.Rebased, er
 		byOld[h] = r.Image
 	}
 	if p.app.Index != nil {
-		idx, err := rebase.Index(p.app.Index, byOld, p.onto.Name)
+		idx, err := f.Index(p.app.Index, byOld, p.onto.Name)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -513,7 +532,7 @@ func verifyRebase(ctx context.Context, opts Options, rec *attest.Rebase, expecte
 		return err
 	}
 	opts.printf("repeating the rebase of %s onto %s", rec.Image, rec.Onto.Ref)
-	art, _, err := plan.build()
+	art, err := plan.repeat(opts, expected)
 	if err != nil {
 		return err
 	}

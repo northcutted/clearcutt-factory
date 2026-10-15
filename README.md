@@ -266,6 +266,15 @@ A rebase is a pure function of its inputs. The result carries a signed
 so `clearcutt-factory verify --image` repeats the rebase and compares digests in seconds.
 SBOM and vulnerability attestations are made for the result as for builds.
 
+A rebased app is also the image a build from source on the new base gives,
+bit for bit: `clearcutt-factory` writes the manifests as BuildKit does and
+describes the new base's layers as a BuildKit build on it would. So
+building the app from the lock `--update-lock` pinned (merging the fleet's
+pull request) finds the rebased image already published and only moves its
+tags. The exception is a new base that changes an environment variable or
+label the app inherited: the rebase then writes the image config in another
+order than a build does, so that build publishes once more.
+
 ## Running a fleet
 
 The intended split, and the automation that keeps it current:

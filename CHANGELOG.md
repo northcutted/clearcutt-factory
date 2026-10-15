@@ -5,6 +5,23 @@ what may change between releases.
 
 ## Unreleased
 
+**A rebase equals a rebuild of its pinned lock
+([#39](https://github.com/northcutted/clearcutt-factory/issues/39)).** A
+rebased app never had the digest of the same app built from source on the
+new base, though the layers and config were the same: `rebase` wrote
+manifests in another JSON layout than BuildKit (compact, fields in
+go-containerregistry's order) and copied the new base's layer descriptors
+verbatim, with the `buildkit/rewritten-timestamp` annotations factory-built
+run images carry, which a BuildKit build on that base drops. So merging the
+fleet's pin pull request republished every rebased app under a new digest,
+and rebuilding an older lock never found the published image. Rebases now
+write manifests and indexes as BuildKit does and keep only the layer
+annotations BuildKit keeps, and `build --push` treats an image the fleet
+rebased (signed, with its rebase record) as already published, as `rebase
+--push` does a built one. `verify --image` still repeats rebases recorded by
+earlier versions (in their format). Images rebased before this release are
+republished once, at the next build from their pinned lock.
+
 **SLSA provenance for every published image.** `images.yml` skipped
 provenance on this repository's own push builds (its `provenance` input is
 empty outside `workflow_call`, and the condition read empty as false). It now
