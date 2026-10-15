@@ -113,7 +113,7 @@ func Rebase(ctx context.Context, opts Options, ro RebaseOptions) error {
 			}
 			return fmt.Errorf("%w\n%s now pins the new base and the stack's newest build image; build the app to move it", err, rel(m.LockPath()))
 		}
-		if _, lerr := lockManifest(ctx, opts, m, org, LockOptions{UpdateBase: true, BaseDigest: onto}); lerr != nil {
+		if lerr := lockManifest(ctx, opts, m, org, LockOptions{UpdateBase: true, BaseDigest: onto}); lerr != nil {
 			return errors.Join(err, lerr)
 		}
 	}
@@ -139,8 +139,7 @@ func lockForRebuild(ctx context.Context, opts Options, pinned *manifest.Manifest
 	if m.Spec.Base == pinned.Spec.Base {
 		lo.BaseDigest = onto
 	}
-	_, err = lockManifest(ctx, opts, m, org, lo)
-	return err
+	return lockManifest(ctx, opts, m, org, lo)
 }
 
 // rebaseImage rebases ro.Image and returns the digest of the base it is now
@@ -594,7 +593,6 @@ func (p *rebasePlan) buildAs(f rebase.Format) (*registry.Artifact, map[string]*r
 	return &registry.Artifact{Digest: d.String(), Image: img}, out, nil
 }
 
-// verifyRebase repeats a recorded rebase and compares the digest.
 // verifyRebase repeats a recorded rebase and returns the digest it gives,
 // which must be expected.
 func verifyRebase(ctx context.Context, opts Options, rec *attest.Rebase, expected string) (string, error) {

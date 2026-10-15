@@ -196,10 +196,28 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           kind=$(sed -n "s/^kind:[[:space:]]*[\"']\{0,1\}\([A-Za-z]*\).*/\1/p" "$MANIFEST" | head -n 1 | tr '[:upper:]' '[:lower:]')
-          result=$(find out -mindepth 2 -maxdepth 2 -name result.json | head -n 1)
+          # The build's own result (a build rebased onto a newer base leaves
+          # the rebase's result next to it). When it was rebased, its tags
+          # point at the rebased image, so that is what was published.
+          result=""
+          while IFS= read -r f; do
+            if jq -e --arg digest "$DIGEST" '.digest == $digest' "$f" >/dev/null; then
+              result=$f
+              break
+            fi
+          done < <(find out -mindepth 2 -maxdepth 2 -name result.json)
+          if [ -z "$result" ]; then
+            echo "::error::no result.json for $DIGEST"
+            exit 1
+          fi
           mkdir -p "$RUNNER_TEMP/published"
           jq -c --arg manifest "$MANIFEST" --arg kind "${kind:-image}" --arg image "$IMAGE" --arg repository "$REPOSITORY" --arg digest "$DIGEST" \
-            '{manifest: $manifest, kind: $kind, image: $image, repository: $repository, digest: $digest, tags: (.tags // [])}' "$result" \
+            '(.rebased // "") as $rebased
+             | {manifest: $manifest, kind: $kind,
+                image: (if $rebased != "" then $rebased else $image end),
+                repository: $repository,
+                digest: (if $rebased != "" then ($rebased | split("@")[1]) else $digest end),
+                tags: (.tags // [])}' "$result" \
             | tee "$RUNNER_TEMP/published/published.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ !cancelled() && steps.record.outcome == 'success' }}

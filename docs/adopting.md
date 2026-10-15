@@ -179,8 +179,9 @@ platform: images.yml ─▶ notify.yml ─repository_dispatch─▶ each reposit
    on their schedules, so a stale or forged dispatch starts a run that
    changes nothing.
 4. **Stacks** are pushed by a job of your own, so hand `notify.yml` what it
-   pushed (`stack push` writes `image`, `repository`, and `digest` to
-   `$GITHUB_OUTPUT`):
+   pushed (`stack push` writes `image`, `repository`, `digest`, and
+   `published` to `$GITHUB_OUTPUT`; `published` is `false` when the stack was
+   unchanged and only its tag moved):
 
 ```yaml
   stacks:
@@ -188,7 +189,7 @@ platform: images.yml ─▶ notify.yml ─repository_dispatch─▶ each reposit
     runs-on: ubuntu-latest
     permissions: {contents: read, packages: write, id-token: write}
     outputs:
-      published: ${{ steps.push.outputs.image && format('[{{"kind":"stack","image":"{0}","digest":"{1}"}}]', steps.push.outputs.image, steps.push.outputs.digest) || '[]' }}
+      published: ${{ steps.push.outputs.published == 'true' && format('[{{"kind":"stack","image":"{0}","digest":"{1}"}}]', steps.push.outputs.image, steps.push.outputs.digest) || '[]' }}
     steps:
       - uses: actions/checkout@v7
       - uses: northcutted/clearcutt-factory@v0.1.1

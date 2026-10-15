@@ -102,14 +102,13 @@ func Lock(ctx context.Context, opts Options, lo LockOptions) error {
 	if err != nil {
 		return err
 	}
-	_, err = lockManifest(ctx, opts, m, org, lo)
-	return err
+	return lockManifest(ctx, opts, m, org, lo)
 }
 
-func lockManifest(ctx context.Context, opts Options, m *manifest.Manifest, org *manifest.Org, lo LockOptions) (changed bool, err error) {
+func lockManifest(ctx context.Context, opts Options, m *manifest.Manifest, org *manifest.Org, lo LockOptions) error {
 	prev, err := lock.Read(m.LockPath())
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return false, err
+		return err
 	}
 	base := prev
 	if (lo.UpdateBase || lo.UpdateStack) && prev != nil {
@@ -130,10 +129,10 @@ func lockManifest(ctx context.Context, opts Options, m *manifest.Manifest, org *
 	r.Run = container.Runner{Runtime: org.Builder.Runtime}.Run
 	l, err := r.LockFrom(ctx, m, org, base, prev, lo.Update)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if err := policy.Check(m, org, l); err != nil {
-		return false, err
+		return err
 	}
 	if prev != nil && bytes.Equal(prev.Marshal(), l.Marshal()) {
 		opts.printf("%s is up to date", rel(m.LockPath()))
@@ -142,12 +141,11 @@ func lockManifest(ctx context.Context, opts Options, m *manifest.Manifest, org *
 			opts.printf("  %s", c)
 		}
 		if err := l.Write(m.LockPath()); err != nil {
-			return false, err
+			return err
 		}
 		opts.printf("wrote %s", rel(m.LockPath()))
-		changed = true
 	}
-	return changed, writeContainerfile(opts, m, l)
+	return writeContainerfile(opts, m, l)
 }
 
 func writeContainerfile(opts Options, m *manifest.Manifest, l *lock.Lock) error {
