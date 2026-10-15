@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -63,5 +64,64 @@ func TestPlatformRef(t *testing.T) {
 	}
 	if _, err := PlatformRef(context.Background(), host+"/base:latest", "linux/s390x"); err == nil {
 		t.Error("expected an error for a missing platform")
+	}
+}
+
+// TestExistsWithoutHead: a registry that rejects HEAD is asked with GET, as
+// Digest does, and a HEAD 404 needs no second request.
+func TestExistsWithoutHead(t *testing.T) {
+	reg := ggcrregistry.New(ggcrregistry.Logger(log.New(io.Discard, "", 0)))
+	var rejectHead, failGet bool
+	var gets int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/manifests/") {
+			switch {
+			case r.Method == http.MethodHead && rejectHead:
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			case r.Method == http.MethodGet:
+				gets++
+				if failGet {
+					w.WriteHeader(http.StatusForbidden)
+					return
+				}
+			}
+		}
+		reg.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	ctx := context.Background()
+	img, err := random.Image(32, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := img.Digest()
+	pushed := host + "/app@" + d.String()
+	ref, _ := name.ParseReference(pushed)
+	if err := remote.Write(ref, img); err != nil {
+		t.Fatal(err)
+	}
+	missing := host + "/app@sha256:" + strings.Repeat("0", 64)
+
+	gets = 0
+	if ok, err := Exists(ctx, missing); ok || err != nil || gets != 0 {
+		t.Errorf("HEAD 404: exists=%v, %v, %d GETs", ok, err, gets)
+	}
+
+	rejectHead = true
+	if ok, err := Exists(ctx, pushed); !ok || err != nil {
+		t.Errorf("HEAD rejected, pushed: exists=%v, %v", ok, err)
+	}
+	if ok, err := Exists(ctx, missing); ok || err != nil {
+		t.Errorf("HEAD rejected, missing: exists=%v, %v", ok, err)
+	}
+	if got, err := Digest(ctx, pushed); err != nil || got != d.String() {
+		t.Errorf("Digest with HEAD rejected: %s, %v", got, err)
+	}
+
+	failGet = true
+	if ok, err := Exists(ctx, pushed); ok || err == nil || !strings.Contains(err.Error(), "with GET") {
+		t.Errorf("HEAD and GET failing: exists=%v, %v", ok, err)
 	}
 }

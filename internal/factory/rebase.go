@@ -58,6 +58,9 @@ func (e refusedError) Error() string { return e.msg }
 // rebuilding it, after checking that this is safe, then tests, scans, gates,
 // and (with Push) pushes, signs, and attests the result like Build.
 func Rebase(ctx context.Context, opts Options, ro RebaseOptions) error {
+	if ro.Check && ro.UpdateLock {
+		return errors.New("--check only reports and changes nothing, so it can't --update-lock; drop one of them")
+	}
 	if ro.Image != "" {
 		if ro.UpdateLock {
 			return errors.New("--update-lock needs the app manifest (-f app.yaml) instead of --image")

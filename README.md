@@ -221,7 +221,8 @@ which resolves manifest paths to image references and signs it), and apps in
 any repository name it: `stack: ghcr.io/acme/stacks/go:1`. The app's lock pins
 the stack's digest until `lock --update` moves it, and
 `policy.requireSignedStacks` accepts only stacks signed by the org's stack
-signer (`signing.stacks`).
+signer (`signing.stacks`). Every command that uses the stack checks the
+version the lock pins, so editing the lock can't bring in an unsigned one.
 
 Apps can't declare packages, tools, or files: anything an app needs from the
 OS belongs in the stack's run image, which is itself a factory image. Quote
@@ -244,7 +245,8 @@ app's smoke test on the result before pushing. `--update-lock` then pins
 from source doesn't quietly go back to the unpatched one. If the rebase is
 refused, the lock still moves and the command fails: rebuilding is the fix.
 
-Before rebasing, `clearcutt-factory` checks each platform (`--check` stops there):
+Before rebasing, `clearcutt-factory` checks each platform (`--check` stops
+there and changes nothing, so it doesn't take `--update-lock`):
 
 * **The image's own layers only add files.** If they replace, delete, or hide
   a base file, write through a base symlink, or change package-manager state

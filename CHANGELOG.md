@@ -48,6 +48,27 @@ workflows. The reusable workflows now declare their optional secrets, and
 `init` passes them by name. Existing workflows: replace `secrets: inherit`
 with the names, as `docs/adopting.md` shows.
 
+**`policy.requireSignedStacks` holds wherever a stack is used.** Only `lock`
+checked the stack's signature: `render`, `build`, `verify`, and `rebase` used
+whatever version the lock pinned, so a pull request that edited
+`app.lock.yaml` to an unsigned stack digest passed CI. Every command that
+loads an app now checks the pinned version.
+
+**Stack signers name their repository.** A stack names no source repository,
+so a stack signer with `sourceMatchesImage` could never verify one (with
+`signing.stacks` unset, `signing.verify`'s applied to stacks too). Such a
+signer is now an error when the org profile loads: in `signing.stacks`
+always, and under `policy.requireSignedStacks` also in the trust policy's
+stack signers or in `signing.verify` standing in for `signing.stacks`.
+
+**Trust policy keys are relative to the trust policy**, as keys in `signing`
+are to the org profile, instead of to the working directory.
+
+`rebase --check --update-lock` moved the lock although `--check` only
+reports; the combination is now an error. The check whether an image is
+already published falls back to GET when a registry rejects HEAD, as
+resolving a digest did.
+
 **SLSA provenance for every published image.** `images.yml` skipped
 provenance on this repository's own push builds (its `provenance` input is
 empty outside `workflow_call`, and the condition read empty as false). It now

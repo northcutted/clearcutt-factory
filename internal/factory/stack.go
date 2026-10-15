@@ -102,7 +102,8 @@ func fetchStack(ctx context.Context, ref string) (path, digest string, err error
 	return cached(d), d, nil
 }
 
-// verifyStack checks a registry stack's signature when the org requires it.
+// verifyStack checks the signature of a registry stack, at the digest the
+// manifest was loaded with, when the org requires it.
 func verifyStack(ctx context.Context, m *manifest.Manifest, org *manifest.Org) error {
 	if m.StackFrom == nil || !org.Policy.RequireSignedStacks {
 		return nil
