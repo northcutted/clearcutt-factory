@@ -25,13 +25,14 @@ signing:
   mode: keyless            # keyless (Sigstore OIDC) | key (file or KMS URI) | none
   # key: awskms:///alias/image-signing
   # stackKey: awskms:///alias/stack-signing   # key mode: signs stacks (stack push); default: key
-  # args: [--use-signing-config=false, --tlog-upload=false]   # private: no public Rekor
+  # args: [--signing-config, cosign/no-tlog.json]   # key mode without a transparency log (docs/adopting.md); relative to the working directory
   verify:
     certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
     # Bind signatures to runs in this repository: images signed by reusable
     # workflows carry the called workflow's identity, whoever called it.
     sourceRepository: https://github.com/northcutted/clearcutt-factory
+    # key: keys/images.pub   # key mode: the public key instead (tlog: false if it signs without a transparency log)
   # stacks:                # who may sign registry stacks (policy.requireSignedStacks); default: verify
   #   certificateIdentity: https://github.com/acme/platform/.github/workflows/stacks.yml@refs/heads/main
   #   certificateOIDCIssuer: https://token.actions.githubusercontent.com

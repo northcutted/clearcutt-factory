@@ -152,6 +152,32 @@ signing:
   stacks: {key: keys/stacks.pub}
 ```
 
+**Without a transparency log.** A key that signs without a transparency
+log (a private or offline setup) gets a cosign signing config that names
+no log, instead of cosign 2's `--tlog-upload=false`, which cosign 3
+deprecates. Verifiers then accept that key's evidence without a log entry
+when its signer says `tlog: false`:
+
+```sh
+cosign signing-config create --out cosign/no-tlog.json   # no services: no Rekor, no timestamp authority
+```
+
+```yaml
+signing:
+  mode: key
+  key: awskms:///alias/images
+  args: [--signing-config, cosign/no-tlog.json]   # passed to cosign as is: relative to the working directory
+  verify: {key: keys/images.pub, tlog: false}      # cosign --insecure-ignore-tlog, for this key only
+```
+
+`tlog: false` means the same in a trust policy's signers (clearcutt-verify
+reads it too), and `verify --image --key K --insecure-ignore-tlog` passes it
+on the command line. Keyless signers can't set it: a certificate is only
+valid with a log entry that shows it was used in time. Nothing shows when
+key-signed evidence without one was made, so set it only for keys that
+never log. A private Sigstore with its own services gets a signing config
+naming them (`cosign signing-config create --fulcio … --rekor …`).
+
 **One trust policy for the organization.** Instead of `verify` and `stacks`,
 `signing.trustPolicy` can name a ClearCutt trust policy, the same file
 [clearcutt-verify](https://github.com/northcutted/clearcutt-verify) reads to

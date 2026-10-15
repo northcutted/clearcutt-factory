@@ -32,8 +32,8 @@ Usage:
       Build, smoke-test, SBOM, scan, gate; with --push also sign and attest.
   clearcutt-factory verify  [-f image.yaml] --digest sha256:…
       Rebuild from source and compare.
-  clearcutt-factory verify  --image repo@sha256:… [--key K | --certificate-identity[-regexp] R --certificate-oidc-issuer I
-                            [--certificate-github-workflow-repository OWNER/REPO]]
+  clearcutt-factory verify  --image repo@sha256:… [--key K [--insecure-ignore-tlog] | --certificate-identity[-regexp] R
+                            --certificate-oidc-issuer I [--certificate-github-workflow-repository OWNER/REPO]]
       Rebuild from the image's signed recipe (or repeat its recorded rebase) and compare.
   clearcutt-factory rebase  --image repo[:tag|@sha256:…] [--onto BASE] [--from BASE] [--check] [--force]
                             [--push] [--tag T]… [--out DIR] [--no-scan] [--no-sign]
@@ -119,6 +119,8 @@ func run(ctx context.Context, args []string) error {
 	case "verify":
 		var vo factory.VerifyOptions
 		var key, identity, identityRegexp, issuer, workflowRepo string
+		var noTlog bool
+		fs.BoolVar(&noTlog, "insecure-ignore-tlog", false, "")
 		fs.StringVar(&vo.Image, "image", "", "")
 		fs.StringVar(&vo.Digest, "digest", "", "")
 		fs.StringVar(&vo.OutDir, "out", "out", "")
@@ -132,8 +134,14 @@ func run(ctx context.Context, args []string) error {
 		}
 		// With an image and no explicit manifest, trust the signed recipe.
 		vo.FromSource = vo.Image == "" || flagSet(fs, "f")
+		if noTlog && key == "" {
+			return errors.New("--insecure-ignore-tlog applies to --key: a keyless certificate is only valid with a transparency log entry")
+		}
 		if key != "" {
 			vo.VerifyArgs = append(vo.VerifyArgs, "--key", key)
+		}
+		if noTlog {
+			vo.VerifyArgs = append(vo.VerifyArgs, "--insecure-ignore-tlog=true")
 		}
 		if identity != "" {
 			vo.VerifyArgs = append(vo.VerifyArgs, "--certificate-identity", identity)

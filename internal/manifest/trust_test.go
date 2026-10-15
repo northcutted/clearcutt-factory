@@ -94,3 +94,39 @@ func TestStackSignersNameTheirRepository(t *testing.T) {
 		}
 	}
 }
+
+// TestTlog: tlog: false lets a key signer's evidence go without a
+// transparency log entry, as in clearcutt-verify's trust policy; keyless
+// signers can't set it.
+func TestTlog(t *testing.T) {
+	const head = "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\n"
+	dir := writeFiles(t, map[string]string{
+		"trust.yaml": "apiVersion: clearcutt.dev/v1\nkind: TrustPolicy\nsigners:\n" +
+			"  - {name: offline, key: acme.pub, tlog: false}\n" +
+			"  - {name: logged, key: logged.pub, tlog: true}\n" +
+			"  - {name: ci, identity: " + testStacks + ", issuer: " + testIssuer + ", tlog: true, roles: [stack]}\n",
+		"keyless-trust.yaml":     "apiVersion: clearcutt.dev/v1\nkind: TrustPolicy\nsigners:\n  - {name: ci, identity: " + testStacks + ", issuer: " + testIssuer + ", tlog: false}\n",
+		"policy.yaml":            head + "signing: {trustPolicy: trust.yaml}\n",
+		"keys.yaml":              head + "signing:\n  mode: key\n  key: acme.key\n  verify: {key: acme.pub, tlog: false}\n  stacks: {key: stacks.pub, tlog: false}\n",
+		"keyless-trust-org.yaml": head + "signing: {trustPolicy: keyless-trust.yaml}\n",
+		"keyless-verify.yaml":    head + "signing:\n  verify: {certificateIdentity: " + testStacks + ", certificateOIDCIssuer: " + testIssuer + ", tlog: false}\n",
+	})
+	org, err := LoadOrg(filepath.Join(dir, "policy.yaml"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := org.Signers(RoleImage); len(s) != 2 || !s[0].IgnoresTlog() || s[1].IgnoresTlog() {
+		t.Errorf("image signers: %+v", s)
+	}
+	if s := org.Signers(RoleStack); len(s) != 1 || s[0].IgnoresTlog() {
+		t.Errorf("stack signers: %+v", s)
+	}
+	if org, err = LoadOrg(filepath.Join(dir, "keys.yaml"), ""); err != nil || !org.Signers(RoleImage)[0].IgnoresTlog() || !org.Signers(RoleStack)[0].IgnoresTlog() {
+		t.Errorf("signing.verify and signing.stacks keys: %v", err)
+	}
+	for _, f := range []string{"keyless-trust-org.yaml", "keyless-verify.yaml"} {
+		if _, err := LoadOrg(filepath.Join(dir, f), ""); err == nil || !strings.Contains(err.Error(), "tlog: false applies to key signers") {
+			t.Errorf("%s: %v", f, err)
+		}
+	}
+}

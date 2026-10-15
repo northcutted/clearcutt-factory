@@ -42,6 +42,10 @@ type TrustedSigner struct {
 	SourceRepositoryOwner string   `yaml:"sourceRepositoryOwner,omitempty"`
 	SourceRef             string   `yaml:"sourceRef,omitempty"`
 	SourceMatchesImage    bool     `yaml:"sourceMatchesImage,omitempty"`
+	// Tlog false accepts this key signer's evidence without a transparency
+	// log entry (cosign --insecure-ignore-tlog), for a key that signs
+	// without one. Keyless signers can't set it.
+	Tlog *bool `yaml:"tlog,omitempty"`
 }
 
 // LoadTrustPolicy reads and checks a trust policy file. Key files are
@@ -115,10 +119,14 @@ func (s TrustedSigner) Verify() VerifyIdentity {
 	return VerifyIdentity{
 		Key: s.Key, CertificateIdentity: s.Identity, CertificateIdentityRegexp: s.IdentityRegexp, CertificateOIDCIssuer: s.Issuer,
 		SourceRepository: s.SourceRepository, SourceRepositoryOwner: s.SourceRepositoryOwner, SourceRef: s.SourceRef, SourceMatchesImage: s.SourceMatchesImage,
+		Tlog: s.Tlog,
 	}
 }
 
 func (v VerifyIdentity) validate() error {
+	if v.Tlog != nil && !*v.Tlog && v.Key == "" {
+		return errors.New("tlog: false applies to key signers: a keyless certificate is only valid with a transparency log entry showing it was used in time")
+	}
 	if v.IsZero() {
 		if v.SourceRepository != "" || v.SourceRepositoryOwner != "" || v.SourceRef != "" || v.SourceMatchesImage {
 			return errors.New("source constraints need a certificate identity and issuer")

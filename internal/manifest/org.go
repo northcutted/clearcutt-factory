@@ -142,11 +142,21 @@ type VerifyIdentity struct {
 	// SourceRef is the ref the run was on, e.g. refs/heads/main.
 	SourceRef string   `yaml:"sourceRef,omitempty"`
 	Args      []string `yaml:"args,omitempty"`
+	// Tlog false accepts this key signer's signatures and attestations
+	// without a transparency log entry (cosign --insecure-ignore-tlog),
+	// for a key that signs without one. Keyless signers can't set it.
+	Tlog *bool `yaml:"tlog,omitempty"`
 }
 
 // IsZero reports whether no signer is set.
 func (v VerifyIdentity) IsZero() bool {
 	return v.Key == "" && v.CertificateIdentity == "" && v.CertificateIdentityRegexp == "" && v.CertificateOIDCIssuer == "" && len(v.Args) == 0
+}
+
+// IgnoresTlog reports whether the signer is a key whose evidence is
+// accepted without a transparency log entry (tlog: false).
+func (v VerifyIdentity) IgnoresTlog() bool {
+	return v.Key != "" && v.Tlog != nil && !*v.Tlog
 }
 
 type SBOM struct {

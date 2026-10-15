@@ -29,6 +29,16 @@ digest and one of the org's stack signers signed it (or signing is off), it
 now only moves the tag, as `build --push` does. With no stack signer
 configured it can't tell, and signs again.
 
+**Signing and verifying without a transparency log
+([#43](https://github.com/northcutted/clearcutt-factory/issues/43)).** The
+example profile documented `--tlog-upload=false`, which cosign 3 deprecates;
+`docs/adopting.md` now shows a cosign signing config that names no log.
+Signers verified with keys take `tlog: false` (in `signing.verify`,
+`signing.stacks`, and a trust policy's signers, as clearcutt-verify's trust
+policy does), which verifies that key's signatures and attestations with
+cosign `--insecure-ignore-tlog`; keyless signers can't set it. `verify
+--image --key K --insecure-ignore-tlog` does the same on the command line.
+
 **`policy.requireSignedStacks` holds wherever a stack is used.** Only `lock`
 checked the stack's signature: `render`, `build`, `verify`, and `rebase` used
 whatever version the lock pinned, so a pull request that edited
