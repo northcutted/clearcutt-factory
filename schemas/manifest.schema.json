@@ -128,7 +128,7 @@
           "type": "string"
         },
         "stack": {
-          "description": "App only: the stack to build with (a stack file, or a stack published with clearcutt-factory stack push, by reference), the source directory (default: the manifest's directory), source paths to leave out, and variables for the stack's build steps.",
+          "description": "App only: the stack to build with (a stack file, or a stack published with clearcutt-factory stack push, by reference), the source directory (default: the manifest's directory), source paths to leave out (besides .git, /out, and factory's own files: the app's lock and Containerfile, and the org profile), and variables for the stack's build steps.",
           "type": "string"
         },
         "test": {

@@ -497,8 +497,33 @@ func (r *renderer) nix(tools []manifest.Tool) (string, error) {
 	return "COPY --link --from=nix /out/ /", nil
 }
 
-// DefaultExclude is left out of every app's source.
+// DefaultExclude is left out of every app's source, along with factory's own
+// files for the app (see ownFiles).
 var DefaultExclude = []string{".git", "/out"}
+
+// ownFiles are the patterns for factory's files that sit in the app's
+// source: its lock, its Containerfile, and the org profile. They are inputs
+// to factory, not to the steps, and a pull request that only pins a new
+// base must not change what the steps build from.
+func ownFiles(m *manifest.Manifest) []string {
+	var out []string
+	for _, p := range []string{m.LockPath(), m.ContainerfilePath(), m.Spec.OrgFile} {
+		if p == "" {
+			continue
+		}
+		rel, err := filepath.Rel(m.Spec.SourceDir, p)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		out = append(out, "/"+globEscape(filepath.ToSlash(rel)))
+	}
+	return out
+}
+
+// globEscape quotes the characters path.Match would read as a pattern.
+func globEscape(s string) string {
+	return strings.NewReplacer(`\`, `\\`, "*", `\*`, "?", `\?`, "[", `\[`).Replace(s)
+}
 
 // renderApp builds the app with its stack's steps in the build image, then
 // copies only /out onto the run image. COPY --link makes that layer
@@ -548,6 +573,13 @@ func (r *renderer) renderApp() (*Output, error) {
 		from = "--platform=$BUILDPLATFORM "
 	}
 	r.f("FROM %s%s AS build\n", from, l.App.Build.Pinned())
+	// The build image may name a non-root user (policy.requireNonRoot
+	// applies to the images a platform builds for its stacks too), but the
+	// steps need to create /out, write the source, and use cache mounts.
+	// This stage never ships: only /out is copied onto the run image, whose
+	// user the app runs as.
+	r.f("# never shipped; root so the steps can write /out, /src, and the caches\n")
+	r.f("USER 0\n")
 	r.f("ARG TARGETOS TARGETARCH %s\n", strings.TrimPrefix(epochArg, "ARG "))
 	env := map[string]string{"APP_NAME": m.Metadata.Name}
 	for k, v := range m.Spec.BuildEnv {
@@ -559,7 +591,7 @@ func (r *renderer) renderApp() (*Output, error) {
 	r.f("WORKDIR /src\n")
 	r.f("COPY src/ /src/\n")
 	r.out.Context = append(r.out.Context, ContextFile{
-		Src: m.Spec.SourceDir, Rel: "src", Exclude: append(slices.Clone(DefaultExclude), m.Spec.Exclude...),
+		Src: m.Spec.SourceDir, Rel: "src", Exclude: slices.Concat(DefaultExclude, ownFiles(m), m.Spec.Exclude),
 	})
 	var mounts []string
 	for _, c := range st.Spec.Caches {

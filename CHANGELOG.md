@@ -110,6 +110,26 @@ reports; the combination is now an error. The check whether an image is
 already published falls back to GET when a registry rejects HEAD, as
 resolving a digest did.
 
+**Apps build on non-root build images
+([#38](https://github.com/northcutted/clearcutt-factory/issues/38)).**
+`policy.requireNonRoot` applies to the images a platform builds for its
+stacks, but the app build stage ran the steps as the build image's user, so
+on a non-root build image the first step failed at `mkdir -p /out`, steps
+couldn't write the source, and cache mounts were root-owned. The build stage
+now runs as root (`USER 0`): it never ships, and the app still runs as the
+stack's or app's `user`. Files the steps write to `/out` are owned by root,
+as they were with root build images, which these builds still produce
+unchanged.
+
+**factory's own files are no longer in an app's source
+([#42](https://github.com/northcutted/clearcutt-factory/issues/42)).** With
+the default `source`, the app's `app.lock.yaml` and `app.Containerfile` (and
+a `factory.org.yaml` beside them) were copied into `/src` and recorded in the
+recipe, so a pull request that only pinned a new base changed the build's
+input. They are now left out like `.git`. Apps that excluded them in
+`spec.exclude` can drop those entries. The recipe's context changes once; an
+image changes only if its steps copied those files into `/out`.
+
 **SLSA provenance for every published image.** `images.yml` skipped
 provenance on this repository's own push builds (its `provenance` input is
 empty outside `workflow_call`, and the condition read empty as false). It now
