@@ -196,6 +196,39 @@ identity (the `source…` fields are GitHub Actions only); or sign with a key (`
 URI). `builder.addr` points builds at an existing BuildKit (in Kubernetes,
 say) instead of starting a container.
 
+### A registry on this machine
+
+BuildKit runs in a container, where `localhost` is the container itself, so
+a base in a registry on your machine (`localhost:5000/platform/run-go`, say)
+can't be pulled in a build, though `lock`, cosign, and the scanners reach
+it. Two settings in the org profile give the BuildKit container what it
+needs:
+
+```yaml
+builder:
+  network: host               # Linux: share the host's network, so localhost is the host
+  config: buildkitd.toml      # relative to this profile; mounted as /etc/buildkit/buildkitd.toml
+```
+
+BuildKit already talks plain HTTP to `localhost` and `127.0.0.1`. With
+Docker Desktop or a Podman machine (macOS, Windows), containers run in a VM
+whose host network isn't your machine's, so instead mirror the registry to
+the address the VM gives your machine, over HTTP:
+
+```toml
+# buildkitd.toml
+[registry."localhost:5000"]
+  mirrors = ["host.containers.internal:5000"]   # Docker Desktop: host.docker.internal
+[registry."host.containers.internal:5000"]
+  http = true
+```
+
+The same file takes other registry settings (`insecure`, `ca`, pull-through
+mirrors); see BuildKit's
+[buildkitd.toml reference](https://docs.docker.com/build/buildkit/toml-configuration/).
+Neither setting changes what is built: every input is pinned by digest. With
+`builder.addr`, configure that buildkitd instead.
+
 ## Governing what you built
 
 [clearcutt-verify](https://github.com/northcutted/clearcutt-verify) reads

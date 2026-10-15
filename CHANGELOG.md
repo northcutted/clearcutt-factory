@@ -5,6 +5,15 @@ what may change between releases.
 
 ## Unreleased
 
+**The BuildKit container can reach a registry on this machine
+([#40](https://github.com/northcutted/clearcutt-factory/issues/40)).**
+`builder.config` mounts a `buildkitd.toml` (relative to the org profile)
+into the BuildKit container: registry mirrors, plain-HTTP or insecure
+registries, CA certificates. `builder.network` sets its network (e.g.
+`host`). Before, a base in a local or plain-HTTP registry could be locked
+but not built, short of a custom BuildKit image or `builder.addr`.
+`docs/adopting.md` shows both for Linux and for Docker or Podman in a VM.
+
 **`policy.requireSignedStacks` holds wherever a stack is used.** Only `lock`
 checked the stack's signature: `render`, `build`, `verify`, and `rebase` used
 whatever version the lock pinned, so a pull request that edited

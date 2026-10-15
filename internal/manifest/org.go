@@ -81,6 +81,14 @@ type Builder struct {
 	// Addr targets an existing buildkitd (e.g. tcp://buildkitd:1234) with the
 	// local buildctl instead of starting a container.
 	Addr string `yaml:"addr,omitempty"`
+	// Config is a buildkitd.toml for the BuildKit container, relative to
+	// this profile: registry mirrors, plain-HTTP or insecure registries, CA
+	// certificates. Not with addr (configure that buildkitd instead).
+	Config string `yaml:"config,omitempty"`
+	// Network is the BuildKit container's network (docker or podman run
+	// --network), e.g. host, so BuildKit reaches a registry on this
+	// machine's localhost. Not with addr.
+	Network string `yaml:"network,omitempty"`
 }
 
 type Signing struct {
@@ -243,6 +251,14 @@ func (o *Org) validate() error {
 	default:
 		errs = append(errs, fmt.Errorf("builder.runtime %q must be auto, docker, or podman", o.Builder.Runtime))
 	}
+	if b := o.Builder; b.Addr != "" && (b.Config != "" || b.Network != "") {
+		errs = append(errs, errors.New("builder.config and builder.network set up the BuildKit container factory starts; with builder.addr, configure that buildkitd instead"))
+	}
+	if c := o.Builder.Config; c != "" {
+		if st, err := os.Stat(c); err != nil || st.IsDir() {
+			errs = append(errs, fmt.Errorf("builder.config: %s is not a file", c))
+		}
+	}
 	return errors.Join(errs...)
 }
 
@@ -288,6 +304,9 @@ func LoadOrg(path, startDir string) (*Org, error) {
 	o.Signing.Key = keyPath(dir, o.Signing.Key)
 	o.Signing.Verify.Key = keyPath(dir, o.Signing.Verify.Key)
 	o.Signing.Stacks.Key = keyPath(dir, o.Signing.Stacks.Key)
+	if c := o.Builder.Config; c != "" && !filepath.IsAbs(c) {
+		o.Builder.Config = filepath.Join(dir, c)
+	}
 	if t := o.Signing.TrustPolicy; t != "" {
 		if !filepath.IsAbs(t) {
 			t = filepath.Join(filepath.Dir(o.Path), t)

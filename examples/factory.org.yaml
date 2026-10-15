@@ -18,6 +18,8 @@ builder:
   frontend: docker/dockerfile:1
   toolbox: cgr.dev/chainguard/wolfi-base:latest
   go: golang:1
+  # config: buildkitd.toml   # mirrors, plain-HTTP/insecure registries, CA certificates for the BuildKit container
+  # network: host            # e.g. to pull from a registry on this machine's localhost (Linux)
 
 signing:
   mode: keyless            # keyless (Sigstore OIDC) | key (file or KMS URI) | none

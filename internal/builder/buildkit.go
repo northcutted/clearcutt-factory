@@ -49,7 +49,14 @@ type Config struct {
 	CacheVolume string
 	// WriteAuth writes registry credentials for a containerized BuildKit.
 	WriteAuth func(path string, registries []string) error
+	// BuildkitdConfig is a buildkitd.toml for a containerized BuildKit.
+	BuildkitdConfig string
+	// Network is the BuildKit container's network (e.g. host).
+	Network string
 }
+
+// buildkitdConfig is where the container's buildkitd reads BuildkitdConfig.
+const buildkitdConfig = "/etc/buildkit/buildkitd.toml"
 
 // Build runs the build and returns the layout and its index digest.
 func Build(ctx context.Context, cfg Config, req Request) (*Result, error) {
@@ -98,6 +105,7 @@ func Build(ctx context.Context, cfg Config, req Request) (*Result, error) {
 			"--mount", bind(req.ContextDir, "/ctx", true),
 			"--mount", bind(req.OutDir, "/out", false),
 		}
+		run = append(run, containerOptions(cfg)...)
 		if !req.NoCache && cfg.CacheVolume != "" {
 			run = append(run, "--mount", "type=volume,source="+cfg.CacheVolume+",target=/var/lib/buildkit")
 		}
@@ -137,6 +145,21 @@ func Build(ctx context.Context, cfg Config, req Request) (*Result, error) {
 		return nil, errors.New("build metadata has no containerimage.digest")
 	}
 	return &Result{LayoutDir: layoutDir, Digest: md.Digest}, nil
+}
+
+// containerOptions are the run options for the BuildKit container's network
+// and buildkitd configuration. buildctl-daemonless.sh passes BUILDKITD_FLAGS
+// to buildkitd.
+func containerOptions(cfg Config) []string {
+	var o []string
+	if cfg.Network != "" {
+		o = append(o, "--network", cfg.Network)
+	}
+	if cfg.BuildkitdConfig != "" {
+		o = append(o, "--mount", bind(cfg.BuildkitdConfig, buildkitdConfig, true),
+			"--env", "BUILDKITD_FLAGS=--config="+buildkitdConfig)
+	}
+	return o
 }
 
 // bind formats a --mount bind spec; unlike -v it tolerates ':' in host paths.

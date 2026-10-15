@@ -316,7 +316,7 @@ found by walking up from the manifest (or `--org`). See
 |---|---|
 | `registry`, `tags` | Where images go and how they are tagged |
 | `defaults` | Base image, platforms, and labels for every manifest |
-| `builder` | Pinned BuildKit, Dockerfile frontend, toolbox, Go and Nix images, default nixpkgs branch; `runtime: docker\|podman`; `addr:` for a remote buildkitd (e.g. in Kubernetes) |
+| `builder` | Pinned BuildKit, Dockerfile frontend, toolbox, Go and Nix images, default nixpkgs branch; `runtime: docker\|podman`; `addr:` for a remote buildkitd (e.g. in Kubernetes); `config:` (a `buildkitd.toml`: mirrors, plain-HTTP or insecure registries, CA certificates) and `network:` for the BuildKit container ([a registry on this machine](docs/adopting.md#a-registry-on-this-machine)) |
 | `signing` | `keyless` (Sigstore OIDC), `key` (file or any cosign KMS URI), or `none`; extra cosign args (private Sigstore, no tlog); who signs this repository's images (`verify`, bound to the workflow run's repository with `sourceRepository`) and its stacks (`stacks`), or a shared ClearCutt `trustPolicy` file ([adopting](docs/adopting.md#who-signs-and-binding-signatures-to-your-repository)) |
 | `sbom` | Whether to add a syft scan to the declared SBOM |
 | `vulnerabilities` | Scanner and the `failOn` severity gate, optionally `onlyFixed` |
