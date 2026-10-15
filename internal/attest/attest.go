@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/northcutted/clearcutt-factory/internal/manifest"
 )
 
 const (
@@ -86,6 +88,9 @@ type Rebase struct {
 	// From is the old base of each platform (repo@digest of its image).
 	From map[string]string `json:"from"`
 	Onto RebaseBase        `json:"onto"`
+	// Test is the smoke test that ran on the result before it was
+	// published. Absent when none ran (rebase --image, or --no-test).
+	Test *RebaseTest `json:"test,omitempty"`
 	// Config lists, per platform, configuration that followed the base.
 	Config map[string][]string `json:"config,omitempty"`
 	Result ImageDigests        `json:"result"`
@@ -101,6 +106,18 @@ type RebaseBase struct {
 type FactoryInfo struct {
 	Version string `json:"version"`
 }
+
+// RebaseTest is the smoke test a rebase ran on the rebased image: the app's
+// spec.test as declared (command, http, timeout) and the result on each
+// platform. A rebase whose test fails is not published, so a published
+// record says passed for every platform.
+type RebaseTest struct {
+	manifest.Test
+	Platforms map[string]string `json:"platforms"`
+}
+
+// TestPassed is a platform's result in RebaseTest.
+const TestPassed = "passed"
 
 type BuildSettings struct {
 	BuildKit        string   `json:"buildkit"`

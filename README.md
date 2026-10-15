@@ -266,8 +266,20 @@ directory, ports, and volumes stay as built, and `clearcutt-factory` notes where
 base would differ. Environment variables and labels the image inherited
 unchanged from the old base follow the new one (a changed `PATH`, say).
 
+**The rebase record** (predicate type
+`https://github.com/northcutted/clearcutt-factory/rebase/v1`, on the
+rebased index) holds `image`, the image that was rebased (`repo@digest`);
+`from`, each platform's old base; `onto`, the new base's `name` and the
+`ref` it resolved to; `config`, per platform, the configuration that
+followed the base; `result`, the new digests; and `test` when the rebase ran
+the app's smoke test (`rebase -f` without `--no-test`): the app's
+`spec.test` as declared (`command`, `http`, `timeout`) and `platforms`,
+each platform's result. A failing test stops the rebase before anything is
+published, so a published record says `passed`; `rebase --image` (which has
+no test) and `--no-test` record no `test`.
+
 A rebase is a pure function of its inputs. The result carries a signed
-**rebase record** (the image, old and new base digests) instead of a recipe,
+**rebase record** (above) instead of a recipe,
 so `clearcutt-factory verify --image` repeats the rebase and compares digests in seconds.
 SBOM and vulnerability attestations are made for the result as for builds.
 

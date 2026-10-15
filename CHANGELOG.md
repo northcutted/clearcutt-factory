@@ -39,6 +39,13 @@ policy does), which verifies that key's signatures and attestations with
 cosign `--insecure-ignore-tlog`; keyless signers can't set it. `verify
 --image --key K --insecure-ignore-tlog` does the same on the command line.
 
+**The rebase record names the smoke test that ran.** A rebase from the app
+manifest runs the app's smoke test on every platform before it publishes,
+but the record didn't say so, so verifiers counted no test on rebased
+images. The record now has `test`: the app's `spec.test` as declared and
+each platform's result. It is absent when no test ran (`rebase --image`,
+`--no-test`). README documents the record's fields.
+
 **`policy.requireSignedStacks` holds wherever a stack is used.** Only `lock`
 checked the stack's signature: `render`, `build`, `verify`, and `rebase` used
 whatever version the lock pinned, so a pull request that edited

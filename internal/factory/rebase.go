@@ -217,6 +217,10 @@ func rebaseImage(ctx context.Context, opts Options, org *manifest.Org, ro Rebase
 			return "", err
 		}
 		result.Tested = true
+		record.Test = &attest.RebaseTest{Test: *test, Platforms: map[string]string{}}
+		for _, p := range plats {
+			record.Test.Platforms[p.Platform] = attest.TestPassed
+		}
 	case test == nil && label == "":
 		opts.printf("  no smoke test (rebase -f app.yaml runs the app's)")
 	}
