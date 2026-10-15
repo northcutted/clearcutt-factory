@@ -117,7 +117,7 @@
           "type": "boolean"
         },
         "requireSignedStacks": {
-          "description": "RequireSignedStacks requires stacks fetched from a registry to carry a signature from signing.verify's identity, checked when locking.",
+          "description": "RequireSignedStacks requires stacks fetched from a registry to carry a signature from the org's stack signer: signing.stacks (else signing.verify), or the stack signers of signing.trustPolicy.",
           "type": "boolean"
         },
         "requiredLabels": {

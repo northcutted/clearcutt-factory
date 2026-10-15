@@ -40,7 +40,7 @@ rebuilding the app, after checking that this is safe.
 Install a signed release binary from
 [Releases](https://github.com/northcutted/clearcutt-factory/releases) (see
 [docs/adopting.md](docs/adopting.md#1-install) to verify it), or
-`go install github.com/northcutted/clearcutt-factory/cmd/clearcutt-factory@v0.1.0`.
+`go install github.com/northcutted/clearcutt-factory/cmd/clearcutt-factory@v0.1.1`.
 Building needs Docker or Podman (BuildKit runs inside a container, pinned by
 digest); scanning and signing need `syft`, `grype`, and `cosign` on `PATH`.
 
@@ -284,7 +284,7 @@ The intended split, and the automation that keeps it current:
   pull request builds, smoke-tests, scans, and gates; merging publishes.
   Auto-merging these when the gates pass is reasonable.
 * **Base patches reach apps without app teams** ([`fleet.yml`](.github/workflows/fleet.yml)).
-  Daily and after every publish on `main`, `clearcutt-factory rebase -f <app> --push
+  Daily and after each push to `main` publishes, `clearcutt-factory rebase -f <app> --push
   --update-lock` for each app: rebase if safe, smoke-test, scan, push, sign,
   repeat from the signed record, then a pull request pinning the app's lock
   to the same base. An app that can't be rebased gets the same pull request
@@ -298,11 +298,16 @@ The intended split, and the automation that keeps it current:
   purpose. Publish a new run image and stack version beside the old ones;
   apps move with a one-line change and a rebuild.
 
-Pull requests opened with the default `GITHUB_TOKEN` don't start other
-workflows, so set a `CLEARCUTT_BOT_TOKEN` secret (a GitHub App token, or a
-fine-grained token with contents and pull-requests write) for CI to run on
-them. Deploy by digest and let GitOps follow the tags; keep old run images
-(a rebase needs the old base's manifest) and old app digests (rollback).
+Pull requests opened with the default `GITHUB_TOKEN` are
+`github-actions[bot]`'s, and GitHub holds the CI runs they trigger until a
+maintainer approves them on the pull request (the runs show as
+`action_required`), so nothing gates the change on its own. Set a
+`CLEARCUTT_BOT_TOKEN` secret (a GitHub App token, or a fine-grained token with
+contents and pull-requests write): the jobs then open pull requests as that
+identity, and CI starts on them by itself.
+
+Deploy by digest and let GitOps follow the tags; keep old run images (a
+rebase needs the old base's manifest) and old app digests (rollback).
 
 ## The org profile
 

@@ -10,7 +10,29 @@ provenance on this repository's own push builds (its `provenance` input is
 empty outside `workflow_call`, and the condition read empty as false). It now
 attests any published digest that lacks provenance, so an image pushed without
 it (the step failed, or was skipped) gets it on the next run, and unchanged
-images that have it get no new attestation.
+images that have it get no new attestation. Existing provenance counts when
+`images.yml` signed it (`gh attestation verify --signer-workflow`; in a
+calling repository the signer is the called workflow, not the caller's) in a
+run of the repository being built.
+
+**Every published image is reproduced.** `images.yml`'s reproduce job was
+skipped entirely when any manifest failed to build. It now rebuilds each image
+that was published; the failed build still fails the run.
+
+**Runs no longer race.** `images.yml`, `fleet.yml`, and `update-locks.yml`
+(and CI here) run one at a time per ref: publishing, rebasing, and lock
+updates wait for the run before them instead of racing on tags and pull
+requests, and a pull request's newer run cancels the older one.
+
+**`fleet.yml` keeps a valid pin pull request open.** A rebase that failed
+before pinning the lock (a registry error, say) left the lock unchanged, and
+that closed the app's open pull request; only a rebase that finishes with
+nothing to pin closes it now. After the images workflow, `fleet.yml` runs only
+for a push to `main`, not for pull requests whose branch is named `main`.
+
+`scripts/release.sh` also moves the install instructions (`go install` and
+the download) to the release. The docs now say that GitHub holds CI on the
+bot's pull requests for approval until `CLEARCUTT_BOT_TOKEN` is set.
 
 ## v0.1.1
 

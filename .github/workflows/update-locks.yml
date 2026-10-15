@@ -5,10 +5,12 @@
 # pull request builds, smoke-tests, scans, and gates the change; merging it
 # publishes the rebuilt image.
 #
-# Pull requests opened with the default GITHUB_TOKEN don't start other
-# workflows. Set a CLEARCUTT_BOT_TOKEN secret (a GitHub App token, or a
-# fine-grained token with contents and pull-requests write) so CI runs on
-# them, and allow Actions to create pull requests in the repository settings.
+# Pull requests opened with the default GITHUB_TOKEN are github-actions[bot]'s,
+# and GitHub holds the workflow runs they trigger until someone approves them
+# (the runs show as action_required). Set a CLEARCUTT_BOT_TOKEN secret (a
+# GitHub App token, or a fine-grained token with contents and pull-requests
+# write) so CI starts on them by itself, and allow Actions to create pull
+# requests in the repository settings.
 #
 # Other repositories call it (see docs/adopting.md):
 #
@@ -34,6 +36,12 @@ on:
         default: v0.1.1
 permissions:
   contents: read
+# One run at a time per ref (and manifests). Runs wait rather than cancel, so
+# none stops halfway through its pull requests; a newer run replaces any
+# still waiting, and does the same work.
+concurrency:
+  group: clearcutt-factory-update-locks-${{ github.ref }}-${{ inputs.manifests }}
+  cancel-in-progress: false
 env:
   FACTORY_VERSION: ${{ inputs.factory-version || 'source' }}
   MANIFESTS: ${{ inputs.manifests || 'examples/*/image.yaml examples/*/app.yaml' }}

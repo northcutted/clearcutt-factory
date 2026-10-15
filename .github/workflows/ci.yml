@@ -5,6 +5,10 @@ on:
   pull_request:
 permissions:
   contents: read
+# A pull request's newer run cancels the older one; runs on main all finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   test:
     runs-on: ubuntu-latest
