@@ -85,7 +85,7 @@ func TestRebaseRecordsTest(t *testing.T) {
 	// runtime answers no HTTP, so the test is a command here.)
 	test := &manifest.Test{Command: []string{"/app/hello", "--check"}, Timeout: "30s"}
 	ro := RebaseOptions{Image: host + "/apps/hello:latest", OutDir: outDir, NoScan: true}
-	if _, err := rebaseImage(ctx, opts, org, ro, test, "hello"); err != nil {
+	if _, _, err := rebaseImage(ctx, opts, org, ro, test, "hello"); err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
 	b, _ := json.Marshal(record()["test"])
@@ -102,7 +102,7 @@ func TestRebaseRecordsTest(t *testing.T) {
 		noTest bool
 	}{"--no-test": {test, true}, "--image": {nil, false}} {
 		ro.NoTest = c.noTest
-		if _, err := rebaseImage(ctx, opts, org, ro, c.test, ""); err != nil {
+		if _, _, err := rebaseImage(ctx, opts, org, ro, c.test, ""); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 		if r := record(); r["test"] != nil {

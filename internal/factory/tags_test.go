@@ -463,7 +463,7 @@ func TestBuildRebasesOntoNewerBase(t *testing.T) {
 	if rec.Image != res.Image {
 		t.Errorf("rebase record of %s, want %s", rec.Image, res.Image)
 	}
-	if err := verifyRebase(ctx, opts, &rec, digestOf(res.Rebased)); err != nil {
+	if _, err := verifyRebase(ctx, opts, &rec, digestOf(res.Rebased)); err != nil {
 		t.Fatal(err)
 	}
 	// The workflow's outputs describe the build, once.
