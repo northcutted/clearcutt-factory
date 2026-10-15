@@ -245,8 +245,12 @@ For apps, `clearcutt-factory rebase -f app.yaml` rebases the app's published ima
 (`metadata.ref` and its first tag) onto its stack's run image and runs the
 app's smoke test on the result before pushing. `--update-lock` then pins
 `app.lock.yaml` to that base (`clearcutt-factory lock --update-base`), so the next build
-from source doesn't quietly go back to the unpatched one. If the rebase is
-refused, the lock still moves and the command fails: rebuilding is the fix.
+from source doesn't quietly go back to the unpatched one. The build image
+stays pinned: the app's layer was built with it, and the lock says how the
+image was built. If the rebase is refused, the command fails and the lock
+moves anyway, for the rebuild that is the fix: to the new run image, and to
+the stack's newest build image (a registry stack to its newest version), so
+the app links against the libraries the new run image has.
 
 Before rebasing, `clearcutt-factory` checks each platform (`--check` stops
 there and changes nothing, so it doesn't take `--update-lock`):
@@ -305,7 +309,8 @@ The intended split, and the automation that keeps it current:
   --update-lock` for each app: rebase if safe, smoke-test, scan, push, sign,
   repeat from the signed record (and attest the match), then a pull request
   pinning the app's lock to the same base. An app that can't be rebased gets
-  the same pull request (merging rebuilds it) and a failed job.
+  a pull request that also moves its stack's build image (merging rebuilds it
+  on both) and a failed job.
 * **CVE response** is the same path on demand: fix the run image (re-lock,
   merge), and the fleet job moves every app onto it in minutes.
 * **Apps in other repositories hear about it** ([`notify.yml`](.github/workflows/notify.yml)).

@@ -7,8 +7,8 @@
 # record; a match is attested on the image (…/reproduction/v1, method
 # rebase-repeat). A pull request then pins the app's lock to the same base,
 # so the next build from source doesn't move it back. An app that can't be
-# rebased gets the same pull request (building it is the fix) and its job
-# fails.
+# rebased gets a pull request that also moves its stack's build image
+# (building it is the fix) and its job fails.
 #
 # The pull requests are opened as a GitHub App, CLEARCUTT_BOT_TOKEN, or the
 # workflow's GITHUB_TOKEN, as update-locks.yml describes. Other repositories
@@ -190,7 +190,7 @@ jobs:
             exit 0
           fi
           if [ "$FAILED" = true ]; then
-            intro="The published image could not be rebased. This moves the lock to the newest run image, so merging rebuilds the app on it from source."
+            intro="The published image could not be rebased. This moves the lock to the newest run image and the stack's newest build image, so merging rebuilds the app from source with the toolchain made for that run image."
           else
             intro="The published image is on the newest run image. This pins the lock to the same base, so the next build from source doesn't move it back."
           fi

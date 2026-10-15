@@ -227,12 +227,17 @@ func TestRebaseCommand(t *testing.T) {
 }
 
 // TestRebaseApp rebases apps by manifest and keeps their locks on the base
-// the published image is on, also when the rebase is refused.
+// the published image is on. When the rebase is refused, the lock moves to
+// the new base anyway, and to the stack's newest build image, so the
+// rebuild uses the toolchain that matches the new run image.
 func TestRebaseApp(t *testing.T) {
 	srv := httptest.NewServer(ggcrregistry.New(ggcrregistry.Logger(log.New(io.Discard, "", 0))))
 	defer srv.Close()
 	host := strings.TrimPrefix(srv.URL, "http://")
 	ctx := context.Background()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 
 	osRel := map[string]string{"etc/": "", "etc/os-release": "ID=wolfi\nVERSION_ID=20230201\n"}
 	oldBase := testIndex(t, nil, func(arch string) []v1.Layer {
@@ -262,13 +267,30 @@ func TestRebaseApp(t *testing.T) {
 	push(t, host+"/apps/bad:latest", testIndex(t, baseImage, func(string) []v1.Layer {
 		return []v1.Layer{testLayer(t, map[string]string{"usr/lib/libssl.so.3": "vendored"})}
 	}, ann))
+	push(t, host+"/apps/badreg:latest", testIndex(t, baseImage, func(string) []v1.Layer {
+		return []v1.Layer{testLayer(t, map[string]string{"usr/lib/libssl.so.3": "vendored too"})}
+	}, ann))
+	// The build image (toolchain) the platform team publishes with the run
+	// image.
+	toolchain := func(v string) v1.ImageIndex {
+		return testIndex(t, nil, func(string) []v1.Layer { return []v1.Layer{testLayer(t, map[string]string{"usr/bin/cc": v})} }, nil)
+	}
+	oldBuild, newBuild := toolchain("old"), toolchain("new")
+	push(t, host+"/build:1", oldBuild)
+	oldBuildIdx, _ := oldBuild.Digest()
+	newBuildIdx, _ := newBuild.Digest()
 
 	dir := t.TempDir()
+	stack := func(build string) string {
+		return "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Stack\nmetadata: {name: s}\nspec:\n  build: " + host + "/" + build + "\n  run: " + host + "/run:latest\n  platforms: [linux/amd64, linux/arm64]\n  steps: [{run: make}]\n"
+	}
 	files := map[string]string{
-		"factory.org.yaml": "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nregistry: " + host + "/apps\nsigning: {mode: none}\n",
-		"stack.yaml":       "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Stack\nmetadata: {name: s}\nspec:\n  build: golang:1\n  run: " + host + "/run:latest\n  platforms: [linux/amd64, linux/arm64]\n  steps: [{run: make}]\n",
-		"hello/app.yaml":   "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: App\nmetadata: {name: hello}\nspec: {stack: ../stack.yaml}\n",
-		"bad/app.yaml":     "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: App\nmetadata: {name: bad}\nspec: {stack: ../stack.yaml}\n",
+		"factory.org.yaml":    "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nregistry: " + host + "/apps\nsigning: {mode: none}\n",
+		"stack.yaml":          stack("build:1"),
+		"hello/app.yaml":      "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: App\nmetadata: {name: hello}\nspec: {stack: ../stack.yaml}\n",
+		"bad/app.yaml":        "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: App\nmetadata: {name: bad}\nspec: {stack: ../stack.yaml}\n",
+		"badreg/app.yaml":     "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: App\nmetadata: {name: badreg}\nspec: {stack: " + host + "/stacks/s:1}\n",
+		"platform/stack.yaml": stack("build:1"),
 	}
 	for n, body := range files {
 		p := filepath.Join(dir, n)
@@ -277,31 +299,55 @@ func TestRebaseApp(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	var out bytes.Buffer
+	// badreg builds on a registry stack.
+	stackPush := func(build string) string {
+		if err := os.WriteFile(filepath.Join(dir, "platform/stack.yaml"), []byte(stack(build)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := StackPush(ctx, Options{Stdout: &out, Stderr: &out}, filepath.Join(dir, "platform/stack.yaml"), host+"/stacks/s:1", true); err != nil {
+			t.Fatal(err)
+		}
+		d, err := registry.Digest(ctx, host+"/stacks/s:1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	oldStack := stackPush("build:1")
+
 	oldIdx, _ := oldBase.Digest()
 	newIdx, _ := newBase.Digest()
-	var out bytes.Buffer
-	for _, app := range []string{"hello", "bad"} {
+	fake := func(c string) lock.Image { return lock.Image{Ref: c, Digest: "sha256:" + strings.Repeat("f", 64)} }
+	for _, app := range []string{"hello", "bad", "badreg"} {
 		opts := Options{ManifestPath: filepath.Join(dir, app, "app.yaml"), Version: "test", Stdout: &out, Stderr: &out}
-		// The app's lock pins the run image it was built on.
+		// The app's lock pins the run and build images it was built with.
 		m, org, err := load(ctx, opts, false)
 		if err != nil {
 			t.Fatal(err)
 		}
-		fake := func(c string) lock.Image { return lock.Image{Ref: c, Digest: "sha256:" + strings.Repeat("f", 64)} }
 		amd, _ := baseImage("amd64").Digest()
 		arm, _ := baseImage("arm64").Digest()
 		l := &lock.Lock{
 			APIVersion: manifest.APIVersion, Kind: lock.Kind, InputsDigest: lock.InputsOf(m, org).Digest(), SourceDateEpoch: 1700000000,
 			Builder: lock.Builder{BuildKit: fake(org.Builder.BuildKit), Frontend: fake(org.Builder.Frontend), Toolbox: fake(org.Builder.Toolbox)},
 			Base:    lock.Image{Ref: m.Spec.Base, Digest: oldIdx.String()},
-			App: &lock.App{Stack: "s", StackDigest: lock.StackDigest(m.Stack), Build: fake("golang:1"),
+			App: &lock.App{Stack: "s", StackDigest: lock.StackDigest(m.Stack), Build: lock.Image{Ref: m.Stack.BuildRef, Digest: oldBuildIdx.String()},
 				RunPlatforms: map[string]string{"linux/amd64": amd.String(), "linux/arm64": arm.String()}},
+		}
+		if m.StackFrom != nil {
+			l.App.StackArtifact = &lock.Image{Ref: m.StackFrom.Ref, Digest: m.StackFrom.Digest}
 		}
 		if err := l.Write(m.LockPath()); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// The platform team publishes a new run image and, with it, a new build
+	// of the toolchain; the registry stack's new version names it.
 	push(t, host+"/run:latest", newBase)
+	push(t, host+"/build:1", newBuild)
+	push(t, host+"/build:2", newBuild)
+	newStack := stackPush("build:2")
 
 	opts := Options{ManifestPath: filepath.Join(dir, "hello", "app.yaml"), Version: "test", Stdout: &out, Stderr: &out}
 	ro := RebaseOptions{OutDir: filepath.Join(dir, "out"), Push: true, NoScan: true, UpdateLock: true}
@@ -312,8 +358,10 @@ func TestRebaseApp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.Base.Digest != newIdx.String() || l.App.Build.Digest != "sha256:"+strings.Repeat("f", 64) {
-		t.Errorf("lock: base %s (want %s), build %s\n%s", l.Base.Digest, newIdx, l.App.Build.Digest, out.String())
+	// The rebased image's layer was built with the old build image, so the
+	// lock, its recipe, keeps it.
+	if l.Base.Digest != newIdx.String() || l.App.Build.Digest != oldBuildIdx.String() {
+		t.Errorf("lock: base %s (want %s), build %s (want %s)\n%s", l.Base.Digest, newIdx, l.App.Build.Digest, oldBuildIdx, out.String())
 	}
 	cf, _ := os.ReadFile(filepath.Join(dir, "hello", "app.Containerfile"))
 	if !strings.Contains(string(cf), "FROM "+host+"/run:latest@"+newIdx.String()) {
@@ -328,15 +376,50 @@ func TestRebaseApp(t *testing.T) {
 		t.Errorf("second run: %v\n%s", err, out.String())
 	}
 
-	// A refused rebase still moves the lock, so the next build fixes it.
+	// A refused rebase still moves the lock, so the next build fixes it:
+	// to the new run image and the build image made for it, keeping the
+	// builder pins.
 	out.Reset()
 	opts.ManifestPath = filepath.Join(dir, "bad", "app.yaml")
 	err = Rebase(ctx, opts, ro)
-	if err == nil || !strings.Contains(err.Error(), "now pins the new base; build the app") {
+	if err == nil || !strings.Contains(err.Error(), "now pins the new base and the stack's newest build image; build the app") {
 		t.Fatalf("bad app: %v\n%s", err, out.String())
 	}
-	if l, _ := lock.Read(filepath.Join(dir, "bad", "app.lock.yaml")); l == nil || l.Base.Digest != newIdx.String() {
-		t.Error("refused rebase did not move the lock")
+	l, err = lock.Read(filepath.Join(dir, "bad", "app.lock.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.Base.Digest != newIdx.String() || l.App.Build.Digest != newBuildIdx.String() || l.Builder.BuildKit != fake(l.Builder.BuildKit.Ref) {
+		t.Errorf("refused rebase: base %s (want %s), build %s (want %s), buildkit %s\n%s", l.Base.Digest, newIdx, l.App.Build.Digest, newBuildIdx, l.Builder.BuildKit.Digest, out.String())
+	}
+	if !strings.Contains(out.String(), "build image "+host+"/build:1: sha256:") {
+		t.Errorf("no build image change in the summary:\n%s", out.String())
+	}
+	cf, _ = os.ReadFile(filepath.Join(dir, "bad", "app.Containerfile"))
+	if !strings.Contains(string(cf), host+"/build:1@"+newBuildIdx.String()) {
+		t.Errorf("Containerfile does not build with the new build image:\n%s", cf)
+	}
+
+	// On a registry stack, the rebuild also takes the stack's newest
+	// version (which may name another build image).
+	out.Reset()
+	opts.ManifestPath = filepath.Join(dir, "badreg", "app.yaml")
+	if err := Rebase(ctx, opts, ro); err == nil || !strings.Contains(err.Error(), "build the app") {
+		t.Fatalf("badreg app: %v\n%s", err, out.String())
+	}
+	l, err = lock.Read(filepath.Join(dir, "badreg", "app.lock.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.App.StackArtifact == nil || l.App.StackArtifact.Digest != newStack || newStack == oldStack {
+		t.Errorf("registry stack pin %+v, want %s\n%s", l.App.StackArtifact, newStack, out.String())
+	}
+	if l.Base.Digest != newIdx.String() || l.App.Build != (lock.Image{Ref: host + "/build:2", Digest: newBuildIdx.String()}) {
+		t.Errorf("refused rebase on a registry stack: base %s (want %s), build %+v\n%s", l.Base.Digest, newIdx, l.App.Build, out.String())
+	}
+	// The next build reads the new stack, and the lock is current for it.
+	if m, _, _, err := loadLocked(ctx, opts); err != nil || m.StackFrom.Digest != newStack {
+		t.Errorf("next build: %v", err)
 	}
 
 	if err := Rebase(ctx, Options{ManifestPath: filepath.Join(dir, "stack.yaml"), Stdout: &out, Stderr: &out}, ro); err == nil {

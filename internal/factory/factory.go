@@ -87,6 +87,10 @@ type LockOptions struct {
 	// UpdateBase re-resolves only the base (an app's run image) and what
 	// depends on it, e.g. after the published image was rebased.
 	UpdateBase bool
+	// UpdateStack is UpdateBase that also re-resolves an app's build image,
+	// for a rebuild on a new run image. To move a registry stack, load the
+	// manifest fresh.
+	UpdateStack bool
 	// BaseDigest pins the base to this digest instead of resolving its tag.
 	BaseDigest string
 }
@@ -108,12 +112,15 @@ func lockManifest(ctx context.Context, opts Options, m *manifest.Manifest, org *
 		return false, err
 	}
 	base := prev
-	if lo.UpdateBase && prev != nil {
+	if (lo.UpdateBase || lo.UpdateStack) && prev != nil {
 		p := *prev
 		p.Base = lock.Image{Ref: m.Spec.Base, Digest: lo.BaseDigest}
 		if p.App != nil {
 			a := *p.App
 			a.RunPlatforms = nil
+			if lo.UpdateStack {
+				a.Build = lock.Image{}
+			}
 			p.App = &a
 		}
 		base = &p

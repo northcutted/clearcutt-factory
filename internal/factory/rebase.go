@@ -44,8 +44,10 @@ type RebaseOptions struct {
 	NoSign bool
 	NoTest bool
 	// UpdateLock (manifest mode) then pins the app's lock to the base the
-	// image is on, so the next build from source doesn't move it back. If
-	// the rebase is refused, the lock still moves: building is the fix.
+	// image is on, so the next build from source doesn't move it back. The
+	// build image stays pinned: the app's layer was built with it. If the
+	// rebase is refused, the lock still moves, and with it the stack and its
+	// build image (see lockForRebuild): building is the fix.
 	UpdateLock bool
 }
 
@@ -96,13 +98,39 @@ func Rebase(ctx context.Context, opts Options, ro RebaseOptions) error {
 		return err
 	}
 	if ro.UpdateLock {
+		if refused.msg != "" {
+			if lerr := lockForRebuild(ctx, opts, m, onto); lerr != nil {
+				return errors.Join(err, lerr)
+			}
+			return fmt.Errorf("%w\n%s now pins the new base and the stack's newest build image; build the app to move it", err, rel(m.LockPath()))
+		}
 		if _, lerr := lockManifest(ctx, opts, m, org, LockOptions{UpdateBase: true, BaseDigest: onto}); lerr != nil {
 			return errors.Join(err, lerr)
 		}
-		if refused.msg != "" {
-			return fmt.Errorf("%w\n%s now pins the new base; build the app to move it", err, rel(m.LockPath()))
-		}
 	}
+	return err
+}
+
+// lockForRebuild re-locks an app whose rebase was refused for the build that
+// replaces it: the stack (a registry stack where its reference points now),
+// its build image, and its run image (at onto, the build the rebase was
+// refused for, unless the stack now names another run image). The build
+// image moves with the run image, because the platform team builds them in
+// step: with the old toolchain, the app would link libraries (sonames) the
+// new run image may not have.
+func lockForRebuild(ctx context.Context, opts Options, pinned *manifest.Manifest, onto string) error {
+	m, org, err := load(ctx, opts, true)
+	if err != nil {
+		return err
+	}
+	if err := verifyStack(ctx, m, org); err != nil {
+		return err
+	}
+	lo := LockOptions{UpdateStack: true}
+	if m.Spec.Base == pinned.Spec.Base {
+		lo.BaseDigest = onto
+	}
+	_, err = lockManifest(ctx, opts, m, org, lo)
 	return err
 }
 
