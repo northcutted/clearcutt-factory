@@ -160,10 +160,15 @@
           "type": "array"
         },
         "key": {
+          "description": "Key signs images in key mode: a file (relative to this profile) or a cosign KMS URI.",
           "type": "string"
         },
         "mode": {
           "description": "Mode is keyless (Sigstore OIDC), key (file or KMS URI), or none.",
+          "type": "string"
+        },
+        "stackKey": {
+          "description": "StackKey signs stacks (stack push) in key mode instead of Key, so stacks can have a signer of their own (see Stacks).",
           "type": "string"
         },
         "stacks": {

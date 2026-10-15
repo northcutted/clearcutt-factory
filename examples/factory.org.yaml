@@ -24,6 +24,7 @@ builder:
 signing:
   mode: keyless            # keyless (Sigstore OIDC) | key (file or KMS URI) | none
   # key: awskms:///alias/image-signing
+  # stackKey: awskms:///alias/stack-signing   # key mode: signs stacks (stack push); default: key
   # args: [--use-signing-config=false, --tlog-upload=false]   # private: no public Rekor
   verify:
     certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/

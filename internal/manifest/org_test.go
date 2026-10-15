@@ -32,3 +32,24 @@ func TestBuilderContainer(t *testing.T) {
 		}
 	}
 }
+
+// TestStackKey: signing.stackKey is relative to the profile, like
+// signing.key, and only for key mode.
+func TestStackKey(t *testing.T) {
+	const head = "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\n"
+	dir := writeFiles(t, map[string]string{
+		"key.yaml":     head + "signing: {mode: key, key: keys/images.key, stackKey: keys/stacks.key}\n",
+		"kms.yaml":     head + "signing: {mode: key, key: keys/images.key, stackKey: \"awskms:///alias/stacks\"}\n",
+		"keyless.yaml": head + "signing: {mode: keyless, stackKey: keys/stacks.key}\n",
+	})
+	org, err := LoadOrg(filepath.Join(dir, "key.yaml"), "")
+	if err != nil || org.Signing.StackKey != filepath.Join(dir, "keys", "stacks.key") {
+		t.Errorf("stackKey: %v %q", err, org.Signing.StackKey)
+	}
+	if org, err = LoadOrg(filepath.Join(dir, "kms.yaml"), ""); err != nil || org.Signing.StackKey != "awskms:///alias/stacks" {
+		t.Errorf("KMS stackKey: %v %q", err, org.Signing.StackKey)
+	}
+	if _, err := LoadOrg(filepath.Join(dir, "keyless.yaml"), ""); err == nil || !strings.Contains(err.Error(), "signing.stackKey is only used when signing.mode is key") {
+		t.Errorf("keyless stackKey: %v", err)
+	}
+}

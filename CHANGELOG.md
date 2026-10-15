@@ -14,6 +14,21 @@ registries, CA certificates. `builder.network` sets its network (e.g.
 but not built, short of a custom BuildKit image or `builder.addr`.
 `docs/adopting.md` shows both for Linux and for Docker or Podman in a VM.
 
+**Stacks can have a signing key of their own
+([#41](https://github.com/northcutted/clearcutt-factory/issues/41)).** In
+key mode, `signing.key` signed stacks too, so a separate stack signer
+(`signing.stacks.key`) needed a second org profile. `signing.stackKey` signs
+stacks instead (relative to the profile, or a KMS URI), and `stack push
+--key` signs with a given key whatever `signing.mode` says.
+
+**`stack push` signs a stack once
+([#44](https://github.com/northcutted/clearcutt-factory/issues/44)).** It
+pushed and signed every time, so re-running it on an unchanged stack added
+another signature to the same digest. When the registry already has the
+digest and one of the org's stack signers signed it (or signing is off), it
+now only moves the tag, as `build --push` does. With no stack signer
+configured it can't tell, and signs again.
+
 **`policy.requireSignedStacks` holds wherever a stack is used.** Only `lock`
 checked the stack's signature: `render`, `build`, `verify`, and `rebase` used
 whatever version the lock pinned, so a pull request that edited

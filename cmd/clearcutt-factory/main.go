@@ -42,9 +42,10 @@ Usage:
   clearcutt-factory rebase  [-f app.yaml] [--update-lock] [--no-test] [same flags]
       Rebase the app's published image onto its stack's run image and smoke-test
       it; --update-lock then pins the lock to that base.
-  clearcutt-factory stack push [-f stack.yaml] --ref REGISTRY/REPOSITORY:TAG [--no-sign]
+  clearcutt-factory stack push [-f stack.yaml] --ref REGISTRY/REPOSITORY:TAG [--key K | --no-sign]
       Publish a stack so apps in any repository can name it (spec.stack: REF),
-      and sign it.
+      and sign it (with --key K, signing.stackKey, or as images are signed).
+      An unchanged stack the org's stack signer signed only moves the tag.
   clearcutt-factory version
 
 Common flags:
@@ -182,8 +183,10 @@ func run(ctx context.Context, args []string) error {
 		if len(args) == 0 || args[0] != "push" {
 			return usageError{}
 		}
-		ref := fs.String("ref", "", "")
-		noSign := fs.Bool("no-sign", false, "")
+		var so factory.StackPushOptions
+		fs.StringVar(&so.Ref, "ref", "", "")
+		fs.StringVar(&so.Key, "key", "", "")
+		fs.BoolVar(&so.NoSign, "no-sign", false, "")
 		if err := parse(fs, args[1:]); err != nil {
 			return err
 		}
@@ -191,10 +194,10 @@ func run(ctx context.Context, args []string) error {
 		if flagSet(fs, "f") {
 			file = opts.ManifestPath
 		}
-		if *ref == "" {
+		if so.Ref == "" {
 			return errors.New("stack push needs --ref REGISTRY/REPOSITORY:TAG")
 		}
-		return factory.StackPush(ctx, opts, file, *ref, *noSign)
+		return factory.StackPushWith(ctx, opts, file, so)
 
 	case "version", "--version":
 		fmt.Println(versionString())

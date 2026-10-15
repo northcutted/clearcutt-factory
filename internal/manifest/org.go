@@ -93,9 +93,14 @@ type Builder struct {
 
 type Signing struct {
 	// Mode is keyless (Sigstore OIDC), key (file or KMS URI), or none.
-	Mode string   `yaml:"mode,omitempty"`
-	Key  string   `yaml:"key,omitempty"`
-	Args []string `yaml:"args,omitempty"`
+	Mode string `yaml:"mode,omitempty"`
+	// Key signs images in key mode: a file (relative to this profile) or a
+	// cosign KMS URI.
+	Key string `yaml:"key,omitempty"`
+	// StackKey signs stacks (stack push) in key mode instead of Key, so
+	// stacks can have a signer of their own (see Stacks).
+	StackKey string   `yaml:"stackKey,omitempty"`
+	Args     []string `yaml:"args,omitempty"`
 	// Verify is who signs this repository's images. `verify --image`, the
 	// already-published check, and repeating rebases verify against it.
 	Verify VerifyIdentity `yaml:"verify,omitempty"`
@@ -210,6 +215,9 @@ func (o *Org) validate() error {
 	default:
 		errs = append(errs, fmt.Errorf("signing.mode %q must be keyless, key, or none", o.Signing.Mode))
 	}
+	if o.Signing.StackKey != "" && o.Signing.Mode != "key" {
+		errs = append(errs, errors.New("signing.stackKey is only used when signing.mode is key (stack push --key signs with a key in any mode)"))
+	}
 	switch o.Vulnerabilities.Scanner {
 	case "grype", "none":
 	default:
@@ -302,6 +310,7 @@ func LoadOrg(path, startDir string) (*Org, error) {
 	o.Path, _ = filepath.Abs(path)
 	dir := filepath.Dir(o.Path)
 	o.Signing.Key = keyPath(dir, o.Signing.Key)
+	o.Signing.StackKey = keyPath(dir, o.Signing.StackKey)
 	o.Signing.Verify.Key = keyPath(dir, o.Signing.Verify.Key)
 	o.Signing.Stacks.Key = keyPath(dir, o.Signing.Stacks.Key)
 	if c := o.Builder.Config; c != "" && !filepath.IsAbs(c) {

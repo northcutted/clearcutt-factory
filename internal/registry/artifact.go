@@ -25,29 +25,7 @@ func PushFile(ctx context.Context, ref, artifactType, fileName string, content [
 	if err != nil {
 		return "", err
 	}
-	layer := static.NewLayer(content, types.MediaType(artifactType))
-	config := static.NewLayer(emptyConfig, "application/vnd.oci.empty.v1+json")
-	ld, err := partial.Descriptor(layer)
-	if err != nil {
-		return "", err
-	}
-	ld.Annotations = map[string]string{"org.opencontainers.image.title": fileName}
-	cd, err := partial.Descriptor(config)
-	if err != nil {
-		return "", err
-	}
-	m := v1.Manifest{
-		SchemaVersion: 2,
-		MediaType:     types.OCIManifestSchema1,
-		ArtifactType:  artifactType,
-		Config:        *cd,
-		Layers:        []v1.Descriptor{*ld},
-	}
-	raw, err := json.Marshal(m)
-	if err != nil {
-		return "", err
-	}
-	img, err := partial.CompressedToImage(&artifact{manifest: raw, config: config, layer: layer, layerDigest: ld.Digest})
+	img, err := fileArtifact(artifactType, fileName, content)
 	if err != nil {
 		return "", err
 	}
@@ -59,6 +37,47 @@ func PushFile(ctx context.Context, ref, artifactType, fileName string, content [
 		return "", err
 	}
 	return d.String(), nil
+}
+
+// FileDigest is the digest PushFile gives the artifact, without pushing it.
+func FileDigest(artifactType, fileName string, content []byte) (string, error) {
+	img, err := fileArtifact(artifactType, fileName, content)
+	if err != nil {
+		return "", err
+	}
+	d, err := img.Digest()
+	if err != nil {
+		return "", err
+	}
+	return d.String(), nil
+}
+
+// fileArtifact assembles the single-file artifact; its digest depends only
+// on its arguments.
+func fileArtifact(artifactType, fileName string, content []byte) (v1.Image, error) {
+	layer := static.NewLayer(content, types.MediaType(artifactType))
+	config := static.NewLayer(emptyConfig, "application/vnd.oci.empty.v1+json")
+	ld, err := partial.Descriptor(layer)
+	if err != nil {
+		return nil, err
+	}
+	ld.Annotations = map[string]string{"org.opencontainers.image.title": fileName}
+	cd, err := partial.Descriptor(config)
+	if err != nil {
+		return nil, err
+	}
+	m := v1.Manifest{
+		SchemaVersion: 2,
+		MediaType:     types.OCIManifestSchema1,
+		ArtifactType:  artifactType,
+		Config:        *cd,
+		Layers:        []v1.Descriptor{*ld},
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	return partial.CompressedToImage(&artifact{manifest: raw, config: config, layer: layer, layerDigest: ld.Digest})
 }
 
 // FetchFile reads a single-file artifact of artifactType at ref and returns

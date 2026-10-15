@@ -85,7 +85,10 @@ clearcutt-factory stack push -f stacks/go.yaml --ref ghcr.io/acme/stacks/go:1
 
 Build and run images given as factory manifests (`run: ../go-runtime/image.yaml`)
 are resolved to their published references before pushing, and the stack is
-signed. App repositories name it by reference:
+signed. A stack is published by its content, so pushing an unchanged one
+again only moves the tag, once the org's stack signer (`signing.stacks`,
+below) has signed it: a workflow can run `stack push` on every change
+without piling up signatures. App repositories name it by reference:
 
 ```yaml
 kind: App
@@ -133,6 +136,21 @@ signer names its repository with `sourceRepository` (or is a workflow in it,
 as above), and with `policy.requireSignedStacks` a stack signer with
 `sourceMatchesImage` is an error. Pinning the workflows by commit SHA changes
 the identity's `@…` suffix: adjust the regexp to match.
+
+**With keys.** In key mode, `signing.key` signs images and
+`signing.stackKey` signs stacks (default: `signing.key`), so a platform's
+stacks can have a signer of their own; `signing.verify.key` and
+`signing.stacks.key` are the public halves. `stack push --key` signs with
+another key (a file or KMS URI) whatever `signing.mode` says:
+
+```yaml
+signing:
+  mode: key
+  key: awskms:///alias/images         # signs images
+  stackKey: awskms:///alias/stacks    # signs stacks (stack push)
+  verify: {key: keys/images.pub}
+  stacks: {key: keys/stacks.pub}
+```
 
 **One trust policy for the organization.** Instead of `verify` and `stacks`,
 `signing.trustPolicy` can name a ClearCutt trust policy, the same file
