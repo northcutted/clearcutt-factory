@@ -192,6 +192,10 @@ const workflowTemplate = `# Builds, publishes, and maintains this repository's i
 # https://github.com/northcutted/clearcutt-factory/blob/{{ref}}/docs/adopting.md#a-github-app-for-the-automation
 # Secrets are passed by name because secrets: inherit reaches only workflows
 # in this repository's own organization or enterprise.
+#
+# Across repositories: a platform repository's notify job wakes the
+# repositories with the topic clearcutt-app when it publishes run images or
+# stacks; theirs then rebase onto the new run image or propose the new stack.
 name: clearcutt-factory
 on:
   push:
@@ -201,11 +205,15 @@ on:
     - cron: "23 6 * * 1" # weekly: re-resolve every input, one pull request per manifest
     - cron: "41 5 * * *" # daily: rebase apps onto the newest build of their run image
   workflow_dispatch:
+  # From a platform repository's notify job. The payload is only a hint: the
+  # jobs re-resolve everything from the registry and verify it.
+  repository_dispatch:
+    types: [clearcutt.run-image-published, clearcutt.stack-published]
 permissions:
   contents: read
 jobs:
   images:
-    if: github.event_name != 'schedule'
+    if: github.event_name != 'schedule' && github.event_name != 'repository_dispatch'
     uses: northcutted/clearcutt-factory/.github/workflows/images.yml@{{ref}}
     permissions: {contents: read, packages: write, id-token: write, attestations: write}
     secrets:
@@ -213,7 +221,7 @@ jobs:
       REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
 
   update-locks:
-    if: github.event.schedule == '23 6 * * 1' || github.event_name == 'workflow_dispatch'
+    if: github.event.schedule == '23 6 * * 1' || github.event_name == 'workflow_dispatch' || github.event.action == 'clearcutt.stack-published'
     uses: northcutted/clearcutt-factory/.github/workflows/update-locks.yml@{{ref}}
     permissions: {contents: write, pull-requests: write}
     secrets:
@@ -222,7 +230,7 @@ jobs:
 
   fleet:
     needs: images
-    if: always() && (github.event.schedule == '41 5 * * *' || (github.event_name == 'push' && needs.images.result == 'success'))
+    if: always() && (github.event.schedule == '41 5 * * *' || github.event.action == 'clearcutt.run-image-published' || (github.event_name == 'push' && needs.images.result == 'success'))
     uses: northcutted/clearcutt-factory/.github/workflows/fleet.yml@{{ref}}
     permissions: {contents: write, pull-requests: write, packages: write, id-token: write}
     secrets:
@@ -230,4 +238,18 @@ jobs:
       CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
       REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
       REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+
+  # Wakes the repositories with the topic clearcutt-app when this one
+  # publishes images (run images, typically). Needs a GitHub App installed on
+  # them, or a CLEARCUTT_BOT_TOKEN that can write to them.
+  notify:
+    needs: images
+    if: ${{ !cancelled() && github.event_name == 'push' && needs.images.outputs.published != '[]' && needs.images.outputs.published != '' }}
+    uses: northcutted/clearcutt-factory/.github/workflows/notify.yml@{{ref}}
+    permissions: {contents: read}
+    with:
+      published: ${{ needs.images.outputs.published }}
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
 `

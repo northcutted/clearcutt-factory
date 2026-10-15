@@ -1,0 +1,174 @@
+# Wakes the repositories that build on what a platform repository published,
+# so its apps catch up in minutes instead of at their next scheduled run.
+#
+# For each newly published image (kind image) it sends repository_dispatch
+# clearcutt.run-image-published, and for each stack (kind stack)
+# clearcutt.stack-published, with the client payload
+# {image (repository@digest), repository, digest, tags, source (this
+# repository)}. Apps (kind app) have no dependents and are skipped. Payloads
+# are advisory: receivers re-resolve tags from the registry and verify
+# signatures themselves (init's workflow runs fleet.yml and update-locks.yml
+# on these events), so a stale or forged dispatch can at most start a run
+# that changes nothing.
+#
+# Dependents are the owner's repositories with the topic clearcutt-app (the
+# topic and owner inputs), or the repositories input. The repository that
+# published is left out: its own jobs already follow its publishes. Search
+# results can lag a topic change by a few minutes.
+#
+# Dispatching to other repositories needs an identity that can write to them;
+# the workflow's GITHUB_TOKEN reaches only its own repository. In order:
+#
+#   1. A GitHub App installed on the dependents (the app-id input or a
+#      CLEARCUTT_APP_ID variable, and a CLEARCUTT_APP_PRIVATE_KEY secret)
+#      with Contents: read and write. One token, with metadata read on the
+#      owner's repositories the App is installed on, finds the dependents;
+#      another, with contents write on only those repositories, dispatches.
+#   2. A CLEARCUTT_BOT_TOKEN secret with Contents: read and write on them.
+#
+#   jobs:
+#     images:
+#       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.1.1
+#       permissions: {contents: read, packages: write, id-token: write, attestations: write}
+#     notify:
+#       needs: images
+#       if: ${{ !cancelled() && github.event_name == 'push' && needs.images.outputs.published != '[]' }}
+#       uses: northcutted/clearcutt-factory/.github/workflows/notify.yml@v0.1.1
+#       permissions: {contents: read}
+#       with:
+#         published: ${{ needs.images.outputs.published }}
+#       secrets:
+#         CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+#         CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+name: notify
+on:
+  workflow_call:
+    inputs:
+      published:
+        description: 'What was published: a JSON array of {kind (image, app, or stack), image (repository@digest), repository, digest, tags}, such as images.yml''s published output'
+        type: string
+        required: true
+      topic:
+        description: Dependents are the owner's repositories with this topic
+        type: string
+        default: clearcutt-app
+      owner:
+        description: Whose repositories to search (default this repository's owner)
+        type: string
+        default: ""
+      repositories:
+        description: Dependents to notify instead of searching by topic (names in the owner, or owner/name), space-separated
+        type: string
+        default: ""
+      app-id:
+        description: GitHub App to dispatch as, by Client ID or App ID (default the CLEARCUTT_APP_ID variable); needs the CLEARCUTT_APP_PRIVATE_KEY secret
+        type: string
+        default: ""
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY:
+        description: Private key of the GitHub App named by app-id or CLEARCUTT_APP_ID
+        required: false
+      CLEARCUTT_BOT_TOKEN:
+        description: Token to dispatch with when there is no GitHub App (Contents read and write on the dependents)
+        required: false
+permissions:
+  contents: read
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      APP_ID: ${{ inputs.app-id || vars.CLEARCUTT_APP_ID }}
+      APP_KEY_SET: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY != '' }}
+      OWNER: ${{ inputs.owner || github.repository_owner }}
+    steps:
+      - name: What to announce
+        id: events
+        env:
+          PUBLISHED: ${{ inputs.published }}
+        run: |
+          # One dispatch body per line.
+          jq -c --arg source "$GITHUB_REPOSITORY" '
+            .[]
+            | ((.kind // "image") | ascii_downcase) as $kind
+            | select(($kind == "image" or $kind == "stack") and (.digest // "") != "")
+            | (.repository // (.image | sub("@.*$"; ""))) as $repository
+            | {
+                event_type: (if $kind == "stack" then "clearcutt.stack-published" else "clearcutt.run-image-published" end),
+                client_payload: {image: (.image // ($repository + "@" + .digest)), repository: $repository, digest, tags: (.tags // []), source: $source}
+              }' <<<"${PUBLISHED:-[]}" > "$RUNNER_TEMP/events"
+          if [ -s "$RUNNER_TEMP/events" ]; then
+            echo "any=true" >> "$GITHUB_OUTPUT"
+            jq -r '"\(.event_type) \(.client_payload.image)"' "$RUNNER_TEMP/events"
+          else
+            echo "nothing to announce"
+          fi
+
+      # Half an App (an ID without a key, or a key without an ID) fails here
+      # rather than quietly falling back to another identity.
+      - name: Mint a GitHub App token to find dependents
+        id: find-token
+        if: steps.events.outputs.any == 'true' && inputs.repositories == '' && (env.APP_ID != '' || env.APP_KEY_SET == 'true')
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ env.APP_ID }}
+          private-key: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+          owner: ${{ env.OWNER }}
+          permission-metadata: read
+
+      - name: Find dependents
+        id: find
+        if: steps.events.outputs.any == 'true'
+        env:
+          GH_TOKEN: ${{ steps.find-token.outputs.token || secrets.CLEARCUTT_BOT_TOKEN || github.token }}
+          TOPIC: ${{ inputs.topic }}
+          REPOSITORIES: ${{ inputs.repositories }}
+        run: |
+          if [ -n "$REPOSITORIES" ]; then
+            for r in $REPOSITORIES; do
+              case "$r" in */*) echo "$r" ;; *) echo "$OWNER/$r" ;; esac
+            done > "$RUNNER_TEMP/found"
+          else
+            gh search repos --owner "$OWNER" --topic "$TOPIC" --archived=false --limit 1000 --json fullName --jq '.[].fullName' > "$RUNNER_TEMP/found"
+          fi
+          { grep -vixF "$GITHUB_REPOSITORY" "$RUNNER_TEMP/found" || true; } | sort -u > "$RUNNER_TEMP/dependents"
+          if [ -s "$RUNNER_TEMP/dependents" ]; then
+            echo "repositories=$(paste -sd, "$RUNNER_TEMP/dependents")" >> "$GITHUB_OUTPUT"
+            cat "$RUNNER_TEMP/dependents"
+          else
+            echo "no dependents of $GITHUB_REPOSITORY (repositories of $OWNER with the topic $TOPIC, or the repositories input)"
+          fi
+
+      - name: Mint a GitHub App token for the dependents
+        id: dispatch-token
+        if: steps.find.outputs.repositories != '' && (env.APP_ID != '' || env.APP_KEY_SET == 'true')
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ env.APP_ID }}
+          private-key: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+          owner: ${{ env.OWNER }}
+          repositories: ${{ steps.find.outputs.repositories }}
+          permission-contents: write
+
+      - name: Dispatch
+        if: steps.find.outputs.repositories != ''
+        env:
+          GH_TOKEN: ${{ steps.dispatch-token.outputs.token || secrets.CLEARCUTT_BOT_TOKEN || github.token }}
+        run: |
+          failed=0
+          while read -r repo; do
+            while read -r event; do
+              what=$(jq -r '"\(.event_type) \(.client_payload.image)"' <<<"$event")
+              if gh api --method POST "repos/$repo/dispatches" --input - <<<"$event" >/dev/null; then
+                echo "$repo: $what"
+              else
+                echo "::error::could not send $what to $repo: the GitHub App must be installed there, or CLEARCUTT_BOT_TOKEN needs Contents read and write on it"
+                failed=1
+              fi
+            done < "$RUNNER_TEMP/events"
+          done < "$RUNNER_TEMP/dependents"
+          exit "$failed"

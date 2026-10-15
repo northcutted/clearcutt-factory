@@ -409,6 +409,8 @@ func TestRegistryStack(t *testing.T) {
 	}
 	var out bytes.Buffer
 	opts := Options{Stdout: &out, Stderr: &out}
+	ghOutput := filepath.Join(dir, "github-output")
+	t.Setenv("GITHUB_OUTPUT", ghOutput)
 	if err := StackPush(ctx, opts, filepath.Join(dir, "platform/stacks/go.yaml"), host+"/stacks/go:1", false); err != nil {
 		t.Fatal(err)
 	}
@@ -425,6 +427,11 @@ func TestRegistryStack(t *testing.T) {
 	}
 	if strings.Join(m.Spec.Entrypoint, " ") != "/app/svc" {
 		t.Errorf("entrypoint = %v", m.Spec.Entrypoint)
+	}
+	// The workflow learns what was pushed, for notify.yml.
+	gho, _ := os.ReadFile(ghOutput)
+	if want := "image=" + host + "/stacks/go@" + m.StackFrom.Digest + "\nrepository=" + host + "/stacks/go\ndigest=" + m.StackFrom.Digest + "\n"; !strings.HasPrefix(string(gho), want) {
+		t.Errorf("GITHUB_OUTPUT:\n%s\nwant prefix\n%s", gho, want)
 	}
 
 	// A lock pin wins over the tag, even after the tag moves.

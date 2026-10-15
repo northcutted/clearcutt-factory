@@ -5,6 +5,20 @@ what may change between releases.
 
 ## Unreleased
 
+**A platform repository wakes the apps that build on it
+([#13](https://github.com/northcutted/clearcutt-factory/issues/13)).**
+`images.yml` has an output, `published`: what the run newly published, as a
+JSON array of `{manifest, kind, image, repository, digest, tags}`. The new
+reusable `notify.yml` takes it (or stacks a job of yours pushed; `stack push`
+now writes `image`, `repository`, and `digest` to `$GITHUB_OUTPUT`) and sends
+`repository_dispatch` to the owner's repositories with the topic
+`clearcutt-app`: `clearcutt.run-image-published` for images and
+`clearcutt.stack-published` for stacks, with the payload `{image,
+repository, digest, tags, source}`. `init`'s workflow notifies after
+publishing and answers the events with `fleet.yml` and `update-locks.yml`,
+treating the payload as a hint. Dispatching needs a GitHub App installed on
+the dependents, or a `CLEARCUTT_BOT_TOKEN` that can write to them.
+
 **A GitHub App can open the bot's pull requests
 ([#17](https://github.com/northcutted/clearcutt-factory/issues/17)).**
 `update-locks.yml` and `fleet.yml` take a GitHub App (its Client ID or App ID

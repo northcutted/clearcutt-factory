@@ -55,8 +55,17 @@ func TestInit(t *testing.T) {
 	if err != nil || len(args) != 1 || !strings.Contains(strings.Join(args[0], " "), "--certificate-github-workflow-repository Acme/platform-images") {
 		t.Errorf("signer args %q, %v", args, err)
 	}
-	if !strings.Contains(string(wf), "northcutted/clearcutt-factory/.github/workflows/images.yml@v1.2.3") {
-		t.Errorf("workflow:\n%s", wf)
+	for _, want := range []string{
+		"northcutted/clearcutt-factory/.github/workflows/images.yml@v1.2.3",
+		"northcutted/clearcutt-factory/.github/workflows/notify.yml@v1.2.3",
+		// Dependents of a platform repository are woken by its notify job.
+		"types: [clearcutt.run-image-published, clearcutt.stack-published]",
+		"github.event.action == 'clearcutt.run-image-published'",
+		"github.event.action == 'clearcutt.stack-published'",
+	} {
+		if !strings.Contains(string(wf), want) {
+			t.Errorf("workflow lacks %q:\n%s", want, wf)
+		}
 	}
 
 	// The scaffold is a working setup: the example loads under the org.

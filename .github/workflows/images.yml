@@ -16,6 +16,9 @@
 # other than ghcr.io. Pass them by name (secrets: {REGISTRY_USERNAME: …});
 # secrets: inherit reaches only workflows in the caller's organization or
 # enterprise.
+#
+# Output: published, what the run newly published (see the published job).
+# notify.yml takes it to wake the repositories that build on those images.
 name: images
 on:
   push:
@@ -47,6 +50,10 @@ on:
       REGISTRY_PASSWORD:
         description: Registry password or token, for a registry other than ghcr.io
         required: false
+    outputs:
+      published:
+        description: 'What the run newly published, a JSON array of {manifest, kind (image or app), image (repository@digest), repository, digest, tags}; [] on pull requests and when nothing changed'
+        value: ${{ jobs.published.outputs.published || '[]' }}
 permissions:
   contents: read
 # One run at a time per ref (and manifests), so two pushes can't race on the
@@ -176,6 +183,52 @@ jobs:
             out/*/result.json
             out/*/attestations/
           if-no-files-found: ignore
+
+      # A newly published image, for the published job: also when a later
+      # step failed, since the image is out there either way.
+      - name: Record what was published
+        id: record
+        if: ${{ !cancelled() && steps.build.outputs.published == 'true' }}
+        env:
+          MANIFEST: ${{ matrix.manifest }}
+          IMAGE: ${{ steps.build.outputs.image }}
+          REPOSITORY: ${{ steps.build.outputs.repository }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          kind=$(sed -n "s/^kind:[[:space:]]*[\"']\{0,1\}\([A-Za-z]*\).*/\1/p" "$MANIFEST" | head -n 1 | tr '[:upper:]' '[:lower:]')
+          result=$(find out -mindepth 2 -maxdepth 2 -name result.json | head -n 1)
+          mkdir -p "$RUNNER_TEMP/published"
+          jq -c --arg manifest "$MANIFEST" --arg kind "${kind:-image}" --arg image "$IMAGE" --arg repository "$REPOSITORY" --arg digest "$DIGEST" \
+            '{manifest: $manifest, kind: $kind, image: $image, repository: $repository, digest: $digest, tags: (.tags // [])}' "$result" \
+            | tee "$RUNNER_TEMP/published/published.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !cancelled() && steps.record.outcome == 'success' }}
+        with:
+          name: clearcutt-published-${{ steps.slug.outputs.slug }}
+          path: ${{ runner.temp }}/published/published.json
+
+  # The workflow's published output: every image and app this run newly
+  # published, as a JSON array of {manifest, kind, image, repository, digest,
+  # tags}. Images that were already published (only their tags moved) are
+  # not in it.
+  published:
+    needs: build
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.build.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    outputs:
+      published: ${{ steps.list.outputs.published }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: clearcutt-published-*
+          path: published
+      - id: list
+        shell: bash
+        run: |
+          mkdir -p published # no artifact when nothing was published
+          find published -name published.json -exec cat {} + | jq -s -c 'sort_by(.manifest)' > "$RUNNER_TEMP/published.json"
+          echo "published=$(cat "$RUNNER_TEMP/published.json")" >> "$GITHUB_OUTPUT"
+          jq . "$RUNNER_TEMP/published.json"
 
   # A second, independent machine rebuilds each newly published image from its
   # signed recipe alone: also when another manifest failed to build (that
