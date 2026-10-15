@@ -2,6 +2,7 @@ package factory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -15,27 +16,168 @@ import (
 // returns the tags it moved. A tag that holds an image superseding art (see
 // supersedes) stays where it is unless force is set: republishing an image
 // must not take a tag back to it, e.g. a rebuild from a lock that still
-// pins the base an app was rebased off.
-func moveTags(ctx context.Context, opts Options, art *registry.Artifact, repo string, tags []string, force bool) ([]string, error) {
+// pins the base an app was rebased off. A tag in held that has moved
+// since stays too (see retag) and is returned in left.
+func moveTags(ctx context.Context, opts Options, art *registry.Artifact, repo string, tags []string, force bool, held map[string]string) (moved []string, left movedTags, err error) {
 	ref := repo + "@" + art.Digest
-	var moved []string
 	for _, tag := range tags {
 		if !force {
 			why, err := supersedes(ctx, repo+":"+tag, art)
 			if err != nil {
-				return moved, fmt.Errorf("checking what %s:%s holds before moving it to %s (--force-tags skips the check): %w", repo, tag, art.Digest, err)
+				return moved, left, fmt.Errorf("checking what %s:%s holds before moving it to %s (--force-tags skips the check): %w", repo, tag, art.Digest, err)
 			}
 			if why != "" {
 				opts.logf("warning: left %s:%s where it is: it holds %s; pass --force-tags to move it back to %s", repo, tag, why, shortDigest(art.Digest))
 				continue
 			}
 		}
-		if err := registry.Tag(ctx, ref, []string{tag}); err != nil {
-			return moved, err
+		ok, err := retag(ctx, ref, tag, held, &left)
+		if err != nil {
+			return moved, left, err
 		}
-		moved = append(moved, tag)
+		if ok {
+			moved = append(moved, tag)
+		}
 	}
-	return moved, nil
+	return moved, left, nil
+}
+
+// retag points tag at ref, an image already in the registry. A tag in held
+// moves only if it still holds the digest held names for it ("" for none):
+// what it held when the caller decided to move it. Otherwise it stays, it
+// is added to left, and retag returns false.
+func retag(ctx context.Context, ref, tag string, held map[string]string, left *movedTags) (bool, error) {
+	want, ok := held[tag]
+	if !ok {
+		return true, registry.Tag(ctx, ref, []string{tag})
+	}
+	err := registry.TagIf(ctx, ref, tag, want)
+	var moved *registry.MovedError
+	if errors.As(err, &moved) {
+		*left = append(*left, moved)
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// movedTags lists tags left where they are because they moved after the
+// caller looked: another publish took them.
+type movedTags []*registry.MovedError
+
+func (m movedTags) Error() string {
+	s := make([]string, len(m))
+	for i, e := range m {
+		s[i] = e.Error()
+	}
+	return strings.Join(s, "; ")
+}
+
+func (m movedTags) orNil() error {
+	if len(m) == 0 {
+		return nil
+	}
+	return m
+}
+
+// onNewerBase looks up what each of repo's tags holds ("" for none) before
+// a build moves them to art, and says why art must not take them as it is:
+// a tag holds an image on a newer build of art's base. That is, on some
+// platform, the same base (org.opencontainers.image.base.name) at another
+// digest while the base's tag no longer points at art's, where the base's
+// tag points now or created after art's base. why is "" when no tag holds
+// such an image, or art doesn't name its base.
+func onNewerBase(ctx context.Context, art *registry.Artifact, repo string, tags []string) (why string, held map[string]string, err error) {
+	plats, err := art.Platforms()
+	if err != nil {
+		return "", nil, err
+	}
+	type base struct{ name, digest string }
+	bases := map[string]base{} // platform → art's base
+	for _, p := range plats {
+		m, err := p.Image.Manifest()
+		if err != nil {
+			return "", nil, err
+		}
+		n, d := m.Annotations[rebase.AnnotationBaseName], m.Annotations[rebase.AnnotationBaseDigest]
+		if n == "" || d == "" {
+			return "", nil, nil
+		}
+		bases[p.Platform] = base{registry.Qualify(n), d}
+	}
+	held = map[string]string{}
+	current := map[string]map[string]string{} // base tag → platform → digest
+	for _, tag := range tags {
+		d, err := registry.Lookup(ctx, repo+":"+tag)
+		if err != nil {
+			return "", nil, err
+		}
+		held[tag] = d
+		if why != "" || d == "" || d == art.Digest {
+			continue
+		}
+		cur, err := registry.Fetch(ctx, repo+"@"+d)
+		if err != nil {
+			return "", nil, err
+		}
+		curPlats, err := cur.Platforms()
+		if err != nil {
+			return "", nil, err
+		}
+		for _, c := range curPlats {
+			b, ok := bases[c.Platform]
+			if !ok {
+				continue
+			}
+			cm, err := c.Image.Manifest()
+			if err != nil {
+				return "", nil, err
+			}
+			cd := cm.Annotations[rebase.AnnotationBaseDigest]
+			if registry.Qualify(cm.Annotations[rebase.AnnotationBaseName]) != b.name || cd == "" || cd == b.digest {
+				continue
+			}
+			if current[b.name] == nil {
+				if current[b.name], err = registry.PlatformDigests(ctx, b.name); err != nil {
+					return "", nil, err
+				}
+			}
+			now := current[b.name][c.Platform]
+			if now == b.digest {
+				continue
+			}
+			newer := cd == now
+			if !newer {
+				if newer, err = createdAfter(ctx, b.name, cd, b.digest); err != nil {
+					return "", nil, err
+				}
+			}
+			if newer {
+				why = fmt.Sprintf("%s:%s holds %s, on a newer build of %s (%s) than this image's (%s)", repo, tag, shortDigest(d), b.name, shortDigest(cd), shortDigest(b.digest))
+				break
+			}
+		}
+	}
+	return why, held, nil
+}
+
+// createdAfter reports whether image a of base (by digest) was created
+// after image b.
+func createdAfter(ctx context.Context, base, a, b string) (bool, error) {
+	var t [2]time.Time
+	for i, d := range []string{a, b} {
+		img, err := registry.Fetch(ctx, lock.RepoOf(base)+"@"+d)
+		if err != nil {
+			return false, fmt.Errorf("fetching %s's build %s: %w", base, d, err)
+		}
+		plats, err := img.Platforms()
+		if err != nil {
+			return false, err
+		}
+		if t[i], err = latestCreated(plats); err != nil {
+			return false, err
+		}
+	}
+	return t[0].After(t[1]), nil
 }
 
 // supersedes says why the image at tagRef is newer than art, or returns ""

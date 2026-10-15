@@ -235,7 +235,13 @@ it follows the base the image names in its annotations (the stack's run image
 tag), so after the platform team pushes a patched run image, rebasing every
 app takes seconds and needs no source. `--onto` picks another base; `--from`
 names the old one for images without annotations (built with plain
-Dockerfiles, say). With a tag, `--push` moves that tag to the result.
+Dockerfiles, say). With a tag, `--push` moves that tag to the result, unless
+another publish took the tag while the rebase ran: then the result is pushed
+by digest only, the tag stays on the newer image, and a warning says so
+(`--tag` tags likewise move only if they still hold what they did when the
+rebase started). Where the registry supports conditional requests, the tag
+is written with an ETag precondition, so a publish between that check and
+the write is caught too.
 
 For apps, `clearcutt-factory rebase -f app.yaml` rebases the app's published image
 (`metadata.ref` and its first tag) onto its stack's run image and runs the
@@ -284,11 +290,15 @@ The intended split, and the automation that keeps it current:
   pull request builds, smoke-tests, scans, and gates; merging publishes.
   Auto-merging these when the gates pass is reasonable.
 * **Base patches reach apps without app teams** ([`fleet.yml`](.github/workflows/fleet.yml)).
-  Daily and after every publish on `main`, `clearcutt-factory rebase -f <app> --push
-  --update-lock` for each app: rebase if safe, smoke-test, scan, push, sign,
-  repeat from the signed record, then a pull request pinning the app's lock
-  to the same base. An app that can't be rebased gets the same pull request
-  (merging rebuilds it) and a failed job.
+  Daily and after every successful run of the images workflow on `main`,
+  `clearcutt-factory rebase -f <app> --push --update-lock` for each app:
+  rebase if safe, smoke-test, scan, push, sign, repeat from the signed
+  record, then a pull request pinning the app's lock to the same base. If
+  the repeat fails, the pull request is still opened (the image is
+  published either way), marked as not independently reproduced, and the
+  job fails. An app that can't be rebased gets the same pull request
+  (merging rebuilds it) and a failed job. A push that publishes while the
+  fleet rebases keeps the tag; the next run rebases it.
 * **CVE response** is the same path on demand: fix the run image (re-lock,
   merge), and the fleet job moves every app onto it in minutes.
 * **Toolchain and stack changes** rebuild rather than rebase (the app's own
@@ -312,8 +322,20 @@ of its base (its own layers on another base, while its base's tag has moved
 on), or an image created later (built from a newer lock: a build's created
 time is its lock's `SOURCE_DATE_EPOCH`). That tag stays, with a warning.
 `--force-tags` (on `build` and `rebase`) moves it anyway, for a deliberate
-rollback. A build from changed source is a new image and is tagged as usual,
-so merge pin pull requests promptly.
+rollback.
+
+A build from changed source before the pin pull request merges is a new
+image, on the old base. When a tag of an app holds an image on a newer build
+of that base (by its `org.opencontainers.image.base.*` annotations: the
+build the base's tag points at now, or one created later),
+`clearcutt-factory build --push` pushes the new image by digest only,
+rebases it onto the base's newest build as the fleet would (the same checks,
+smoke test, scan, gate, and signed rebase record, which the images workflow
+repeats), and moves the tags to the result. If the rebase is refused or
+fails, the tags stay and the build fails: merge the pin pull request (or run
+`clearcutt-factory lock --update-base`) and build again. `--force-tags` tags
+the new image as built. Merge pin pull requests promptly all the same: each
+app build until then also rebases.
 
 ## The org profile
 

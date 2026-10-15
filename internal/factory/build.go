@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -54,6 +55,9 @@ type Result struct {
 	// Published is false when the registry already had this digest with its
 	// attestations (an unchanged rebuild), so only the tags moved.
 	Published bool `json:"published"`
+	// Rebased is the image the tags point at instead (repo@digest): this
+	// one rebased onto a newer build of its base (see publishBuild).
+	Rebased string `json:"rebased,omitempty"`
 }
 
 type platformOutputs struct {
@@ -180,10 +184,7 @@ func Build(ctx context.Context, opts Options, bo BuildOptions) error {
 	}
 
 	if bo.Push {
-		if result.Image, result.Published, result.Signed, err = publish(ctx, opts, org, art, repo, m.Metadata.Tags, attest.RecipePredicateType, recipePath, outputs, bo.NoSign, bo.ForceTags); err != nil {
-			return err
-		}
-		if err := githubOutput(result); err != nil {
+		if err := publishBuild(ctx, opts, org, m, art, bo, recipePath, outputs, &result); err != nil {
 			return err
 		}
 	} else {
@@ -194,6 +195,59 @@ func Build(ctx context.Context, opts Options, bo BuildOptions) error {
 		return err
 	}
 	opts.printf("wrote %s", rel(resultPath))
+	return nil
+}
+
+// publishBuild publishes a built image and moves its tags to it. When a tag
+// of an app holds an image on a newer build of the app's base (see
+// onNewerBase), say the fleet's rebase before the lock that pins its base
+// is merged, the build is pushed by digest only and rebased onto the base's
+// newest build as the fleet does it (safety checks, smoke test, scan, gate,
+// signed rebase record). The tags move to that image instead, if they still
+// hold what they did; if anything fails, they stay where they are.
+func publishBuild(ctx context.Context, opts Options, org *manifest.Org, m *manifest.Manifest, art *registry.Artifact, bo BuildOptions, recipePath string, outputs []platformOutputs, result *Result) error {
+	var why string
+	var held map[string]string
+	if m.Kind == manifest.KindApp && !bo.ForceTags {
+		var err error
+		if why, held, err = onNewerBase(ctx, art, result.Repository, m.Metadata.Tags); err != nil {
+			return fmt.Errorf("checking what %s's tags hold before moving them (--force-tags skips the check): %w", result.Repository, err)
+		}
+	}
+	tags := m.Metadata.Tags
+	if why != "" {
+		opts.printf("%s; pushing this image by digest only, to rebase it onto the newest build of its base", why)
+		tags, result.Tags = nil, nil
+	}
+	var err error
+	if result.Image, result.Published, result.Signed, err = publish(ctx, opts, org, art, result.Repository, tags, attest.RecipePredicateType, recipePath, outputs, bo.NoSign, bo.ForceTags, nil); err != nil {
+		return err
+	}
+	if err := githubOutput(*result); err != nil {
+		return err
+	}
+	if why == "" {
+		return nil
+	}
+
+	ro := RebaseOptions{
+		Image: result.Image, Tags: m.Metadata.Tags, Push: true, OutDir: bo.OutDir,
+		NoScan: bo.NoScan, NoSign: bo.NoSign, NoTest: bo.NoTest, held: held,
+	}
+	_, rebased, err := rebaseImage(ctx, opts, org, ro, m.Spec.Test, m.Metadata.Name)
+	var moved movedTags
+	switch {
+	case errors.As(err, &moved):
+		return fmt.Errorf("%w while this build was rebasing: another publish took it, so it stays there (build again to tag %s)", moved, rebased)
+	case err == nil && rebased == "":
+		err = errors.New("its base's tag went back to this image's base while rebasing")
+	}
+	if err != nil {
+		return fmt.Errorf("%s, and this image could not be rebased onto that base, so the tags stay where they are: %w\nto publish this change, pin the newest base in %s (merge the fleet's pull request, or run clearcutt-factory lock --update-base) and build again; --force-tags tags this image anyway",
+			why, err, rel(m.LockPath()))
+	}
+	result.Rebased = rebased
+	opts.printf("tagged %s, this image rebased onto the newest build of its base", rebased)
 	return nil
 }
 
@@ -311,15 +365,23 @@ func buildRecipe(opts Options, m *manifest.Manifest, l *lock.Lock, out *render.O
 // unchanged rebuild), it only moves the tags, so republishing doesn't pile
 // up signatures and attestations on the same image. Tags holding a newer
 // image stay where they are unless forceTags is set (see moveTags).
-func publish(ctx context.Context, opts Options, org *manifest.Org, art *registry.Artifact, repo string, tags []string, predicateType, predicatePath string, outputs []platformOutputs, noSign, forceTags bool) (ref string, published, signed bool, err error) {
+//
+// held maps tags to the digest each held when the caller decided to move it
+// ("" for none). Unless forceTags is set, such a tag moves only if it still
+// holds that digest (see retag). When one has moved, publish does all the
+// rest and then returns ref with a movedTags error.
+func publish(ctx context.Context, opts Options, org *manifest.Org, art *registry.Artifact, repo string, tags []string, predicateType, predicatePath string, outputs []platformOutputs, noSign, forceTags bool, held map[string]string) (ref string, published, signed bool, err error) {
 	ref = repo + "@" + art.Digest
 	sign := org.Signing.Mode != "none" && !noSign
+	if forceTags {
+		held = nil
+	}
 	exists, err := registry.Exists(ctx, ref)
 	if err != nil {
 		return "", false, false, err
 	}
 	if exists && (!sign || attested(ctx, org, ref, predicateType, art.Source())) {
-		moved, err := moveTags(ctx, opts, art, repo, tags, forceTags)
+		moved, left, err := moveTags(ctx, opts, art, repo, tags, forceTags, held)
 		if err != nil {
 			return "", false, false, err
 		}
@@ -328,19 +390,33 @@ func publish(ctx context.Context, opts Options, org *manifest.Org, art *registry
 		} else {
 			opts.printf("%s is already published", ref)
 		}
-		return ref, false, sign, nil
+		return ref, false, sign, left.orNil()
 	}
-	if _, err := registry.Push(ctx, art, repo, tags); err != nil {
+	var now, later []string
+	for _, tag := range tags {
+		if _, ok := held[tag]; ok {
+			later = append(later, tag)
+		} else {
+			now = append(now, tag)
+		}
+	}
+	if _, err := registry.Push(ctx, art, repo, now); err != nil {
 		return "", false, false, err
 	}
 	opts.printf("pushed %s", ref)
+	var left movedTags
+	for _, tag := range later {
+		if _, err := retag(ctx, ref, tag, held, &left); err != nil {
+			return "", false, false, err
+		}
+	}
 	if sign {
 		if err := signAndAttest(ctx, opts, org, repo, ref, predicateType, predicatePath, outputs); err != nil {
 			return "", false, false, err
 		}
 		opts.printf("signed %s and attached its attestations", ref)
 	}
-	return ref, true, sign, nil
+	return ref, true, sign, left.orNil()
 }
 
 // attested reports whether ref already carries a verified attestation of

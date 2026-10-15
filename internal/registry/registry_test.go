@@ -2,10 +2,13 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
+	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/go-containerregistry/pkg/name"
@@ -63,5 +66,143 @@ func TestPlatformRef(t *testing.T) {
 	}
 	if _, err := PlatformRef(context.Background(), host+"/base:latest", "linux/s390x"); err == nil {
 		t.Error("expected an error for a missing platform")
+	}
+}
+
+// conditionalRegistry is a test registry that, like registries supporting
+// conditional requests, returns ETags for manifests and refuses tag writes
+// whose If-Match or If-None-Match doesn't hold.
+type conditionalRegistry struct {
+	h  http.Handler
+	mu sync.Mutex
+	// beforeWrite runs once, before the next tag write is checked (a
+	// concurrent publish, say).
+	beforeWrite func()
+	// bogus fails every If-Match, like a registry whose ETags aren't the
+	// ones it compares.
+	bogus      bool
+	conditions int
+}
+
+func (c *conditionalRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	_, ref, ok := strings.Cut(r.URL.Path, "/manifests/")
+	if !ok || strings.HasPrefix(ref, "sha256:") {
+		c.h.ServeHTTP(w, r)
+		return
+	}
+	if r.Method == http.MethodPut {
+		c.mu.Lock()
+		f := c.beforeWrite
+		c.beforeWrite = nil
+		c.mu.Unlock()
+		if f != nil {
+			f()
+		}
+		rec := httptest.NewRecorder()
+		c.h.ServeHTTP(rec, httptest.NewRequest(http.MethodHead, r.URL.Path, nil))
+		etag := ""
+		if rec.Code == http.StatusOK {
+			etag = `"` + rec.Header().Get("Docker-Content-Digest") + `"`
+		}
+		match, none := r.Header.Get("If-Match"), r.Header.Get("If-None-Match") == "*"
+		c.mu.Lock()
+		bogus := c.bogus
+		if match != "" || none {
+			c.conditions++
+		}
+		c.mu.Unlock()
+		if (match != "" && (bogus || match != etag)) || (none && etag != "") {
+			w.WriteHeader(http.StatusPreconditionFailed)
+			return
+		}
+	}
+	c.h.ServeHTTP(etagWriter{w}, r)
+}
+
+// etagWriter sets a manifest's digest as its ETag, as Distribution does.
+type etagWriter struct{ http.ResponseWriter }
+
+func (w etagWriter) WriteHeader(code int) {
+	if d := w.Header().Get("Docker-Content-Digest"); d != "" {
+		w.Header().Set("Etag", `"`+d+`"`)
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func TestTagIf(t *testing.T) {
+	reg := &conditionalRegistry{h: ggcrregistry.New(ggcrregistry.Logger(log.New(io.Discard, "", 0)))}
+	srv := httptest.NewServer(reg)
+	defer srv.Close()
+	ctx := context.Background()
+	repo := strings.TrimPrefix(srv.URL, "http://") + "/app"
+	var a, b, c string
+	for _, d := range []*string{&a, &b, &c} {
+		img, err := random.Image(32, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, _ := img.Digest()
+		*d = repo + "@" + h.String()
+		r, _ := name.NewDigest(*d)
+		if err := remote.Write(r, img); err != nil {
+			t.Fatal(err)
+		}
+	}
+	digest := func(ref string) string { _, d, _ := strings.Cut(ref, "@"); return d }
+	holds := func() string {
+		t.Helper()
+		got, err := Lookup(ctx, repo+":v1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	moved := func(err error, want, holds string) {
+		t.Helper()
+		var m *MovedError
+		if !errors.As(err, &m) || m.Want != want || m.Holds != holds || m.Tag != repo+":v1" {
+			t.Fatalf("want a move from %s to %s, got %v", want, holds, err)
+		}
+	}
+
+	if got := holds(); got != "" {
+		t.Fatalf("Lookup of a missing tag: %q", got)
+	}
+	// A new tag, then a move from what it holds: both conditional.
+	if err := TagIf(ctx, a, "v1", ""); err != nil || holds() != digest(a) {
+		t.Fatalf("new tag: %v, holds %s", err, holds())
+	}
+	if err := TagIf(ctx, b, "v1", digest(a)); err != nil || holds() != digest(b) {
+		t.Fatalf("move: %v, holds %s", err, holds())
+	}
+	reg.mu.Lock()
+	if reg.conditions != 2 {
+		t.Errorf("%d conditional writes, want 2", reg.conditions)
+	}
+	reg.mu.Unlock()
+	// The tag moved before the call.
+	moved(TagIf(ctx, c, "v1", digest(a)), digest(a), digest(b))
+	moved(TagIf(ctx, c, "v1", ""), "", digest(b))
+	if holds() != digest(b) {
+		t.Fatalf("a refused move changed the tag to %s", holds())
+	}
+	// The tag moves between the read and the write: the registry refuses it.
+	reg.mu.Lock()
+	reg.beforeWrite = func() {
+		if err := Tag(ctx, c, []string{"v1"}); err != nil {
+			t.Error(err)
+		}
+	}
+	reg.mu.Unlock()
+	moved(TagIf(ctx, a, "v1", digest(b)), digest(b), digest(c))
+	if holds() != digest(c) {
+		t.Fatalf("the write went through: v1 holds %s", holds())
+	}
+	// A registry whose ETags don't work as conditions still gets the write.
+	reg.mu.Lock()
+	reg.bogus = true
+	reg.mu.Unlock()
+	if err := TagIf(ctx, a, "v1", digest(c)); err != nil || holds() != digest(a) {
+		t.Fatalf("bogus ETags: %v, holds %s", err, holds())
 	}
 }

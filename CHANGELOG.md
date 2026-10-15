@@ -22,6 +22,30 @@ that image rebased onto a newer build of its base, or an image created later
 (built from a newer lock). `build` and `rebase` take `--force-tags` to move
 it anyway.
 
+**A push before the pin pull request merges doesn't ship on the old base
+([#35](https://github.com/northcutted/clearcutt-factory/issues/35)).** A
+build from changed source used the old lock, so the new image was on the
+unpatched base and took `latest` from the fleet's rebase until the fleet ran
+again (and only if the whole images workflow succeeded). When a tag of an
+app holds an image on a newer build of its base, `build --push` now pushes
+the new image by digest only, rebases it onto the base's newest build with
+the fleet's checks, smoke test, and signed rebase record, and tags that. If
+it can't be rebased, the tags stay and the build fails with what to do. The
+images workflow repeats the rebase from its record.
+
+**The fleet doesn't take tags from newer publishes, and a failed repeat
+still opens the pin pull request
+([#37](https://github.com/northcutted/clearcutt-factory/issues/37)).** A
+rebase that started before a push to `main` published could finish after it
+and move `latest` back to the rebased older build. `rebase --push` now moves
+a tag only if it still holds what it held when the rebase started; otherwise
+it pushes the result by digest only and leaves the tag, and the next fleet
+run rebases the new image. Where the registry supports conditional requests,
+the tag is written with an ETag precondition, closing the gap between the
+check and the write. In `fleet.yml`, the pull request that pins the lock is
+opened even when repeating the rebase fails, marked as not independently
+reproduced.
+
 ## v0.1.1
 
 **Signatures from the reusable workflows verify in other repositories

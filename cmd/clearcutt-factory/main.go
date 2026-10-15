@@ -30,8 +30,9 @@ Usage:
       Regenerate (or check) the Containerfile.
   clearcutt-factory build   [-f image.yaml] [--push] [--out DIR] [--no-test] [--no-scan] [--no-sign] [--no-cache] [--force-tags]
       Build, smoke-test, SBOM, scan, gate; with --push also sign and attest.
-      Tags never move back from a newer image to one published before
-      unless --force-tags.
+      Tags never move back from a newer image to one published before, and
+      an app whose tag holds an image on a newer build of its base is rebased
+      onto that base before it takes the tag, unless --force-tags.
   clearcutt-factory verify  [-f image.yaml] --digest sha256:…
       Rebuild from source and compare.
   clearcutt-factory verify  --image repo@sha256:… [--key K | --certificate-identity[-regexp] R --certificate-oidc-issuer I
@@ -40,7 +41,8 @@ Usage:
   clearcutt-factory rebase  --image repo[:tag|@sha256:…] [--onto BASE] [--from BASE] [--check] [--force]
                             [--push] [--tag T]… [--force-tags] [--out DIR] [--no-scan] [--no-sign]
       Move the image's own layers onto a newer build of its base (default: the
-      base it names, resolved again).
+      base it names, resolved again). A tag another publish takes meanwhile
+      stays there, and the result is pushed by digest only.
   clearcutt-factory rebase  [-f app.yaml] [--update-lock] [--no-test] [same flags]
       Rebase the app's published image onto its stack's run image and smoke-test
       it; --update-lock then pins the lock to that base.
