@@ -5,20 +5,31 @@
 # pull request builds, smoke-tests, scans, and gates the change; merging it
 # publishes the rebuilt image.
 #
-# Pull requests opened with the default GITHUB_TOKEN are github-actions[bot]'s,
-# and GitHub holds the workflow runs they trigger until someone approves them
-# (the runs show as action_required). Set a CLEARCUTT_BOT_TOKEN secret (a
-# GitHub App token, or a fine-grained token with contents and pull-requests
-# write) so CI starts on them by itself, and allow Actions to create pull
-# requests in the repository settings.
+# Who opens the pull requests decides whether CI starts on them. In order:
 #
-# Other repositories call it (see docs/adopting.md):
+#   1. A GitHub App, when the app-id input (or a CLEARCUTT_APP_ID variable)
+#      names its Client ID or App ID and the CLEARCUTT_APP_PRIVATE_KEY secret
+#      holds its private key. Each job mints a token that expires within the
+#      hour, limited to this repository, contents write, and pull-requests
+#      write (docs/adopting.md shows how to create the App).
+#   2. A CLEARCUTT_BOT_TOKEN secret: a fine-grained token with contents and
+#      pull-requests write.
+#   3. The workflow's own GITHUB_TOKEN. Its pull requests are
+#      github-actions[bot]'s, and GitHub holds the CI runs they trigger until
+#      a maintainer approves them (the runs show as action_required). Allow
+#      Actions to create pull requests in the repository settings.
+#
+# Other repositories call it (see docs/adopting.md). Pass secrets by name:
+# secrets: inherit reaches only workflows in the caller's own organization or
+# enterprise.
 #
 #   jobs:
 #     update:
 #       uses: northcutted/clearcutt-factory/.github/workflows/update-locks.yml@v0.1.1
 #       permissions: {contents: write, pull-requests: write}
-#       secrets: inherit
+#       secrets:
+#         CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+#         CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
 name: update-locks
 on:
   schedule:
@@ -34,6 +45,17 @@ on:
         description: clearcutt-factory release to use
         type: string
         default: v0.1.1
+      app-id:
+        description: GitHub App to open pull requests as, by Client ID or App ID (default the CLEARCUTT_APP_ID variable); needs the CLEARCUTT_APP_PRIVATE_KEY secret
+        type: string
+        default: ""
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY:
+        description: Private key of the GitHub App named by app-id or CLEARCUTT_APP_ID
+        required: false
+      CLEARCUTT_BOT_TOKEN:
+        description: Token to open pull requests with when there is no GitHub App (contents and pull-requests write)
+        required: false
 permissions:
   contents: read
 # One run at a time per ref (and manifests). Runs wait rather than cancel, so
@@ -74,10 +96,24 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      APP_ID: ${{ inputs.app-id || vars.CLEARCUTT_APP_ID }}
+      APP_KEY_SET: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY != '' }}
     steps:
+      # Half a GitHub App (an ID without a key, or a key without an ID) fails
+      # here rather than quietly falling back to another identity.
+      - name: Mint a GitHub App token
+        id: app
+        if: env.APP_ID != '' || env.APP_KEY_SET == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ env.APP_ID }}
+          private-key: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          token: ${{ secrets.CLEARCUTT_BOT_TOKEN || github.token }}
+          token: ${{ steps.app.outputs.token || secrets.CLEARCUTT_BOT_TOKEN || github.token }}
       - if: env.FACTORY_VERSION != 'source'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -103,7 +139,7 @@ jobs:
 
       - name: Open, update, or close the pull request
         env:
-          GH_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN || github.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.CLEARCUTT_BOT_TOKEN || github.token }}
           MANIFEST: ${{ matrix.manifest }}
         run: |
           dir=$(dirname "$MANIFEST")

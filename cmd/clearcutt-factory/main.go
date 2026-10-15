@@ -32,9 +32,10 @@ Usage:
       Build, smoke-test, SBOM, scan, gate; with --push also sign and attest.
   clearcutt-factory verify  [-f image.yaml] --digest sha256:…
       Rebuild from source and compare.
-  clearcutt-factory verify  --image repo@sha256:… [--key K | --certificate-identity[-regexp] R --certificate-oidc-issuer I
+  clearcutt-factory verify  --image repo@sha256:… [--attest] [--key K | --certificate-identity[-regexp] R --certificate-oidc-issuer I
                             [--certificate-github-workflow-repository OWNER/REPO]]
-      Rebuild from the image's signed recipe (or repeat its recorded rebase) and compare.
+      Rebuild from the image's signed recipe (or repeat its recorded rebase) and compare;
+      --attest then signs and attaches a reproduction attestation to the image.
   clearcutt-factory rebase  --image repo[:tag|@sha256:…] [--onto BASE] [--from BASE] [--check] [--force]
                             [--push] [--tag T]… [--out DIR] [--no-scan] [--no-sign]
       Move the image's own layers onto a newer build of its base (default: the
@@ -126,6 +127,7 @@ func run(ctx context.Context, args []string) error {
 		fs.StringVar(&identityRegexp, "certificate-identity-regexp", "", "")
 		fs.StringVar(&issuer, "certificate-oidc-issuer", "", "")
 		fs.StringVar(&workflowRepo, "certificate-github-workflow-repository", "", "")
+		fs.BoolVar(&vo.Attest, "attest", false, "")
 		if err := parse(fs, args); err != nil {
 			return err
 		}

@@ -39,14 +39,17 @@ func StackPush(ctx context.Context, opts Options, file, ref string, noSign bool)
 	}
 	pushed := lock.RepoOf(ref) + "@" + d
 	opts.printf("pushed stack %s to %s", st.Metadata.Name, pushed)
-	if org.Signing.Mode != "none" && !noSign {
+	signed := org.Signing.Mode != "none" && !noSign
+	if signed {
 		c := attest.Cosign{Mode: org.Signing.Mode, Key: org.Signing.Key, Args: org.Signing.Args, Stdout: opts.Stderr, Stderr: opts.Stderr}
 		if err := c.Run(ctx, "sign", pushed); err != nil {
 			return err
 		}
 		opts.printf("signed %s", pushed)
 	}
-	return nil
+	// image, repository, and digest for later workflow steps (notify.yml's
+	// clearcutt.stack-published), as build and rebase write them.
+	return githubOutput(Result{Image: pushed, Repository: lock.RepoOf(ref), Digest: d, Signed: signed, Published: true})
 }
 
 // fetchAppStack fetches an app's registry stack to the local cache and

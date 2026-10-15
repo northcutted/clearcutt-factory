@@ -286,11 +286,21 @@ The intended split, and the automation that keeps it current:
 * **Base patches reach apps without app teams** ([`fleet.yml`](.github/workflows/fleet.yml)).
   Daily and after each push to `main` publishes, `clearcutt-factory rebase -f <app> --push
   --update-lock` for each app: rebase if safe, smoke-test, scan, push, sign,
-  repeat from the signed record, then a pull request pinning the app's lock
-  to the same base. An app that can't be rebased gets the same pull request
-  (merging rebuilds it) and a failed job.
+  repeat from the signed record (and attest the match), then a pull request
+  pinning the app's lock to the same base. An app that can't be rebased gets
+  the same pull request (merging rebuilds it) and a failed job.
 * **CVE response** is the same path on demand: fix the run image (re-lock,
   merge), and the fleet job moves every app onto it in minutes.
+* **Apps in other repositories hear about it** ([`notify.yml`](.github/workflows/notify.yml)).
+  After the platform repository publishes, its `notify` job sends
+  `repository_dispatch` to the owner's repositories with the topic
+  `clearcutt-app`: `clearcutt.run-image-published` for each new image and
+  `clearcutt.stack-published` for each new stack, with `{image, digest, …}`.
+  `init`'s workflow answers the first with the fleet job and the second with
+  the lock-update job, so a patched run image reaches every app in minutes,
+  not at its next daily run. The payload is only a hint: the receivers
+  re-resolve tags from the registry and verify signatures, as they do on
+  their schedules ([adopting](docs/adopting.md#waking-the-apps-when-the-platform-publishes)).
 * **Toolchain and stack changes** rebuild rather than rebase (the app's own
   layer changes): the weekly job's pull request per app does it, tested by
   each app's CI.
@@ -301,10 +311,13 @@ The intended split, and the automation that keeps it current:
 Pull requests opened with the default `GITHUB_TOKEN` are
 `github-actions[bot]`'s, and GitHub holds the CI runs they trigger until a
 maintainer approves them on the pull request (the runs show as
-`action_required`), so nothing gates the change on its own. Set a
-`CLEARCUTT_BOT_TOKEN` secret (a GitHub App token, or a fine-grained token with
-contents and pull-requests write): the jobs then open pull requests as that
-identity, and CI starts on them by itself.
+`action_required`), so nothing gates the change on its own. Give the jobs an
+identity of their own and CI starts by itself: a **GitHub App**
+(a `CLEARCUTT_APP_ID` variable and a `CLEARCUTT_APP_PRIVATE_KEY` secret), from
+which each job mints a token that expires within the hour and reaches only
+its repository's contents and pull requests; or a `CLEARCUTT_BOT_TOKEN` secret
+(a fine-grained token with contents and pull-requests write). The App wins
+when both are set ([adopting](docs/adopting.md#a-github-app-for-the-automation)).
 
 Deploy by digest and let GitOps follow the tags; keep old run images (a
 rebase needs the old base's manifest) and old app digests (rollback).
@@ -359,19 +372,67 @@ it names the first differing layer and the files that differ.
 | SBOM (CycloneDX) | each platform image | syft scan merged with components declared by the lock (purls, hashes, download URLs, verification method) |
 | Vulnerabilities (`cosign …/vuln/v1`) | each platform image | grype results with VEX applied |
 | Rebase record (`…/rebase/v1`) | index of a rebased image (instead of a recipe) | the image that was rebased, each platform's old base, the new base; enough to repeat the rebase |
+| Reproduction (`…/reproduction/v1`) | index, once reproduced (`verify --image --attest`) | how (`recipe-rebuild` or `rebase-repeat`), the digest it gave, the recipe or rebase record it started from, factory and BuildKit versions, the run and machine, when |
 | SLSA provenance | index | from the CI platform (see [`images.yml`](.github/workflows/images.yml)) |
 
 Unsigned copies of all of these are written to `out/<name>/attestations/`, and
 `out/<name>/result.json` summarizes the build for CI.
+
+**Reproductions.** `clearcutt-factory verify --image IMAGE --attest` rebuilds
+the image from its signed recipe without cache (or repeats its signed rebase
+record) and, when the digest matches, signs a statement saying so onto the
+image with the org's `signing` settings, as builds sign their recipes. The
+reusable workflows do it on a second runner after each publish (`images.yml`)
+and after each rebase (`fleet.yml`), so a verifier can see that an image was
+reproduced, how, where, and when, without rebuilding it. The predicate
+(`https://github.com/northcutted/clearcutt-factory/reproduction/v1`):
+
+```json
+{
+  "method": "recipe-rebuild",
+  "image": "ghcr.io/acme/platform-tools@sha256:4f…",
+  "digest": "sha256:4f…",
+  "from": {
+    "predicateType": "https://github.com/northcutted/clearcutt-factory/recipe/v1",
+    "digest": {"sha256": "9a…"}
+  },
+  "factory": {"version": "v0.2.0"},
+  "buildkit": "moby/buildkit:v0.33.1@sha256:…",
+  "builder": {
+    "id": "https://github.com/acme/platform/actions/runs/123/attempts/1",
+    "workflow": "acme/platform/.github/workflows/clearcutt-factory.yml@refs/heads/main",
+    "job": "reproduce",
+    "runner": "github-hosted",
+    "os": "linux",
+    "arch": "amd64"
+  },
+  "reproducedAt": "2026-10-13T06:41:09Z"
+}
+```
+
+`digest` is what the reproduction gave, always the subject's digest (only
+matches are attested). `from` names the recipe or rebase record by the
+sha256 of its in-toto statement (the signed DSSE payload). A verifier should
+check that the attestation is signed by a signer it trusts for the image,
+that `digest` is the subject's, and that `from` is a recipe or rebase record
+on the same image that it verified too. `builder` comes from the
+environment of the job that reproduced it, and the certificate binds the
+attestation to that run's workflow and repository; it shows the image
+rebuilt on a fresh machine, not who else could rebuild it. For that,
+rebuild it yourself with `verify --image`.
 
 ## CI
 
 [`.github/workflows/images.yml`](.github/workflows/images.yml) is a complete
 pipeline. On pull requests it builds, scans, and gates. On `main` it also pushes,
 signs keylessly, adds SLSA provenance, and then rebuilds on a second runner from
-the signed recipe alone. `clearcutt-factory` emits `image`, `repository`, and `digest` to
-`$GITHUB_OUTPUT`. [`update-locks.yml`](.github/workflows/update-locks.yml)
-and [`fleet.yml`](.github/workflows/fleet.yml) keep the fleet current (see
+the signed recipe alone and attests the match. Its `published` output lists
+what the run newly published (a JSON array of `{manifest, kind, image,
+repository, digest, tags}`). `clearcutt-factory build`, `rebase`, and
+`stack push` emit `image`, `repository`, and `digest` to `$GITHUB_OUTPUT`.
+[`update-locks.yml`](.github/workflows/update-locks.yml),
+[`fleet.yml`](.github/workflows/fleet.yml), and
+[`notify.yml`](.github/workflows/notify.yml) keep the fleet current (see
 [Running a fleet](#running-a-fleet)). Other CI systems call the same commands;
 nothing is GitHub-specific.
 
@@ -400,9 +461,12 @@ nothing is GitHub-specific.
   usual contract; test rebased images like any other.
 * Rebasing needs the old base's manifest, so keep old run images in the
   registry.
-* The fleet workflow finds apps by their manifests in this repository. Apps
-  in other repositories run the same job on their own, or a registry-wide
-  inventory (clearcutt-verify's `estate dependents`) drives `clearcutt-factory rebase --image`.
+* The fleet workflow rebases the apps whose manifests are in its own
+  repository. Apps elsewhere run it themselves, on their schedule or when
+  `notify.yml` wakes them; `notify.yml` finds them by a topic, not by what
+  they are built on. clearcutt-verify's `estate dependents` lists the images
+  actually built on a base (by layer digest), for `notify.yml`'s
+  `repositories` input or for `clearcutt-factory rebase --image`.
 * Smoke tests run images on the build machine, other architectures through
   emulation (QEMU in CI); `--no-test` skips them.
 

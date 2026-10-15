@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	"go.yaml.in/yaml/v3"
@@ -30,6 +33,9 @@ type VerifyOptions struct {
 	OutDir     string
 	// VerifyArgs are passed to cosign verify-attestation (key or identity).
 	VerifyArgs []string
+	// Attest attaches a signed reproduction attestation to Image when it
+	// reproduces (from its recipe or rebase record, not from source).
+	Attest bool
 }
 
 // Verify rebuilds an image from scratch (no cache) and checks that the digest
@@ -49,6 +55,9 @@ func Verify(ctx context.Context, opts Options, vo VerifyOptions) error {
 	if expected == "" {
 		return errors.New("nothing to compare against: pass --image repo@sha256:… or --digest sha256:…")
 	}
+	if vo.Attest && (vo.Image == "" || vo.FromSource) {
+		return errors.New("--attest needs --image without -f: it attests a reproduction from the image's signed recipe or rebase record")
+	}
 
 	var (
 		req     builder.Request
@@ -58,6 +67,8 @@ func Verify(ctx context.Context, opts Options, vo VerifyOptions) error {
 		// previous is a local layout of the expected build, used to explain a
 		// mismatch when there is no pushed image to compare against.
 		previous string
+		// recipe is the verified recipe being rebuilt, if any.
+		recipe *attest.Recipe
 	)
 	if vo.FromSource {
 		m, o, l, err := loadLocked(ctx, opts)
@@ -104,22 +115,27 @@ func Verify(ctx context.Context, opts Options, vo VerifyOptions) error {
 			return errors.New("no signer identity to verify the recipe against: set signing.verify (or signing.trustPolicy) in the org profile, or pass --key / --certificate-identity(-regexp) with --certificate-oidc-issuer")
 		}
 		opts.printf("verifying the recipe or rebase attestation on %s", vo.Image)
-		recipe, err := firstVerified(signers, func(args []string) (*attest.Recipe, error) { return attest.VerifyRecipe(ctx, vo.Image, args) })
+		repo := lock.RepoOf(vo.Image)
+		workDir, err = filepath.Abs(filepath.Join(vo.OutDir, safeName(repo)+"-verify"))
+		if err != nil {
+			return err
+		}
+		recipe, err = firstVerified(signers, func(args []string) (*attest.Recipe, error) { return attest.VerifyRecipe(ctx, vo.Image, args) })
 		if err != nil {
 			// A rebased image carries a rebase record instead of a recipe.
 			rec, rerr := firstVerified(signers, func(args []string) (*attest.Rebase, error) { return attest.VerifyRebase(ctx, vo.Image, args) })
 			if rerr != nil {
 				return fmt.Errorf("no verified recipe or rebase attestation on %s:\n%v\n%v", vo.Image, err, rerr)
 			}
-			return verifyRebase(ctx, opts, rec, expected)
+			got, err := verifyRebase(ctx, opts, rec, expected)
+			if err != nil {
+				return err
+			}
+			return reproduced(ctx, opts, org, vo, workDir, &attest.Reproduction{Method: MethodRebaseRepeat, Digest: got, From: rec.Verified},
+				"rebase gives "+got+" again")
 		}
 		if recipe.Image.Digest != expected {
 			return fmt.Errorf("recipe was recorded for %s, not %s", recipe.Image.Digest, expected)
-		}
-		repo := lock.RepoOf(vo.Image)
-		workDir, err = filepath.Abs(filepath.Join(vo.OutDir, safeName(repo)+"-verify"))
-		if err != nil {
-			return err
 		}
 		if err := recipe.Materialize(filepath.Join(workDir, "context"), render.ContainerfileName); err != nil {
 			return err
@@ -146,8 +162,11 @@ func Verify(ctx context.Context, opts Options, vo VerifyOptions) error {
 		return err
 	}
 	if res.Digest == expected {
-		opts.printf("reproducible: rebuilt %s matches", res.Digest)
-		return nil
+		var r *attest.Reproduction
+		if recipe != nil {
+			r = &attest.Reproduction{Method: MethodRecipeRebuild, Digest: res.Digest, From: recipe.Verified, BuildKit: recipe.Build.BuildKit}
+		}
+		return reproduced(ctx, opts, org, vo, workDir, r, "rebuilt "+res.Digest+" matches")
 	}
 
 	msg := fmt.Sprintf("NOT reproducible: expected %s, rebuilt %s", expected, res.Digest)
@@ -169,6 +188,71 @@ func Verify(ctx context.Context, opts Options, vo VerifyOptions) error {
 		msg += fmt.Sprintf("\n(cannot explain the difference: %v)", err)
 	}
 	return errors.New(msg)
+}
+
+// Reproduction methods, as the reproduction attestation (and
+// clearcutt-verify's report) names them.
+const (
+	MethodRecipeRebuild = "recipe-rebuild"
+	MethodRebaseRepeat  = "rebase-repeat"
+)
+
+// reproduced reports that the image reproduced and, with --attest, attests
+// r first. The "reproducible: …" line stays the last line on stdout, where
+// clearcutt-verify reads the result.
+func reproduced(ctx context.Context, opts Options, org *manifest.Org, vo VerifyOptions, dir string, r *attest.Reproduction, how string) error {
+	if vo.Attest && r != nil {
+		r.Image = vo.Image
+		if err := attestReproduction(ctx, opts, org, dir, r); err != nil {
+			return fmt.Errorf("%s reproduced (%s), but attesting that failed: %w", vo.Image, how, err)
+		}
+	}
+	opts.printf("reproducible: %s", how)
+	return nil
+}
+
+// attestReproduction signs r with the org's signing settings (as builds sign
+// their recipes) and attaches it to the image it reproduced.
+func attestReproduction(ctx context.Context, opts Options, org *manifest.Org, dir string, r *attest.Reproduction) error {
+	if org.Signing.Mode == "none" {
+		opts.printf("not attesting the reproduction: signing.mode is none")
+		return nil
+	}
+	r.Factory = attest.FactoryInfo{Version: opts.Version}
+	r.Builder = currentBuilder()
+	r.ReproducedAt = time.Now().UTC().Format(time.RFC3339)
+	path := filepath.Join(dir, "reproduction.predicate.json")
+	if err := attest.WriteJSON(path, r); err != nil {
+		return err
+	}
+	if err := attest.WriteJSON(filepath.Join(dir, "reproduction.intoto.json"), attest.NewStatement(lock.RepoOf(r.Image), r.Digest, attest.ReproductionPredicateType, r)); err != nil {
+		return err
+	}
+	c := attest.Cosign{Mode: org.Signing.Mode, Key: org.Signing.Key, Args: org.Signing.Args, Stdout: opts.Stderr, Stderr: opts.Stderr}
+	if err := c.Attest(ctx, r.Image, attest.ReproductionPredicateType, path); err != nil {
+		return err
+	}
+	opts.printf("attested the reproduction (%s) on %s", r.Method, r.Image)
+	return nil
+}
+
+// currentBuilder describes this machine and, on GitHub Actions, the run.
+func currentBuilder() attest.Builder {
+	b := attest.Builder{OS: runtime.GOOS, Arch: runtime.GOARCH}
+	if os.Getenv("GITHUB_ACTIONS") != "true" {
+		return b
+	}
+	server, repo, run := os.Getenv("GITHUB_SERVER_URL"), os.Getenv("GITHUB_REPOSITORY"), os.Getenv("GITHUB_RUN_ID")
+	if server != "" && repo != "" && run != "" {
+		b.ID = server + "/" + repo + "/actions/runs/" + run
+		if attempt := os.Getenv("GITHUB_RUN_ATTEMPT"); attempt != "" {
+			b.ID += "/attempts/" + attempt
+		}
+	}
+	b.Workflow = os.Getenv("GITHUB_WORKFLOW_REF")
+	b.Job = os.Getenv("GITHUB_JOB")
+	b.Runner = os.Getenv("RUNNER_ENVIRONMENT")
+	return b
 }
 
 func explain(want *registry.Artifact, layoutDir string) (string, error) {

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"go.yaml.in/yaml/v3"
+
 	"github.com/northcutted/clearcutt-factory/internal/manifest"
 )
 
@@ -53,8 +55,17 @@ func TestInit(t *testing.T) {
 	if err != nil || len(args) != 1 || !strings.Contains(strings.Join(args[0], " "), "--certificate-github-workflow-repository Acme/platform-images") {
 		t.Errorf("signer args %q, %v", args, err)
 	}
-	if !strings.Contains(string(wf), "northcutted/clearcutt-factory/.github/workflows/images.yml@v1.2.3") {
-		t.Errorf("workflow:\n%s", wf)
+	for _, want := range []string{
+		"northcutted/clearcutt-factory/.github/workflows/images.yml@v1.2.3",
+		"northcutted/clearcutt-factory/.github/workflows/notify.yml@v1.2.3",
+		// Dependents of a platform repository are woken by its notify job.
+		"types: [clearcutt.run-image-published, clearcutt.stack-published]",
+		"github.event.action == 'clearcutt.run-image-published'",
+		"github.event.action == 'clearcutt.stack-published'",
+	} {
+		if !strings.Contains(string(wf), want) {
+			t.Errorf("workflow lacks %q:\n%s", want, wf)
+		}
 	}
 
 	// The scaffold is a working setup: the example loads under the org.
@@ -74,5 +85,71 @@ func TestInit(t *testing.T) {
 	}
 	if strings.Count(out.String(), "kept ") != 3 {
 		t.Errorf("second run:\n%s", out.String())
+	}
+}
+
+// The generated workflow passes only the inputs and secrets factory's
+// reusable workflows declare (GitHub rejects others), by name: secrets:
+// inherit doesn't reach workflows in another organization.
+func TestInitWorkflowMatchesReusableWorkflows(t *testing.T) {
+	dir := t.TempDir()
+	var out bytes.Buffer
+	if err := Init(context.Background(), Options{Version: "v1.2.3", Stdout: &out, Stderr: &out}, InitOptions{Dir: dir, Repo: "acme/platform"}); err != nil {
+		t.Fatal(err)
+	}
+	var wf struct {
+		Jobs map[string]struct {
+			Uses    string         `yaml:"uses"`
+			With    map[string]any `yaml:"with"`
+			Secrets any            `yaml:"secrets"`
+		} `yaml:"jobs"`
+	}
+	b, err := os.ReadFile(filepath.Join(dir, ".github/workflows/clearcutt-factory.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(b, &wf); err != nil {
+		t.Fatal(err)
+	}
+	called := 0
+	for name, job := range wf.Jobs {
+		path, ok := strings.CutPrefix(job.Uses, "northcutted/clearcutt-factory/")
+		if !ok {
+			continue
+		}
+		called++
+		path, _, _ = strings.Cut(path, "@")
+		var reusable struct {
+			On struct {
+				WorkflowCall struct {
+					Inputs  map[string]any `yaml:"inputs"`
+					Secrets map[string]any `yaml:"secrets"`
+				} `yaml:"workflow_call"`
+			} `yaml:"on"`
+		}
+		rb, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(path)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := yaml.Unmarshal(rb, &reusable); err != nil {
+			t.Fatal(err)
+		}
+		for k := range job.With {
+			if _, ok := reusable.On.WorkflowCall.Inputs[k]; !ok {
+				t.Errorf("job %s passes input %s, which %s doesn't declare", name, k, path)
+			}
+		}
+		secrets, ok := job.Secrets.(map[string]any)
+		if job.Secrets != nil && !ok {
+			t.Errorf("job %s passes secrets %v; name them", name, job.Secrets)
+		}
+		for k := range secrets {
+			if _, ok := reusable.On.WorkflowCall.Secrets[k]; !ok {
+				t.Errorf("job %s passes secret %s, which %s doesn't declare", name, k, path)
+			}
+		}
+	}
+	if called == 0 {
+		t.Errorf("no job calls factory's reusable workflows:\n%s", b)
 	}
 }

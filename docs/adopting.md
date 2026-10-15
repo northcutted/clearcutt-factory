@@ -39,7 +39,7 @@ It writes three files and keeps any that exist (`--force` overwrites):
 |---|---|
 | `factory.org.yaml` | Your registry (default `ghcr.io/<owner>`), signer identity (keyless: ClearCutt Factory's reusable workflows, bound to runs in this repository; see [Who signs](#who-signs-and-binding-signatures-to-your-repository)), vulnerability gate, and policy |
 | `images/example/image.yaml` | An example image to replace |
-| `.github/workflows/clearcutt-factory.yml` | Calls the reusable workflows: build, test, and scan on pull requests; publish on `main`; weekly lock updates; daily app rebases |
+| `.github/workflows/clearcutt-factory.yml` | Calls the reusable workflows: build, test, and scan on pull requests; publish on `main`; weekly lock updates; daily app rebases; across repositories, notify dependents of what it published and answer such notices ([below](#waking-the-apps-when-the-platform-publishes)) |
 
 `--repo owner/name` and `--registry` override what it reads from the `origin`
 remote. Every file names its JSON Schema, so editors with the YAML language
@@ -60,21 +60,67 @@ what reviewers read: every version and hash that changed.
 
 ## 4. Turn on the automation
 
-Push, then in the repository settings:
+Push, then in the repository (or organization) settings:
 
-1. **Actions → General → Workflow permissions:** allow GitHub Actions to
-   create and approve pull requests (the weekly and daily jobs open them).
-2. **Secrets → `CLEARCUTT_BOT_TOKEN`:** a GitHub App token, or a fine-grained
-   token with contents and pull-requests write. Without it the jobs open pull
-   requests as `github-actions[bot]`, and GitHub holds the CI runs those
-   trigger until a maintainer approves them on each pull request (the runs
-   show as `action_required`). With it, CI starts on them by itself.
-3. For a registry other than `ghcr.io`: set the reusable workflows' `registry`
+1. **An identity for the bot's pull requests.** The weekly and daily jobs
+   open pull requests, and CI starts on them by itself only when they come
+   from an identity of their own:
+   * a **GitHub App** (recommended; [below](#a-github-app-for-the-automation)):
+     a `CLEARCUTT_APP_ID` variable and a `CLEARCUTT_APP_PRIVATE_KEY` secret;
+   * or a `CLEARCUTT_BOT_TOKEN` secret: a fine-grained token with contents
+     and pull-requests write, which belongs to a person and lives until it
+     expires.
+
+   The jobs use the App when it is set, then the token. With neither, they
+   use the workflow's `GITHUB_TOKEN`: allow it under **Actions → General →
+   Workflow permissions** to create pull requests. Its pull requests are
+   `github-actions[bot]`'s, and GitHub holds the CI runs they trigger until a
+   maintainer approves them on each pull request (the runs show as
+   `action_required`).
+2. For a registry other than `ghcr.io`: set the reusable workflows' `registry`
    input and add `REGISTRY_USERNAME` and `REGISTRY_PASSWORD` secrets.
 
 On `main`, each changed image is pushed, signed keylessly, attested (SBOM,
 vulnerabilities, recipe, SLSA provenance), and rebuilt on a second runner from
-its signed recipe. Unchanged images aren't republished.
+its signed recipe, which attests the match (a reproduction attestation).
+Unchanged images aren't republished.
+
+### A GitHub App for the automation
+
+An App's installation tokens expire within the hour, carry only the
+permissions a job asks for, and belong to no person. One App can serve every
+repository in the organization.
+
+1. **Create it:** organization settings → **Developer settings → GitHub Apps
+   → New GitHub App** (your account's developer settings, for repositories
+   you own). Any name and homepage URL; clear **Webhook → Active**; install
+   **only on this account**.
+2. **Repository permissions** (nothing else: no organization or account
+   permissions, no events):
+
+   | Permission | Access | Why |
+   |---|---|---|
+   | Contents | Read and write | Push the branches of the lock-update and pin pull requests; send `repository_dispatch` to dependents (`notify.yml`) |
+   | Pull requests | Read and write | Open, update, and close those pull requests |
+   | Metadata | Read-only | Required for every App; find dependents by topic (`notify.yml`) |
+
+3. **Keys:** note the App's **Client ID**, and **Generate a private key** (a
+   `.pem` file).
+4. **Install it** on the repositories that run the workflows, including
+   the app repositories a platform repository notifies.
+5. **Hand it to the workflows:** a variable `CLEARCUTT_APP_ID` holding the
+   Client ID (the numeric App ID works too; the reusable workflows also take
+   it as their `app-id` input), and a secret `CLEARCUTT_APP_PRIVATE_KEY`
+   holding the whole `.pem` file.
+
+Each job of `update-locks.yml` and `fleet.yml` mints its own token with
+[`actions/create-github-app-token`](https://github.com/actions/create-github-app-token),
+limited to the repository it runs in and to contents and pull-requests
+write. `notify.yml` mints one with metadata read on the owner's repositories
+the App is installed on, to find dependents, then one with contents write on
+only those, to dispatch. Tokens are revoked when the job ends. Setting only
+one of the two fails the job instead of quietly falling back to another
+identity.
 
 ## 5. Apps and stacks across repositories
 
@@ -100,6 +146,67 @@ The app's lock pins the stack's digest, so a moved tag changes nothing until
 `policy.requireSignedStacks: true` to accept only stacks signed by
 `signing.stacks` (the platform repository's identity; `signing.verify` when
 unset).
+
+### Waking the apps when the platform publishes
+
+Each app repository's daily fleet job picks up a new run image on its own.
+To have it happen minutes after the platform publishes:
+
+```
+platform: images.yml ─▶ notify.yml ─repository_dispatch─▶ each repository with the topic clearcutt-app
+  clearcutt.run-image-published ─▶ fleet.yml: rebase onto the new run image, then the pin pull request
+  clearcutt.stack-published     ─▶ update-locks.yml: a pull request moving the lock to the new stack
+```
+
+1. **Tag the app repositories** with the topic `clearcutt-app` (the
+   repository's About settings). `notify.yml`'s `topic` and `owner` inputs
+   change the search, and `repositories` names dependents outright (topic
+   search can lag a change by a few minutes).
+2. **Give the platform repository an identity that can write to them:** the
+   GitHub App installed on them too ([above](#a-github-app-for-the-automation)),
+   or a `CLEARCUTT_BOT_TOKEN` with Contents read and write on each.
+   `GITHUB_TOKEN` can't dispatch to other repositories.
+3. **That's all for images and apps:** `init`'s workflow has the `notify`
+   job (sending, for the images `images.yml` reports in its `published`
+   output) and answers both events (receiving). The payload,
+   `{image, repository, digest, tags, source}`, is advisory: the jobs it
+   starts re-resolve tags from the registry and verify signatures as they do
+   on their schedules, so a stale or forged dispatch starts a run that
+   changes nothing.
+4. **Stacks** are pushed by a job of your own, so hand `notify.yml` what it
+   pushed (`stack push` writes `image`, `repository`, and `digest` to
+   `$GITHUB_OUTPUT`):
+
+```yaml
+  stacks:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions: {contents: read, packages: write, id-token: write}
+    outputs:
+      published: ${{ steps.push.outputs.image && format('[{{"kind":"stack","image":"{0}","digest":"{1}"}}]', steps.push.outputs.image, steps.push.outputs.digest) || '[]' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: northcutted/clearcutt-factory@v0.1.1
+        with: {tools: "false"}
+      - uses: docker/login-action@v4
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ github.token }}"}
+      - id: push
+        run: clearcutt-factory stack push -f stacks/go.yaml --ref ghcr.io/acme/stacks/go:1
+
+  notify-stacks:
+    needs: stacks
+    if: needs.stacks.outputs.published != '[]'
+    uses: northcutted/clearcutt-factory/.github/workflows/notify.yml@v0.1.1
+    permissions: {contents: read}
+    with:
+      published: ${{ needs.stacks.outputs.published }}
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+```
+
+Dispatches queue behind any fleet or lock-update run already going in the
+app repository, so a burst of them costs at most one more run.
 
 ## Who signs, and binding signatures to your repository
 
@@ -153,15 +260,21 @@ signers:
 
 ## The reusable workflows
 
-Call them from your own workflow, pinned to a release. All three take a
-`factory-version` input (default: their own release) and need
-`secrets: inherit` for the optional secrets above.
+Call them from your own workflow, pinned to a release. `images.yml`,
+`update-locks.yml`, and `fleet.yml` take a `factory-version` input (default:
+their own release). Pass the optional secrets above by name, as `init`'s
+workflow does: `secrets: inherit` reaches only workflows in your own
+organization or enterprise. Variables (`CLEARCUTT_APP_ID`) are read from the
+calling repository. `images.yml`'s output `published` is what the run newly
+published: a JSON array of `{manifest, kind (image or app), image
+(repository@digest), repository, digest, tags}`, `[]` on pull requests.
 
-| Workflow | Inputs | Caller permissions |
-|---|---|---|
-| `images.yml` | `manifests` (globs, default `**/image.yaml **/app.yaml`), `registry`, `provenance` | `contents: read`, `packages: write`, `id-token: write`, `attestations: write` |
-| `update-locks.yml` | `manifests` | `contents: write`, `pull-requests: write` |
-| `fleet.yml` | `apps` (default `**/app.yaml`), `registry` | `contents: write`, `pull-requests: write`, `packages: write`, `id-token: write` |
+| Workflow | Inputs | Secrets | Caller permissions |
+|---|---|---|---|
+| `images.yml` | `manifests` (globs, default `**/image.yaml **/app.yaml`), `registry`, `provenance` | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write`, `attestations: write` |
+| `update-locks.yml` | `manifests`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: write`, `pull-requests: write` |
+| `fleet.yml` | `apps` (default `**/app.yaml`), `registry`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: write`, `pull-requests: write`, `packages: write`, `id-token: write` |
+| `notify.yml` | `published` (required), `topic` (default `clearcutt-app`), `owner`, `repositories`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: read` |
 
 For workflows of your own, the action installs a signature-verified binary
 plus cosign, syft, and grype:
