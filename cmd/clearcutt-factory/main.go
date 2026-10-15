@@ -28,8 +28,10 @@ Usage:
       all of them; --update-base only the base.
   clearcutt-factory render  [-f image.yaml] [--check] [--context-dir DIR]
       Regenerate (or check) the Containerfile.
-  clearcutt-factory build   [-f image.yaml] [--push] [--out DIR] [--no-test] [--no-scan] [--no-sign] [--no-cache]
+  clearcutt-factory build   [-f image.yaml] [--push] [--out DIR] [--no-test] [--no-scan] [--no-sign] [--no-cache] [--force-tags]
       Build, smoke-test, SBOM, scan, gate; with --push also sign and attest.
+      Tags never move back from a newer image to one published before
+      unless --force-tags.
   clearcutt-factory verify  [-f image.yaml] --digest sha256:…
       Rebuild from source and compare.
   clearcutt-factory verify  --image repo@sha256:… [--attest] [--key K [--insecure-ignore-tlog] | --certificate-identity[-regexp] R
@@ -37,7 +39,7 @@ Usage:
       Rebuild from the image's signed recipe (or repeat its recorded rebase) and compare;
       --attest then signs and attaches a reproduction attestation to the image.
   clearcutt-factory rebase  --image repo[:tag|@sha256:…] [--onto BASE] [--from BASE] [--check] [--force]
-                            [--push] [--tag T]… [--out DIR] [--no-scan] [--no-sign]
+                            [--push] [--tag T]… [--force-tags] [--out DIR] [--no-scan] [--no-sign]
       Move the image's own layers onto a newer build of its base (default: the
       base it names, resolved again).
   clearcutt-factory rebase  [-f app.yaml] [--update-lock] [--no-test] [same flags]
@@ -112,6 +114,7 @@ func run(ctx context.Context, args []string) error {
 		fs.BoolVar(&bo.NoSign, "no-sign", false, "")
 		fs.BoolVar(&bo.NoCache, "no-cache", false, "")
 		fs.BoolVar(&bo.NoTest, "no-test", false, "")
+		fs.BoolVar(&bo.ForceTags, "force-tags", false, "")
 		if err := parse(fs, args); err != nil {
 			return err
 		}
@@ -168,6 +171,7 @@ func run(ctx context.Context, args []string) error {
 		fs.BoolVar(&ro.Force, "force", false, "")
 		fs.BoolVar(&ro.Push, "push", false, "")
 		fs.Func("tag", "", func(s string) error { ro.Tags = append(ro.Tags, s); return nil })
+		fs.BoolVar(&ro.ForceTags, "force-tags", false, "")
 		fs.StringVar(&ro.OutDir, "out", "out", "")
 		fs.BoolVar(&ro.NoScan, "no-scan", false, "")
 		fs.BoolVar(&ro.NoSign, "no-sign", false, "")

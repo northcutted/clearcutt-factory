@@ -149,6 +149,16 @@ stack's newest build image, and a registry stack to its newest version; the
 builder pins stay. After a successful rebase the build image stays pinned,
 as before: the app's layer was built with it.
 
+**Republishing an image doesn't move tags backwards
+([#15](https://github.com/northcutted/clearcutt-factory/issues/15)).** After
+the fleet rebased an app, a push to the app's `main` before the pin pull
+request merged rebuilt the original image from the old lock, and publishing
+it moved `latest` back to the unpatched base. A tag now stays where it is,
+with a warning, when it holds a newer image than the one published again:
+that image rebased onto a newer build of its base, or an image created later
+(built from a newer lock). `build` and `rebase` take `--force-tags` to move
+it anyway.
+
 ## v0.1.1
 
 **Signatures from the reusable workflows verify in other repositories
