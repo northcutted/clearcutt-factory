@@ -381,7 +381,7 @@ func publish(ctx context.Context, opts Options, org *manifest.Org, art *registry
 	if err != nil {
 		return "", false, false, err
 	}
-	if exists && (!sign || attested(ctx, org, ref, predicateType, art.Source())) {
+	if exists && (!sign || attestedEither(ctx, org, ref, predicateType, art.Source())) {
 		moved, left, err := moveTags(ctx, opts, art, repo, tags, forceTags, held)
 		if err != nil {
 			return "", false, false, err
@@ -418,6 +418,18 @@ func publish(ctx context.Context, opts Options, org *manifest.Org, art *registry
 		opts.printf("signed %s and attached its attestations", ref)
 	}
 	return ref, true, sign, left.orNil()
+}
+
+// attestedEither reports whether ref carries the org's index attestation of
+// predicateType or of the other kind: a rebase gives the image a build from
+// the lock it pinned gives, so a build may find the rebased image published
+// with its rebase record, and a rebase the built one with its recipe.
+func attestedEither(ctx context.Context, org *manifest.Org, ref, predicateType, source string) bool {
+	other := attest.RebasePredicateType
+	if predicateType == attest.RebasePredicateType {
+		other = attest.RecipePredicateType
+	}
+	return attested(ctx, org, ref, predicateType, source) || attested(ctx, org, ref, other, source)
 }
 
 // attested reports whether ref already carries a verified attestation of
