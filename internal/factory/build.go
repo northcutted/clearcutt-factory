@@ -226,6 +226,7 @@ func runBuild(ctx context.Context, opts Options, org *manifest.Org, req builder.
 	cfg := builder.Config{
 		Runtime: org.Builder.Runtime, Addr: org.Builder.Addr,
 		Stdout: w, Stderr: w, WriteAuth: registry.WriteDockerConfig,
+		BuildkitdConfig: org.Builder.Config, Network: org.Builder.Network,
 	}
 	if cache {
 		cfg.CacheVolume = cacheVolume

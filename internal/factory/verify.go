@@ -304,6 +304,9 @@ func identityArgs(v manifest.VerifyIdentity, imageSource string) ([]string, erro
 	if v.Key != "" {
 		args = append(args, "--key", v.Key)
 	}
+	if v.IgnoresTlog() {
+		args = append(args, "--insecure-ignore-tlog=true")
+	}
 	if v.CertificateIdentity != "" {
 		args = append(args, "--certificate-identity", v.CertificateIdentity)
 	}

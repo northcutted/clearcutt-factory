@@ -132,7 +132,10 @@ clearcutt-factory stack push -f stacks/go.yaml --ref ghcr.io/acme/stacks/go:1
 
 Build and run images given as factory manifests (`run: ../go-runtime/image.yaml`)
 are resolved to their published references before pushing, and the stack is
-signed. App repositories name it by reference:
+signed. A stack is published by its content, so pushing an unchanged one
+again only moves the tag, once the org's stack signer (`signing.stacks`,
+below) has signed it: a workflow can run `stack push` on every change
+without piling up signatures. App repositories name it by reference:
 
 ```yaml
 kind: App
@@ -242,6 +245,47 @@ as above), and with `policy.requireSignedStacks` a stack signer with
 `sourceMatchesImage` is an error. Pinning the workflows by commit SHA changes
 the identity's `@…` suffix: adjust the regexp to match.
 
+**With keys.** In key mode, `signing.key` signs images and
+`signing.stackKey` signs stacks (default: `signing.key`), so a platform's
+stacks can have a signer of their own; `signing.verify.key` and
+`signing.stacks.key` are the public halves. `stack push --key` signs with
+another key (a file or KMS URI) whatever `signing.mode` says:
+
+```yaml
+signing:
+  mode: key
+  key: awskms:///alias/images         # signs images
+  stackKey: awskms:///alias/stacks    # signs stacks (stack push)
+  verify: {key: keys/images.pub}
+  stacks: {key: keys/stacks.pub}
+```
+
+**Without a transparency log.** A key that signs without a transparency
+log (a private or offline setup) gets a cosign signing config that names
+no log, instead of cosign 2's `--tlog-upload=false`, which cosign 3
+deprecates. Verifiers then accept that key's evidence without a log entry
+when its signer says `tlog: false`:
+
+```sh
+cosign signing-config create --out cosign/no-tlog.json   # no services: no Rekor, no timestamp authority
+```
+
+```yaml
+signing:
+  mode: key
+  key: awskms:///alias/images
+  args: [--signing-config, cosign/no-tlog.json]   # passed to cosign as is: relative to the working directory
+  verify: {key: keys/images.pub, tlog: false}      # cosign --insecure-ignore-tlog, for this key only
+```
+
+`tlog: false` means the same in a trust policy's signers (clearcutt-verify
+reads it too), and `verify --image --key K --insecure-ignore-tlog` passes it
+on the command line. Keyless signers can't set it: a certificate is only
+valid with a log entry that shows it was used in time. Nothing shows when
+key-signed evidence without one was made, so set it only for keys that
+never log. A private Sigstore with its own services gets a signing config
+naming them (`cosign signing-config create --fulcio … --rekor …`).
+
 **One trust policy for the organization.** Instead of `verify` and `stacks`,
 `signing.trustPolicy` can name a ClearCutt trust policy, the same file
 [clearcutt-verify](https://github.com/northcutted/clearcutt-verify) reads to
@@ -309,6 +353,39 @@ For keyless signing elsewhere, set `signing.verify` to your CI's OIDC
 identity (the `source…` fields are GitHub Actions only); or sign with a key (`signing.mode: key`, a file or any cosign KMS
 URI). `builder.addr` points builds at an existing BuildKit (in Kubernetes,
 say) instead of starting a container.
+
+### A registry on this machine
+
+BuildKit runs in a container, where `localhost` is the container itself, so
+a base in a registry on your machine (`localhost:5000/platform/run-go`, say)
+can't be pulled in a build, though `lock`, cosign, and the scanners reach
+it. Two settings in the org profile give the BuildKit container what it
+needs:
+
+```yaml
+builder:
+  network: host               # Linux: share the host's network, so localhost is the host
+  config: buildkitd.toml      # relative to this profile; mounted as /etc/buildkit/buildkitd.toml
+```
+
+BuildKit already talks plain HTTP to `localhost` and `127.0.0.1`. With
+Docker Desktop or a Podman machine (macOS, Windows), containers run in a VM
+whose host network isn't your machine's, so instead mirror the registry to
+the address the VM gives your machine, over HTTP:
+
+```toml
+# buildkitd.toml
+[registry."localhost:5000"]
+  mirrors = ["host.containers.internal:5000"]   # Docker Desktop: host.docker.internal
+[registry."host.containers.internal:5000"]
+  http = true
+```
+
+The same file takes other registry settings (`insecure`, `ca`, pull-through
+mirrors); see BuildKit's
+[buildkitd.toml reference](https://docs.docker.com/build/buildkit/toml-configuration/).
+Neither setting changes what is built: every input is pinned by digest. With
+`builder.addr`, configure that buildkitd instead.
 
 ## Governing what you built
 

@@ -48,6 +48,47 @@ workflows. The reusable workflows now declare their optional secrets, and
 `init` passes them by name. Existing workflows: replace `secrets: inherit`
 with the names, as `docs/adopting.md` shows.
 
+**The BuildKit container can reach a registry on this machine
+([#40](https://github.com/northcutted/clearcutt-factory/issues/40)).**
+`builder.config` mounts a `buildkitd.toml` (relative to the org profile)
+into the BuildKit container: registry mirrors, plain-HTTP or insecure
+registries, CA certificates. `builder.network` sets its network (e.g.
+`host`). Before, a base in a local or plain-HTTP registry could be locked
+but not built, short of a custom BuildKit image or `builder.addr`.
+`docs/adopting.md` shows both for Linux and for Docker or Podman in a VM.
+
+**Stacks can have a signing key of their own
+([#41](https://github.com/northcutted/clearcutt-factory/issues/41)).** In
+key mode, `signing.key` signed stacks too, so a separate stack signer
+(`signing.stacks.key`) needed a second org profile. `signing.stackKey` signs
+stacks instead (relative to the profile, or a KMS URI), and `stack push
+--key` signs with a given key whatever `signing.mode` says.
+
+**`stack push` signs a stack once
+([#44](https://github.com/northcutted/clearcutt-factory/issues/44)).** It
+pushed and signed every time, so re-running it on an unchanged stack added
+another signature to the same digest. When the registry already has the
+digest and one of the org's stack signers signed it (or signing is off), it
+now only moves the tag, as `build --push` does. With no stack signer
+configured it can't tell, and signs again.
+
+**Signing and verifying without a transparency log
+([#43](https://github.com/northcutted/clearcutt-factory/issues/43)).** The
+example profile documented `--tlog-upload=false`, which cosign 3 deprecates;
+`docs/adopting.md` now shows a cosign signing config that names no log.
+Signers verified with keys take `tlog: false` (in `signing.verify`,
+`signing.stacks`, and a trust policy's signers, as clearcutt-verify's trust
+policy does), which verifies that key's signatures and attestations with
+cosign `--insecure-ignore-tlog`; keyless signers can't set it. `verify
+--image --key K --insecure-ignore-tlog` does the same on the command line.
+
+**The rebase record names the smoke test that ran.** A rebase from the app
+manifest runs the app's smoke test on every platform before it publishes,
+but the record didn't say so, so verifiers counted no test on rebased
+images. The record now has `test`: the app's `spec.test` as declared and
+each platform's result. It is absent when no test ran (`rebase --image`,
+`--no-test`). README documents the record's fields.
+
 **`policy.requireSignedStacks` holds wherever a stack is used.** Only `lock`
 checked the stack's signature: `render`, `build`, `verify`, and `rebase` used
 whatever version the lock pinned, so a pull request that edited

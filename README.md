@@ -223,6 +223,9 @@ the stack's digest until `lock --update` moves it, and
 `policy.requireSignedStacks` accepts only stacks signed by the org's stack
 signer (`signing.stacks`). Every command that uses the stack checks the
 version the lock pins, so editing the lock can't bring in an unsigned one.
+Pushing an unchanged stack again only moves its tag once the stack signer
+has signed it, and in key mode stacks are signed with `signing.stackKey`
+(or `stack push --key`) when the platform's stacks have a key of their own.
 
 Apps can't declare packages, tools, or files: anything an app needs from the
 OS belongs in the stack's run image, which is itself a factory image. Quote
@@ -263,8 +266,20 @@ directory, ports, and volumes stay as built, and `clearcutt-factory` notes where
 base would differ. Environment variables and labels the image inherited
 unchanged from the old base follow the new one (a changed `PATH`, say).
 
+**The rebase record** (predicate type
+`https://github.com/northcutted/clearcutt-factory/rebase/v1`, on the
+rebased index) holds `image`, the image that was rebased (`repo@digest`);
+`from`, each platform's old base; `onto`, the new base's `name` and the
+`ref` it resolved to; `config`, per platform, the configuration that
+followed the base; `result`, the new digests; and `test` when the rebase ran
+the app's smoke test (`rebase -f` without `--no-test`): the app's
+`spec.test` as declared (`command`, `http`, `timeout`) and `platforms`,
+each platform's result. A failing test stops the rebase before anything is
+published, so a published record says `passed`; `rebase --image` (which has
+no test) and `--no-test` record no `test`.
+
 A rebase is a pure function of its inputs. The result carries a signed
-**rebase record** (the image, old and new base digests) instead of a recipe,
+**rebase record** (above) instead of a recipe,
 so `clearcutt-factory verify --image` repeats the rebase and compares digests in seconds.
 SBOM and vulnerability attestations are made for the result as for builds.
 
@@ -334,8 +349,8 @@ found by walking up from the manifest (or `--org`). See
 |---|---|
 | `registry`, `tags` | Where images go and how they are tagged |
 | `defaults` | Base image, platforms, and labels for every manifest |
-| `builder` | Pinned BuildKit, Dockerfile frontend, toolbox, Go and Nix images, default nixpkgs branch; `runtime: docker\|podman`; `addr:` for a remote buildkitd (e.g. in Kubernetes) |
-| `signing` | `keyless` (Sigstore OIDC), `key` (file or any cosign KMS URI), or `none`; extra cosign args (private Sigstore, no tlog); who signs this repository's images (`verify`, bound to the workflow run's repository with `sourceRepository`) and its stacks (`stacks`), or a shared ClearCutt `trustPolicy` file ([adopting](docs/adopting.md#who-signs-and-binding-signatures-to-your-repository)) |
+| `builder` | Pinned BuildKit, Dockerfile frontend, toolbox, Go and Nix images, default nixpkgs branch; `runtime: docker\|podman`; `addr:` for a remote buildkitd (e.g. in Kubernetes); `config:` (a `buildkitd.toml`: mirrors, plain-HTTP or insecure registries, CA certificates) and `network:` for the BuildKit container ([a registry on this machine](docs/adopting.md#a-registry-on-this-machine)) |
+| `signing` | `keyless` (Sigstore OIDC), `key` (file or any cosign KMS URI; `stackKey` signs stacks with a key of their own), or `none`; extra cosign args (a signing config for a private Sigstore, or for signing [without a transparency log](docs/adopting.md#who-signs-and-binding-signatures-to-your-repository)); who signs this repository's images (`verify`, bound to the workflow run's repository with `sourceRepository`) and its stacks (`stacks`), or a shared ClearCutt `trustPolicy` file ([adopting](docs/adopting.md#who-signs-and-binding-signatures-to-your-repository)) |
 | `sbom` | Whether to add a syft scan to the declared SBOM |
 | `vulnerabilities` | Scanner and the `failOn` severity gate, optionally `onlyFixed` |
 | `policy` | Non-root, required labels, TOFU, allowed download hosts (tools and packages) and registries |

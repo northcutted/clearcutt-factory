@@ -81,13 +81,26 @@ type Builder struct {
 	// Addr targets an existing buildkitd (e.g. tcp://buildkitd:1234) with the
 	// local buildctl instead of starting a container.
 	Addr string `yaml:"addr,omitempty"`
+	// Config is a buildkitd.toml for the BuildKit container, relative to
+	// this profile: registry mirrors, plain-HTTP or insecure registries, CA
+	// certificates. Not with addr (configure that buildkitd instead).
+	Config string `yaml:"config,omitempty"`
+	// Network is the BuildKit container's network (docker or podman run
+	// --network), e.g. host, so BuildKit reaches a registry on this
+	// machine's localhost. Not with addr.
+	Network string `yaml:"network,omitempty"`
 }
 
 type Signing struct {
 	// Mode is keyless (Sigstore OIDC), key (file or KMS URI), or none.
-	Mode string   `yaml:"mode,omitempty"`
-	Key  string   `yaml:"key,omitempty"`
-	Args []string `yaml:"args,omitempty"`
+	Mode string `yaml:"mode,omitempty"`
+	// Key signs images in key mode: a file (relative to this profile) or a
+	// cosign KMS URI.
+	Key string `yaml:"key,omitempty"`
+	// StackKey signs stacks (stack push) in key mode instead of Key, so
+	// stacks can have a signer of their own (see Stacks).
+	StackKey string   `yaml:"stackKey,omitempty"`
+	Args     []string `yaml:"args,omitempty"`
 	// Verify is who signs this repository's images. `verify --image`, the
 	// already-published check, and repeating rebases verify against it.
 	Verify VerifyIdentity `yaml:"verify,omitempty"`
@@ -129,11 +142,21 @@ type VerifyIdentity struct {
 	// SourceRef is the ref the run was on, e.g. refs/heads/main.
 	SourceRef string   `yaml:"sourceRef,omitempty"`
 	Args      []string `yaml:"args,omitempty"`
+	// Tlog false accepts this key signer's signatures and attestations
+	// without a transparency log entry (cosign --insecure-ignore-tlog),
+	// for a key that signs without one. Keyless signers can't set it.
+	Tlog *bool `yaml:"tlog,omitempty"`
 }
 
 // IsZero reports whether no signer is set.
 func (v VerifyIdentity) IsZero() bool {
 	return v.Key == "" && v.CertificateIdentity == "" && v.CertificateIdentityRegexp == "" && v.CertificateOIDCIssuer == "" && len(v.Args) == 0
+}
+
+// IgnoresTlog reports whether the signer is a key whose evidence is
+// accepted without a transparency log entry (tlog: false).
+func (v VerifyIdentity) IgnoresTlog() bool {
+	return v.Key != "" && v.Tlog != nil && !*v.Tlog
 }
 
 type SBOM struct {
@@ -202,6 +225,9 @@ func (o *Org) validate() error {
 	default:
 		errs = append(errs, fmt.Errorf("signing.mode %q must be keyless, key, or none", o.Signing.Mode))
 	}
+	if o.Signing.StackKey != "" && o.Signing.Mode != "key" {
+		errs = append(errs, errors.New("signing.stackKey is only used when signing.mode is key (stack push --key signs with a key in any mode)"))
+	}
 	switch o.Vulnerabilities.Scanner {
 	case "grype", "none":
 	default:
@@ -242,6 +268,14 @@ func (o *Org) validate() error {
 	case "auto", "docker", "podman":
 	default:
 		errs = append(errs, fmt.Errorf("builder.runtime %q must be auto, docker, or podman", o.Builder.Runtime))
+	}
+	if b := o.Builder; b.Addr != "" && (b.Config != "" || b.Network != "") {
+		errs = append(errs, errors.New("builder.config and builder.network set up the BuildKit container factory starts; with builder.addr, configure that buildkitd instead"))
+	}
+	if c := o.Builder.Config; c != "" {
+		if st, err := os.Stat(c); err != nil || st.IsDir() {
+			errs = append(errs, fmt.Errorf("builder.config: %s is not a file", c))
+		}
 	}
 	return errors.Join(errs...)
 }
@@ -286,8 +320,12 @@ func LoadOrg(path, startDir string) (*Org, error) {
 	o.Path, _ = filepath.Abs(path)
 	dir := filepath.Dir(o.Path)
 	o.Signing.Key = keyPath(dir, o.Signing.Key)
+	o.Signing.StackKey = keyPath(dir, o.Signing.StackKey)
 	o.Signing.Verify.Key = keyPath(dir, o.Signing.Verify.Key)
 	o.Signing.Stacks.Key = keyPath(dir, o.Signing.Stacks.Key)
+	if c := o.Builder.Config; c != "" && !filepath.IsAbs(c) {
+		o.Builder.Config = filepath.Join(dir, c)
+	}
 	if t := o.Signing.TrustPolicy; t != "" {
 		if !filepath.IsAbs(t) {
 			t = filepath.Join(filepath.Dir(o.Path), t)
