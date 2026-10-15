@@ -441,14 +441,14 @@ func TestPublishOnce(t *testing.T) {
 	var out bytes.Buffer
 	opts := Options{Stdout: &out, Stderr: &out}
 
-	ref, published, _, err := publish(ctx, opts, org, art, host+"/app", []string{"latest"}, attest.RecipePredicateType, "", nil, false, false)
+	ref, published, _, err := publish(ctx, opts, org, art, host+"/app", []string{"latest"}, attest.RecipePredicateType, "", nil, false, false, nil)
 	if err != nil || !published || ref != host+"/app@"+d.String() {
 		t.Fatalf("first publish: %s %v %v", ref, published, err)
 	}
 	// The tag moves elsewhere, then the same digest is published again.
 	other := testIndex(t, nil, func(arch string) []v1.Layer { return []v1.Layer{testLayer(t, map[string]string{"b": arch})} }, nil)
 	push(t, host+"/app:latest", other)
-	_, published, _, err = publish(ctx, opts, org, art, host+"/app", []string{"latest", "v1"}, attest.RecipePredicateType, "", nil, false, false)
+	_, published, _, err = publish(ctx, opts, org, art, host+"/app", []string{"latest", "v1"}, attest.RecipePredicateType, "", nil, false, false, nil)
 	if err != nil || published {
 		t.Fatalf("second publish: published=%v, %v", published, err)
 	}

@@ -282,12 +282,18 @@ jobs:
         with:
           name: ${{ steps.slug.outputs.slug }}
           path: build-result
+      # An app build whose tag held an image on a newer base was also rebased
+      # onto it (a second result.json); that rebase is repeated from its
+      # signed record.
       - name: Rebuild from the recipe attestation, compare digests, and attest a match
         env:
           MANIFEST: ${{ matrix.manifest }}
         run: |
-          result=$(find build-result -name result.json 2>/dev/null | head -n 1)
-          if [ -z "$result" ] || [ "$(jq -r .published "$result")" != true ]; then
+          images=()
+          while IFS= read -r result; do
+            if [ "$(jq -r .published "$result")" = true ]; then images+=("$(jq -r .image "$result")"); fi
+          done < <(find build-result -name result.json 2>/dev/null | sort)
+          if [ "${#images[@]}" = 0 ]; then
             echo "not newly published in this run; nothing to reproduce"
             exit 0
           fi
@@ -296,4 +302,4 @@ jobs:
           while [ ! -f "$dir/factory.org.yaml" ] && [ "$dir" != . ] && [ "$dir" != / ]; do dir=$(dirname "$dir"); done
           org=()
           if [ -f "$dir/factory.org.yaml" ]; then org=(--org "$dir/factory.org.yaml"); fi
-          clearcutt-factory verify --image "$(jq -r .image "$result")" --attest "${org[@]}"
+          for image in "${images[@]}"; do clearcutt-factory verify --image "$image" --attest "${org[@]}"; done

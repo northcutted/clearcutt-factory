@@ -6,9 +6,12 @@
 # gated, pushed, signed, and checked by repeating the rebase from its signed
 # record; a match is attested on the image (…/reproduction/v1, method
 # rebase-repeat). A pull request then pins the app's lock to the same base,
-# so the next build from source doesn't move it back. An app that can't be
-# rebased gets a pull request that also moves its stack's build image
-# (building it is the fix) and its job fails.
+# so the next build from source doesn't move it back; it is opened even if
+# the repeat fails, marked as not independently reproduced. An app that
+# can't be rebased gets a pull request that also moves its stack's build
+# image (building it is the fix) and its job fails. If a newer publish takes
+# the app's tag during the rebase, the tag stays there and the result is
+# pushed by digest only; the next run rebases the new image.
 #
 # The pull requests are opened as a GitHub App, CLEARCUTT_BOT_TOKEN, or the
 # workflow's GITHUB_TOKEN, as update-locks.yml describes. Other repositories
@@ -163,6 +166,7 @@ jobs:
           fi
 
       - name: Repeat the rebase from its signed record, and attest a match
+        id: repeat
         if: steps.rebase.outputs.image != ''
         env:
           APP: ${{ matrix.app }}
@@ -172,13 +176,20 @@ jobs:
           while [ ! -f "$dir/factory.org.yaml" ] && [ "$dir" != . ] && [ "$dir" != / ]; do dir=$(dirname "$dir"); done
           org=()
           if [ -f "$dir/factory.org.yaml" ]; then org=(--org "$dir/factory.org.yaml"); fi
-          clearcutt-factory verify --image "$IMAGE" --attest "${org[@]}"
+          clearcutt-factory verify --image "$IMAGE" --attest "${org[@]}" 2>&1 | tee "$RUNNER_TEMP/repeat.out"
 
+      # Also when the repeat failed: the rebased image is published either
+      # way, and without this pull request the next build from source would
+      # go back to the old base.
       - name: Pin the lock to the same base
+        if: ${{ !cancelled() && steps.rebase.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || secrets.CLEARCUTT_BOT_TOKEN || github.token }}
           APP: ${{ matrix.app }}
           FAILED: ${{ steps.rebase.outputs.failed }}
+          IMAGE: ${{ steps.rebase.outputs.image }}
+          REPEAT: ${{ steps.repeat.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           dir=$(dirname "$APP")
           name=$(echo "$dir" | tr '/' '-')
@@ -194,7 +205,17 @@ jobs:
           else
             intro="The published image is on the newest run image. This pins the lock to the same base, so the next build from source doesn't move it back."
           fi
-          { echo "$intro"; echo; echo '```'; cat "$RUNNER_TEMP/rebase.out"; echo '```'; } > "$RUNNER_TEMP/body.md"
+          {
+            if [ "$REPEAT" = failure ]; then
+              echo "> [!WARNING]"
+              echo "> **Not independently reproduced.** Repeating the rebase from its signed record failed for \`$IMAGE\` ([run]($RUN_URL)). Find out why before relying on that image. Merging this still helps: it rebuilds the app from source on the same base, and the images workflow reproduces that build."
+              echo
+            fi
+            echo "$intro"; echo; echo '```'; cat "$RUNNER_TEMP/rebase.out"; echo '```'
+            if [ "$REPEAT" = failure ] && [ -f "$RUNNER_TEMP/repeat.out" ]; then
+              echo; echo "Repeating the rebase:"; echo; echo '```'; cat "$RUNNER_TEMP/repeat.out"; echo '```'
+            fi
+          } > "$RUNNER_TEMP/body.md"
           "$FACTORY_DIR/.github/scripts/open-pr.sh" "factory/rebase/$name" "Pin $dir to the newest run image" "$RUNNER_TEMP/body.md" "$dir"
 
       - name: Fail if the app must be rebuilt
