@@ -5,6 +5,33 @@ what may change between releases.
 
 ## Unreleased
 
+**Rebased images get SLSA build provenance
+([#52](https://github.com/northcutted/clearcutt-factory/issues/52)).** A
+fleet rebase pushes a new digest. It was signed and carried a rebase record,
+but it had no SLSA provenance, so a verifier that requires provenance
+(clearcutt-verify's `required: [provenance]`) failed every rebased image.
+`fleet.yml` now attests build provenance for the digest it pushes, the way
+`images.yml` attests builds: `actions/attest-build-provenance`, pushed to
+the registry and signed by `fleet.yml`, when `gh attestation verify
+--signer-workflow …/fleet.yml` finds none yet. A new `provenance` input
+(default `true`) turns it off. When `images.yml` rebases an app build onto
+a newer base, it now attests the rebased image too (the one the tags point
+at), not only the image it built. **Callers of `fleet.yml` must now grant
+`attestations: write`.** `init`'s workflow and `docs/adopting.md` grant it.
+Images rebased before this release fail a provenance requirement until their
+next rebase or build.
+
+**The bot's pull requests work for a manifest at the repository root
+([#51](https://github.com/northcutted/clearcutt-factory/issues/51)).**
+`update-locks.yml` and `fleet.yml` named the branch after the manifest's
+directory. For an `app.yaml` at the root that directory is `.`, and
+`factory/update/.` isn't a valid branch name, so no pull request opened. A
+root manifest's branch is now named after its file (`factory/rebase/root-app`,
+`factory/update/root-image`). Only its own files (the manifest, its lock, and
+its Containerfile) are committed, not the whole checkout. Manifests in
+directories keep their branches. A leading `./` in a glob, or a character git
+refuses in branch names, no longer breaks them.
+
 **One org profile for every repository
 ([#14](https://github.com/northcutted/clearcutt-factory/issues/14)).**
 `clearcutt-factory profile push -f PROFILE --ref REF` publishes an org

@@ -334,7 +334,7 @@ jobs:
     needs: images
     if: always() && (github.event.schedule == '41 5 * * *' || github.event.action == 'clearcutt.run-image-published' || (github.event_name == 'push' && needs.images.result == 'success'))
     uses: northcutted/clearcutt-factory/.github/workflows/fleet.yml@{{ref}}
-    permissions: {contents: write, pull-requests: write, packages: write, id-token: write}
+    permissions: {contents: write, pull-requests: write, packages: write, id-token: write, attestations: write}
     secrets:
       CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
       CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}

@@ -141,9 +141,24 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || secrets.CLEARCUTT_BOT_TOKEN || github.token }}
           MANIFEST: ${{ matrix.manifest }}
+        # One branch per directory (factory/update/examples-hello-app for
+        # examples/hello-app), with the files there. At the repository root,
+        # "." is neither a branch name nor a path to commit (it is the whole
+        # checkout), so a manifest there gets a branch named after its file
+        # (app.yaml: root-app), and only its own files are committed.
+        # fleet.yml's pin step does the same.
         run: |
-          dir=$(dirname "$MANIFEST")
-          name=$(echo "$dir" | tr '/' '-')
+          manifest=${MANIFEST#./}
+          dir=$(dirname "$manifest")
+          if [ "$dir" = . ]; then
+            stem=$(basename "$manifest"); stem=${stem%.yaml}; stem=${stem%.yml}
+            name=root-$stem what=$manifest paths=()
+            for f in "$manifest" "$stem.lock.yaml" "$stem.Containerfile"; do if [ -e "$f" ]; then paths+=("$f"); fi; done
+          else
+            name=${dir//\//-} what=$dir paths=("$dir")
+          fi
+          # What git refuses in a branch name (a leading dot, "..", a space, ~^:?*[\, "@{", a trailing "." or ".lock").
+          name=$(printf '%s' "$name" | LC_ALL=C sed -E 's/[[:space:][:cntrl:]~^:?*[\]+/-/g; s/@\{/-{/g; s/\.\.+/./g; s/^\.+//; s/(\.lock|\.)$//')
           {
             echo "Weekly \`clearcutt-factory lock --update\` of \`$MANIFEST\`:"
             echo
@@ -153,4 +168,4 @@ jobs:
             echo
             echo "CI builds, smoke-tests, scans, and gates this change. Merging publishes the rebuilt image."
           } > "$RUNNER_TEMP/body.md"
-          "$FACTORY_DIR/.github/scripts/open-pr.sh" "factory/update/$name" "Update the pinned inputs of $dir" "$RUNNER_TEMP/body.md" "$dir"
+          "$FACTORY_DIR/.github/scripts/open-pr.sh" "factory/update/$name" "Update the pinned inputs of $what" "$RUNNER_TEMP/body.md" "${paths[@]}"
