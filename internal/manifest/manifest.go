@@ -326,6 +326,9 @@ func merge(parent, child *Manifest) *Manifest {
 // ApplyOrg fills manifest gaps from the stack (for apps) and the org
 // profile, and validates the result.
 func (m *Manifest) ApplyOrg(o *Org) error {
+	if o.Shared != nil && !o.Vulnerabilities.AllowLocalVEX && len(m.Spec.VEX) > 0 {
+		return fmt.Errorf("spec.vex: the shared profile %s doesn't take VEX statements from the repositories that extend it (vulnerabilities.allowLocalVEX); add them to the shared profile", o.Shared.Ref)
+	}
 	if m.Kind == KindApp {
 		if err := m.applyStack(o); err != nil {
 			return err
@@ -537,6 +540,11 @@ func decodeFile[T any](path string) (*T, error) {
 	if err != nil {
 		return nil, err
 	}
+	return decodeBytes[T](path, b)
+}
+
+// decodeBytes decodes the YAML file path holds, b, refusing unknown fields.
+func decodeBytes[T any](path string, b []byte) (*T, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(b))
 	dec.KnownFields(true)
 	var v T

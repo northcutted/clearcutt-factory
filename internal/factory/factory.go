@@ -37,20 +37,31 @@ func (o Options) printf(format string, a ...any) { _, _ = fmt.Fprintf(o.Stdout, 
 func (o Options) logf(format string, a ...any)   { _, _ = fmt.Fprintf(o.Stderr, format+"\n", a...) }
 
 // load reads the manifest and its org profile, fetching a registry stack
-// at the digest its lock pins (or, with fresh or no pin, where its
-// reference points now) and, under policy.requireSignedStacks, checking
-// its signature. Every command that reads a manifest loads it here, so a
-// lock edited to pin an unsigned stack fails wherever the stack is used.
+// and a shared profile the org profile extends at the digests its lock
+// pins (or, with fresh or no pin, where their references point now), and
+// checking their signatures: the shared profile's always, the stack's under
+// policy.requireSignedStacks. Every command that reads a manifest loads it
+// here, so a lock edited to pin an unsigned stack or profile fails
+// wherever it is used.
 func load(ctx context.Context, opts Options, fresh bool) (*manifest.Manifest, *manifest.Org, error) {
+	return loadWith(ctx, opts, fresh, fresh)
+}
+
+// loadWith is load, moving the stack and the shared profile separately.
+func loadWith(ctx context.Context, opts Options, freshStack, freshProfile bool) (*manifest.Manifest, *manifest.Org, error) {
 	m, err := manifest.Load(opts.ManifestPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	org, err := manifest.LoadOrg(opts.OrgPath, m.Dir())
+	pin := lockedProfile(m)
+	if freshProfile {
+		pin = nil
+	}
+	org, err := loadOrg(ctx, opts, m.Dir(), pin)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := fetchAppStack(ctx, m, fresh); err != nil {
+	if err := fetchAppStack(ctx, m, freshStack); err != nil {
 		return nil, nil, fmt.Errorf("%s: %w", opts.ManifestPath, err)
 	}
 	if err := verifyStack(ctx, m, org); err != nil {
@@ -77,6 +88,12 @@ func loadLocked(ctx context.Context, opts Options) (*manifest.Manifest, *manifes
 	}
 	if l.InputsDigest != lock.InputsOf(m, org).Digest() {
 		return nil, nil, nil, fmt.Errorf("%s is stale (the manifest or org builder settings changed); run clearcutt-factory lock", filepath.Base(m.LockPath()))
+	}
+	switch sp := org.Shared; {
+	case sp != nil && (l.Profile == nil || l.Profile.Ref != sp.Ref):
+		return nil, nil, nil, fmt.Errorf("%s is stale (it doesn't pin the shared profile %s the org profile extends); run clearcutt-factory lock", filepath.Base(m.LockPath()), sp.Ref)
+	case sp == nil && l.Profile != nil:
+		return nil, nil, nil, fmt.Errorf("%s is stale (it pins the shared profile %s, which the org profile no longer extends); run clearcutt-factory lock", filepath.Base(m.LockPath()), l.Profile.Ref)
 	}
 	return m, org, l, nil
 }

@@ -59,7 +59,8 @@ func TestInit(t *testing.T) {
 		"northcutted/clearcutt-factory/.github/workflows/images.yml@v1.2.3",
 		"northcutted/clearcutt-factory/.github/workflows/notify.yml@v1.2.3",
 		// Dependents of a platform repository are woken by its notify job.
-		"types: [clearcutt.run-image-published, clearcutt.stack-published]",
+		"types: [clearcutt.run-image-published, clearcutt.stack-published, clearcutt.profile-published]",
+		"github.event.action == 'clearcutt.profile-published'",
 		"github.event.action == 'clearcutt.run-image-published'",
 		"github.event.action == 'clearcutt.stack-published'",
 	} {

@@ -2,8 +2,9 @@
 # so its apps catch up in minutes instead of at their next scheduled run.
 #
 # For each newly published image (kind image) it sends repository_dispatch
-# clearcutt.run-image-published, and for each stack (kind stack)
-# clearcutt.stack-published, with the client payload
+# clearcutt.run-image-published, for each stack (kind stack)
+# clearcutt.stack-published, and for a shared org profile (kind profile)
+# clearcutt.profile-published, with the client payload
 # {image (repository@digest), repository, digest, tags, source (this
 # repository)}. Apps (kind app) have no dependents and are skipped. Payloads
 # are advisory: receivers re-resolve tags from the registry and verify
@@ -45,7 +46,7 @@ on:
   workflow_call:
     inputs:
       published:
-        description: 'What was published: a JSON array of {kind (image, app, or stack), image (repository@digest), repository, digest, tags}, such as images.yml''s published output'
+        description: 'What was published: a JSON array of {kind (image, app, stack, or profile), image (repository@digest), repository, digest, tags}, such as images.yml''s published output'
         type: string
         required: true
       topic:
@@ -95,10 +96,10 @@ jobs:
           jq -c --arg source "$GITHUB_REPOSITORY" '
             .[]
             | ((.kind // "image") | ascii_downcase) as $kind
-            | select(($kind == "image" or $kind == "stack") and (.digest // "") != "")
+            | select(($kind == "image" or $kind == "stack" or $kind == "profile") and (.digest // "") != "")
             | (.repository // (.image | sub("@.*$"; ""))) as $repository
             | {
-                event_type: (if $kind == "stack" then "clearcutt.stack-published" else "clearcutt.run-image-published" end),
+                event_type: ({stack: "clearcutt.stack-published", profile: "clearcutt.profile-published"}[$kind] // "clearcutt.run-image-published"),
                 client_payload: {image: (.image // ($repository + "@" + .digest)), repository: $repository, digest, tags: (.tags // []), source: $source}
               }' <<<"${PUBLISHED:-[]}" > "$RUNNER_TEMP/events"
           if [ -s "$RUNNER_TEMP/events" ]; then

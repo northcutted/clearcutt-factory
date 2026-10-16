@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -332,6 +333,7 @@ func sbomAndScan(ctx context.Context, org *manifest.Org, declared *sbom.BOM, vex
 	if org.Vulnerabilities.Scanner == "none" || noScan {
 		return po, nil
 	}
+	vex = append(slices.Clone(org.Vulnerabilities.VEXFiles), vex...)
 	if po.report, err = scan.Grype(ctx, po.sbomPath, vex); err != nil {
 		return po, fmt.Errorf("%w (install grype, or set vulnerabilities.scanner: none / pass --no-scan)", err)
 	}
