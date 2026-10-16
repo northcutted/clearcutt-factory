@@ -90,7 +90,9 @@ func TestInit(t *testing.T) {
 
 // The generated workflow passes only the inputs and secrets factory's
 // reusable workflows declare (GitHub rejects others), by name: secrets:
-// inherit doesn't reach workflows in another organization.
+// inherit doesn't reach workflows in another organization. It grants every
+// permission their jobs ask for: GitHub fails a run whose called workflow
+// asks for more than its caller granted.
 func TestInitWorkflowMatchesReusableWorkflows(t *testing.T) {
 	dir := t.TempDir()
 	var out bytes.Buffer
@@ -99,9 +101,10 @@ func TestInitWorkflowMatchesReusableWorkflows(t *testing.T) {
 	}
 	var wf struct {
 		Jobs map[string]struct {
-			Uses    string         `yaml:"uses"`
-			With    map[string]any `yaml:"with"`
-			Secrets any            `yaml:"secrets"`
+			Uses        string            `yaml:"uses"`
+			With        map[string]any    `yaml:"with"`
+			Secrets     any               `yaml:"secrets"`
+			Permissions map[string]string `yaml:"permissions"`
 		} `yaml:"jobs"`
 	}
 	b, err := os.ReadFile(filepath.Join(dir, ".github/workflows/clearcutt-factory.yml"))
@@ -126,6 +129,10 @@ func TestInitWorkflowMatchesReusableWorkflows(t *testing.T) {
 					Secrets map[string]any `yaml:"secrets"`
 				} `yaml:"workflow_call"`
 			} `yaml:"on"`
+			Permissions map[string]string `yaml:"permissions"`
+			Jobs        map[string]struct {
+				Permissions map[string]string `yaml:"permissions"`
+			} `yaml:"jobs"`
 		}
 		rb, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(path)))
 		if err != nil {
@@ -146,6 +153,18 @@ func TestInitWorkflowMatchesReusableWorkflows(t *testing.T) {
 		for k := range secrets {
 			if _, ok := reusable.On.WorkflowCall.Secrets[k]; !ok {
 				t.Errorf("job %s passes secret %s, which %s doesn't declare", name, k, path)
+			}
+		}
+		level := map[string]int{"": 0, "none": 0, "read": 1, "write": 2}
+		asks := []map[string]string{reusable.Permissions}
+		for _, j := range reusable.Jobs {
+			asks = append(asks, j.Permissions)
+		}
+		for _, ask := range asks {
+			for scope, want := range ask {
+				if got := job.Permissions[scope]; level[got] < level[want] {
+					t.Errorf("job %s grants %s %q, but %s asks for %q", name, scope, got, path, want)
+				}
 			}
 		}
 	}

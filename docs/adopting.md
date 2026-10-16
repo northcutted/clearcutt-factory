@@ -326,7 +326,7 @@ published: a JSON array of `{manifest, kind (image or app), image
 |---|---|---|---|
 | `images.yml` | `manifests` (globs, default `**/image.yaml **/app.yaml`), `registry`, `provenance` | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write`, `attestations: write` |
 | `update-locks.yml` | `manifests`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: write`, `pull-requests: write` |
-| `fleet.yml` | `apps` (default `**/app.yaml`), `registry`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: write`, `pull-requests: write`, `packages: write`, `id-token: write` |
+| `fleet.yml` | `apps` (default `**/app.yaml`), `registry`, `provenance`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: write`, `pull-requests: write`, `packages: write`, `id-token: write`, `attestations: write` |
 | `notify.yml` | `published` (required), `topic` (default `clearcutt-app`), `owner`, `repositories`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: read` |
 
 For workflows of your own, the action installs a signature-verified binary

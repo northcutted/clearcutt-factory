@@ -328,13 +328,13 @@ The intended split, and the automation that keeps it current:
   Daily and after every successful run of the images workflow for a push to
   `main`, `clearcutt-factory rebase -f <app> --push --update-lock` for each
   app: rebase if safe, smoke-test, scan, push, sign, repeat from the signed
-  record (and attest the match), then a pull request pinning the app's lock
-  to the same base. If the repeat fails, the pull request is still opened
-  (the image is published either way), marked as not independently
-  reproduced, and the job fails. An app that can't be rebased gets a pull
-  request that also moves its stack's build image (merging rebuilds it on
-  both) and a failed job. A push that publishes while the fleet rebases
-  keeps the tag; the next run rebases it.
+  record (and attest the match), add SLSA provenance, then a pull request
+  pinning the app's lock to the same base. If the repeat fails, the pull
+  request is still opened (the image is published either way), marked as not
+  independently reproduced, and the job fails. An app that can't be rebased
+  gets a pull request that also moves its stack's build image (merging
+  rebuilds it on both) and a failed job. A push that publishes while the
+  fleet rebases keeps the tag; the next run rebases it.
 * **CVE response** is the same path on demand: fix the run image (re-lock,
   merge), and the fleet job moves every app onto it in minutes.
 * **Apps in other repositories hear about it** ([`notify.yml`](.github/workflows/notify.yml)).
@@ -442,7 +442,7 @@ it names the first differing layer and the files that differ.
 | Vulnerabilities (`cosign …/vuln/v1`) | each platform image | grype results with VEX applied |
 | Rebase record (`…/rebase/v1`) | index of a rebased image (instead of a recipe) | the image that was rebased, each platform's old base, the new base; enough to repeat the rebase |
 | Reproduction (`…/reproduction/v1`) | index, once reproduced (`verify --image --attest`) | how (`recipe-rebuild` or `rebase-repeat`), the digest it gave, the recipe or rebase record it started from, factory and BuildKit versions, the run and machine, when |
-| SLSA provenance | index | from the CI platform (see [`images.yml`](.github/workflows/images.yml)) |
+| SLSA provenance | index | from the CI platform (see [`images.yml`](.github/workflows/images.yml), and [`fleet.yml`](.github/workflows/fleet.yml) for rebased images) |
 
 Unsigned copies of all of these are written to `out/<name>/attestations/`, and
 `out/<name>/result.json` summarizes the build for CI.

@@ -5,13 +5,15 @@
 # Each app's published image is rebased (when safe), smoke-tested, scanned,
 # gated, pushed, signed, and checked by repeating the rebase from its signed
 # record; a match is attested on the image (…/reproduction/v1, method
-# rebase-repeat). A pull request then pins the app's lock to the same base,
-# so the next build from source doesn't move it back; it is opened even if
-# the repeat fails, marked as not independently reproduced. An app that
-# can't be rebased gets a pull request that also moves its stack's build
-# image (building it is the fix) and its job fails. If a newer publish takes
-# the app's tag during the rebase, the tag stays there and the result is
-# pushed by digest only; the next run rebases the new image.
+# rebase-repeat). The rebased image gets SLSA build provenance, signed by
+# this workflow, as images.yml's builds get theirs. A pull request then pins
+# the app's lock to the same base, so the next build from source doesn't
+# move it back; it is opened even if the repeat fails, marked as not
+# independently reproduced. An app that can't be rebased gets a pull request
+# that also moves its stack's build image (building it is the fix) and its
+# job fails. If a newer publish takes the app's tag during the rebase, the
+# tag stays there and the result is pushed by digest only; the next run
+# rebases the new image.
 #
 # The pull requests are opened as a GitHub App, CLEARCUTT_BOT_TOKEN, or the
 # workflow's GITHUB_TOKEN, as update-locks.yml describes. Other repositories
@@ -22,7 +24,7 @@
 #   jobs:
 #     fleet:
 #       uses: northcutted/clearcutt-factory/.github/workflows/fleet.yml@v0.1.1
-#       permissions: {contents: write, pull-requests: write, packages: write, id-token: write}
+#       permissions: {contents: write, pull-requests: write, packages: write, id-token: write, attestations: write}
 #       secrets:
 #         CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
 #         CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
@@ -45,6 +47,10 @@ on:
         description: Registry to log in to before pushing
         type: string
         default: ghcr.io
+      provenance:
+        description: Add SLSA build provenance (GitHub artifact attestations) to rebased images
+        type: boolean
+        default: true
       factory-version:
         description: clearcutt-factory release to use
         type: string
@@ -104,7 +110,8 @@ jobs:
       contents: write
       pull-requests: write
       packages: write # push to ghcr.io
-      id-token: write # keyless signing
+      id-token: write # keyless signing and provenance
+      attestations: write # provenance
     strategy:
       fail-fast: false
       matrix:
@@ -177,6 +184,38 @@ jobs:
           org=()
           if [ -f "$dir/factory.org.yaml" ]; then org=(--org "$dir/factory.org.yaml"); fi
           clearcutt-factory verify --image "$IMAGE" --attest "${org[@]}" 2>&1 | tee "$RUNNER_TEMP/repeat.out"
+
+      # SLSA build provenance for the rebased image, as images.yml adds it to
+      # what it builds, so a policy that requires provenance holds for
+      # rebased images too. Also when the repeat failed (the image is
+      # published either way), and for a digest an earlier run pushed without
+      # it. The attestation is signed by this workflow, fleet.yml, so that is
+      # the signer the check names; see images.yml for why --repo stays the
+      # calling repository and why any ref of the workflow counts.
+      - name: Check for SLSA build provenance
+        id: provenance
+        if: ${{ !cancelled() && steps.rebase.outputs.image != '' && format('{0}', inputs.provenance) != 'false' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.rebase.outputs.image }}
+          PUBLISHED: ${{ steps.rebase.outputs.published }}
+          SIGNER: northcutted/clearcutt-factory/.github/workflows/fleet.yml
+        run: |
+          echo "repository=${IMAGE%@*}" >> "$GITHUB_OUTPUT"
+          echo "digest=${IMAGE#*@}" >> "$GITHUB_OUTPUT"
+          if [ "$PUBLISHED" = true ] || ! gh attestation verify "oci://$IMAGE" --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER" >/dev/null 2>&1; then
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$IMAGE already has SLSA build provenance"
+          fi
+
+      - name: SLSA build provenance
+        if: ${{ !cancelled() && steps.provenance.outputs.needed == 'true' }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.provenance.outputs.repository }}
+          subject-digest: ${{ steps.provenance.outputs.digest }}
+          push-to-registry: true
 
       # Also when the repeat failed: the rebased image is published either
       # way, and without this pull request the next build from source would
