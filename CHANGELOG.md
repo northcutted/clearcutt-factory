@@ -5,6 +5,17 @@ what may change between releases.
 
 ## Unreleased
 
+**The bot's pull requests work for a manifest at the repository root
+([#51](https://github.com/northcutted/clearcutt-factory/issues/51)).**
+`update-locks.yml` and `fleet.yml` named the branch after the manifest's
+directory. For an `app.yaml` at the root that directory is `.`, and
+`factory/update/.` isn't a valid branch name, so no pull request opened. A
+root manifest's branch is now named after its file (`factory/rebase/root-app`,
+`factory/update/root-image`). Only its own files (the manifest, its lock, and
+its Containerfile) are committed, not the whole checkout. Manifests in
+directories keep their branches. A leading `./` in a glob, or a character git
+refuses in branch names, no longer breaks them.
+
 **A platform repository wakes the apps that build on it
 ([#13](https://github.com/northcutted/clearcutt-factory/issues/13)).**
 `images.yml` has an output, `published`: what the run newly published, as a

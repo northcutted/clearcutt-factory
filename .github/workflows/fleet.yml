@@ -190,13 +190,26 @@ jobs:
           IMAGE: ${{ steps.rebase.outputs.image }}
           REPEAT: ${{ steps.repeat.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # Branch and files as in update-locks.yml: one branch per directory
+        # (factory/rebase/examples-hello-app for examples/hello-app), and for
+        # an app at the repository root, a branch named after its file
+        # (app.yaml: root-app) with only its own files.
         run: |
-          dir=$(dirname "$APP")
-          name=$(echo "$dir" | tr '/' '-')
+          manifest=${APP#./}
+          dir=$(dirname "$manifest")
+          if [ "$dir" = . ]; then
+            stem=$(basename "$manifest"); stem=${stem%.yaml}; stem=${stem%.yml}
+            name=root-$stem what=$manifest paths=()
+            for f in "$manifest" "$stem.lock.yaml" "$stem.Containerfile"; do if [ -e "$f" ]; then paths+=("$f"); fi; done
+          else
+            name=${dir//\//-} what=$dir paths=("$dir")
+          fi
+          # What git refuses in a branch name (a leading dot, "..", a space, ~^:?*[\, "@{", a trailing "." or ".lock").
+          name=$(printf '%s' "$name" | LC_ALL=C sed -E 's/[[:space:][:cntrl:]~^:?*[\]+/-/g; s/@\{/-{/g; s/\.\.+/./g; s/^\.+//; s/(\.lock|\.)$//')
           # A rebase that failed before pinning the lock (a registry error,
           # say) decided nothing: keep any pull request open. Only a rebase
           # that finished with the lock unchanged closes it.
-          if [ "$FAILED" = true ] && git diff --quiet -- "$dir" && [ -z "$(git ls-files --others --exclude-standard -- "$dir")" ]; then
+          if [ "$FAILED" = true ] && git diff --quiet -- "${paths[@]}" && [ -z "$(git ls-files --others --exclude-standard -- "${paths[@]}")" ]; then
             echo "the lock was not pinned; leaving any pull request as it is"
             exit 0
           fi
@@ -216,7 +229,7 @@ jobs:
               echo; echo "Repeating the rebase:"; echo; echo '```'; cat "$RUNNER_TEMP/repeat.out"; echo '```'
             fi
           } > "$RUNNER_TEMP/body.md"
-          "$FACTORY_DIR/.github/scripts/open-pr.sh" "factory/rebase/$name" "Pin $dir to the newest run image" "$RUNNER_TEMP/body.md" "$dir"
+          "$FACTORY_DIR/.github/scripts/open-pr.sh" "factory/rebase/$name" "Pin $what to the newest run image" "$RUNNER_TEMP/body.md" "${paths[@]}"
 
       - name: Fail if the app must be rebuilt
         if: steps.rebase.outputs.failed == 'true'

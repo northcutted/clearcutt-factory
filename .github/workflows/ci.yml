@@ -19,6 +19,8 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go test -race ./...
+      - name: The bot's pull requests get valid branches
+        run: .github/scripts/branch-names_test.sh
       - name: Example lockfiles and Containerfiles are current
         run: |
           go install ./cmd/clearcutt-factory
