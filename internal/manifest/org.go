@@ -17,8 +17,13 @@ const (
 // Org holds the choices that differ between organizations: where images go,
 // how they are built, signed, scanned, and what policy they must meet.
 type Org struct {
-	APIVersion      string          `yaml:"apiVersion"`
-	Kind            string          `yaml:"kind"`
+	APIVersion string `yaml:"apiVersion"`
+	Kind       string `yaml:"kind"`
+	// Extends is a shared org profile, published with clearcutt-factory
+	// profile push, that this one builds on: what it sets is fixed, this
+	// profile adds what it leaves to each repository, and may tighten (never
+	// loosen) its gate and policy. Each manifest's lock pins its digest.
+	Extends         *Extends        `yaml:"extends,omitempty"`
 	Registry        string          `yaml:"registry,omitempty"`
 	Tags            []string        `yaml:"tags,omitempty"`
 	Defaults        OrgDefaults     `yaml:"defaults,omitempty"`
@@ -34,6 +39,8 @@ type Org struct {
 	Path string `yaml:"-"`
 	// Trust is the trust policy signing.trustPolicy names, once loaded.
 	Trust *TrustPolicy `yaml:"-"`
+	// Shared is the shared profile this one extends, once loaded.
+	Shared *SharedProfile `yaml:"-"`
 }
 
 // Mirror replaces the URL prefix From with To.
@@ -113,6 +120,10 @@ type Signing struct {
 	// with clearcutt-verify. When set, its image signers replace verify and
 	// its stack signers replace stacks.
 	TrustPolicy string `yaml:"trustPolicy,omitempty"`
+	// Profile is who signs this profile when profile push publishes it, so
+	// that pushing it unchanged only moves its tag. Repositories that
+	// extend it trust the signer they name in extends.signer, not this.
+	Profile VerifyIdentity `yaml:"profile,omitempty"`
 }
 
 // VerifyIdentity is one signer: a public key, or a keyless certificate
@@ -172,6 +183,17 @@ type Vulnerabilities struct {
 	FailOn string `yaml:"failOn,omitempty"`
 	// OnlyFixed only counts vulnerabilities with a fix available toward FailOn.
 	OnlyFixed bool `yaml:"onlyFixed,omitempty"`
+	// VEX are VEX documents (OpenVEX, or CSAF), relative to this profile,
+	// applied to every scan, as a manifest's spec.vex is to its own.
+	VEX []string `yaml:"vex,omitempty"`
+	// AllowLocalVEX, in a shared profile, also applies the VEX statements
+	// of the repositories that extend it (their profile's vex and their
+	// manifests' spec.vex), which are refused otherwise: a statement that a
+	// vulnerability doesn't apply lets an image past the gate.
+	AllowLocalVEX bool `yaml:"allowLocalVEX,omitempty"`
+
+	// VEXFiles are VEX resolved against their profile.
+	VEXFiles []string `yaml:"-"`
 }
 
 type Policy struct {
@@ -214,12 +236,14 @@ func (o *Org) setDefaults() {
 	o.Vulnerabilities.Scanner = firstNonEmpty(o.Vulnerabilities.Scanner, "grype")
 }
 
-func (o *Org) validate() error {
+// validate checks the profile. A shared one (profile push) may leave
+// signing.key to the repositories that extend it.
+func (o *Org) validate(shared bool) error {
 	var errs []error
 	switch o.Signing.Mode {
 	case "keyless", "none":
 	case "key":
-		if o.Signing.Key == "" {
+		if o.Signing.Key == "" && !shared {
 			errs = append(errs, errors.New("signing.key is required when signing.mode is key"))
 		}
 	default:
@@ -236,9 +260,12 @@ func (o *Org) validate() error {
 	if f := o.Vulnerabilities.FailOn; f != "" && SeverityRank(f) == 0 {
 		errs = append(errs, fmt.Errorf("vulnerabilities.failOn %q must be negligible, low, medium, high, or critical", f))
 	}
-	for name, v := range map[string]VerifyIdentity{"signing.verify": o.Signing.Verify, "signing.stacks": o.Signing.Stacks} {
-		if err := v.validate(); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", name, err))
+	for _, v := range []struct {
+		name string
+		v    VerifyIdentity
+	}{{"signing.verify", o.Signing.Verify}, {"signing.stacks", o.Signing.Stacks}, {"signing.profile", o.Signing.Profile}} {
+		if err := v.v.validate(); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", v.name, err))
 		}
 	}
 	// A stack names no source repository, so sourceMatchesImage can't bind
@@ -246,6 +273,14 @@ func (o *Org) validate() error {
 	const imagesOnly = "sourceMatchesImage only applies to images (a stack names no source repository)"
 	if o.Signing.Stacks.SourceMatchesImage {
 		errs = append(errs, fmt.Errorf("signing.stacks: %s; use sourceRepository", imagesOnly))
+	}
+	if o.Signing.Profile.SourceMatchesImage {
+		errs = append(errs, errors.New("signing.profile: sourceMatchesImage only applies to images (a profile names no source repository); use sourceRepository"))
+	}
+	for _, v := range o.Vulnerabilities.VEXFiles {
+		if st, err := os.Stat(v); err != nil || st.IsDir() {
+			errs = append(errs, fmt.Errorf("vulnerabilities.vex: %s is not a file", v))
+		}
 	}
 	if o.Policy.RequireSignedStacks {
 		switch {
@@ -298,8 +333,16 @@ func SeverityRank(s string) int {
 }
 
 // LoadOrg loads the org profile at path, or, if path is empty, the nearest
-// factory.org.yaml at or above startDir. No profile yields defaults.
+// factory.org.yaml at or above startDir. No profile yields defaults. A
+// profile that extends a shared one can't be loaded without a
+// ProfileLoader (LoadOrgWith).
 func LoadOrg(path, startDir string) (*Org, error) {
+	return LoadOrgWith(path, startDir, nil)
+}
+
+// LoadOrgWith is LoadOrg for a profile that may extend a shared one, which
+// shared fetches and verifies.
+func LoadOrgWith(path, startDir string, shared ProfileLoader) (*Org, error) {
 	if path == "" {
 		found, err := findUp(startDir, OrgFileName)
 		if err != nil {
@@ -310,35 +353,79 @@ func LoadOrg(path, startDir string) (*Org, error) {
 		}
 		path = found
 	}
-	o, err := decodeFile[Org](path)
+	o, set, err := decodeOrg(path)
 	if err != nil {
 		return nil, err
 	}
-	if o.APIVersion != APIVersion || o.Kind != KindOrg {
-		return nil, fmt.Errorf("%s: expected apiVersion %q and kind %q", path, APIVersion, KindOrg)
+	if err := o.resolve(); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	o.Path, _ = filepath.Abs(path)
+	if o.Extends != nil {
+		if o, err = o.extend(shared, set); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	o.setDefaults()
+	if err := o.validate(false); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return o, nil
+}
+
+// decodeOrg reads an org profile as written, and which keys it sets.
+func decodeOrg(path string) (*Org, keySet, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	o, err := decodeBytes[Org](path, b)
+	if err != nil {
+		return nil, nil, err
+	}
+	if o.APIVersion != APIVersion || o.Kind != KindOrg {
+		return nil, nil, fmt.Errorf("%s: expected apiVersion %q and kind %q", path, APIVersion, KindOrg)
+	}
+	if o.Path, err = filepath.Abs(path); err != nil {
+		return nil, nil, err
+	}
+	return o, keysOf(b), nil
+}
+
+// resolve makes the files the profile names relative to it absolute, and
+// loads its trust policy.
+func (o *Org) resolve() error {
 	dir := filepath.Dir(o.Path)
 	o.Signing.Key = keyPath(dir, o.Signing.Key)
 	o.Signing.StackKey = keyPath(dir, o.Signing.StackKey)
 	o.Signing.Verify.Key = keyPath(dir, o.Signing.Verify.Key)
 	o.Signing.Stacks.Key = keyPath(dir, o.Signing.Stacks.Key)
-	if c := o.Builder.Config; c != "" && !filepath.IsAbs(c) {
-		o.Builder.Config = filepath.Join(dir, c)
+	o.Signing.Profile.Key = keyPath(dir, o.Signing.Profile.Key)
+	if o.Extends != nil {
+		o.Extends.Signer.Key = keyPath(dir, o.Extends.Signer.Key)
+	}
+	if c := o.Builder.Config; c != "" {
+		o.Builder.Config = filePath(dir, c)
+	}
+	o.Vulnerabilities.VEXFiles = nil
+	for _, v := range o.Vulnerabilities.VEX {
+		o.Vulnerabilities.VEXFiles = append(o.Vulnerabilities.VEXFiles, filePath(dir, v))
 	}
 	if t := o.Signing.TrustPolicy; t != "" {
-		if !filepath.IsAbs(t) {
-			t = filepath.Join(filepath.Dir(o.Path), t)
-		}
-		if o.Trust, err = LoadTrustPolicy(t); err != nil {
-			return nil, fmt.Errorf("%s: signing.trustPolicy: %w", path, err)
+		o.Signing.TrustPolicy = filePath(dir, t)
+		var err error
+		if o.Trust, err = LoadTrustPolicy(o.Signing.TrustPolicy); err != nil {
+			return fmt.Errorf("signing.trustPolicy: %w", err)
 		}
 	}
-	o.setDefaults()
-	if err := o.validate(); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+	return nil
+}
+
+// filePath resolves p relative to dir unless it is absolute.
+func filePath(dir, p string) string {
+	if filepath.IsAbs(p) {
+		return p
 	}
-	return o, nil
+	return filepath.Join(dir, p)
 }
 
 // keyPath resolves a key file relative to dir, the directory of the file

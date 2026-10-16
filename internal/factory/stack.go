@@ -45,7 +45,7 @@ func StackPushWith(ctx context.Context, opts Options, file string, so StackPushO
 	if err != nil {
 		return err
 	}
-	org, err := manifest.LoadOrg(opts.OrgPath, filepath.Dir(abs))
+	org, err := loadOrg(ctx, opts, filepath.Dir(abs), nil)
 	if err != nil {
 		return err
 	}

@@ -32,6 +32,32 @@ its Containerfile) are committed, not the whole checkout. Manifests in
 directories keep their branches. A leading `./` in a glob, or a character git
 refuses in branch names, no longer breaks them.
 
+**One org profile for every repository
+([#14](https://github.com/northcutted/clearcutt-factory/issues/14)).**
+`clearcutt-factory profile push -f PROFILE --ref REF` publishes an org
+profile as a signed OCI artifact
+(`application/vnd.clearcutt.factory.org-profile.v1`) with the trust policy,
+public keys, and VEX documents it names, and, like `stack push`, only moves
+the tag when the profile is unchanged and `signing.profile` has signed it.
+An app repository's `factory.org.yaml` extends it with `extends: {ref,
+signer}`: `signer` (who may sign the shared profile) is stated in the app
+repository, and the profile is verified against it whenever it is loaded,
+at the digest each manifest's lock now pins (`profile:`); `lock --update`
+moves the pin, and a lock that doesn't pin the profile its org profile
+extends is stale. What the shared profile sets is fixed; a repository adds
+what it leaves unset and may tighten the gate and policy, and anything
+that would loosen or change them is an error naming the field
+(`docs/adopting.md` lists the rules). Org profiles take
+`vulnerabilities.vex`, applied to every scan; under a shared profile, a
+repository's own VEX (its profile's and its manifests' `spec.vex`) is
+refused unless the shared profile sets `vulnerabilities.allowLocalVEX`.
+`init --extends REF --extends-identity ID` (or `--extends-key`) checks the
+shared profile's signature and writes a profile that extends it, and
+`notify.yml` sends `clearcutt.profile-published` for `kind: profile`, which
+`init`'s workflow answers with the lock-update job. Existing workflows: add
+`clearcutt.profile-published` to the `repository_dispatch` types and the
+`update-locks` condition.
+
 **A platform repository wakes the apps that build on it
 ([#13](https://github.com/northcutted/clearcutt-factory/issues/13)).**
 `images.yml` has an output, `published`: what the run newly published, as a

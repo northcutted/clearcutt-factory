@@ -265,3 +265,63 @@ func TestTagIf(t *testing.T) {
 		t.Fatalf("bogus ETags: %v, holds %s", err, holds())
 	}
 }
+
+// TestFilesArtifact: a multi-file artifact reads back file by file, a
+// blob that doesn't match its digest or a file name that leaves the
+// artifact is refused, and single-file artifacts (stacks) keep the digest
+// they always had.
+func TestFilesArtifact(t *testing.T) {
+	if d, err := FileDigest("application/vnd.clearcutt.factory.stack.v1+yaml", "stack.yaml", []byte("apiVersion: x\n")); err != nil || d != "sha256:9bf4a48b6d77ab83ab3e3653b017173b732fe1a3b750f014e759cdf05300a090" {
+		t.Errorf("a stack's digest changed: %s %v", d, err)
+	}
+
+	var tampered sync.Map // blob path → replacement content
+	reg := ggcrregistry.New(ggcrregistry.Logger(log.New(io.Discard, "", 0)))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if b, ok := tampered.Load(r.URL.Path); ok && r.Method == http.MethodGet {
+			_, _ = w.Write(b.([]byte))
+			return
+		}
+		reg.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	ctx := context.Background()
+	const typ = "application/vnd.example.bundle.v1"
+	files := []File{
+		{Name: "profile.yaml", MediaType: typ + "+yaml", Content: []byte("a: 1\n")},
+		{Name: "vex/triage.json", MediaType: "application/json", Content: []byte(`{"b": 2}`)},
+	}
+	d, err := PushFiles(ctx, host+"/bundle:1", typ, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want, _ := FilesDigest(typ, files); want != d {
+		t.Errorf("FilesDigest %s, pushed %s", want, d)
+	}
+	got, gd, err := FetchFiles(ctx, host+"/bundle@"+d, typ)
+	if err != nil || gd != d || len(got) != 2 || got[1].Name != "vex/triage.json" || string(got[1].Content) != `{"b": 2}` || got[1].MediaType != "application/json" {
+		t.Fatalf("fetched %+v %s %v", got, gd, err)
+	}
+	if _, _, err := FetchFiles(ctx, host+"/bundle@"+d, "application/other"); err == nil {
+		t.Error("another artifact type was accepted")
+	}
+
+	// A blob served with other content than its digest names.
+	h, _, _ := v1.SHA256(strings.NewReader(`{"b": 2}`))
+	tampered.Store("/v2/bundle/blobs/"+h.String(), []byte(`{"b": 3}`))
+	if _, _, err := FetchFiles(ctx, host+"/bundle@"+d, typ); err == nil {
+		t.Error("a tampered blob was accepted")
+	}
+	tampered.Clear()
+
+	for _, bad := range []string{"../escape", "/etc/passwd", ""} {
+		d, err := PushFiles(ctx, host+"/bad:1", typ, []File{{Name: bad, MediaType: typ, Content: []byte("x")}, {Name: "ok", MediaType: typ, Content: []byte("y")}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := FetchFiles(ctx, host+"/bad@"+d, typ); err == nil {
+			t.Errorf("file name %q was accepted", bad)
+		}
+	}
+}

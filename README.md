@@ -313,11 +313,11 @@ The intended split, and the automation that keeps it current:
 
 | Who | Owns | Changes it when |
 |---|---|---|
-| Platform team, with security | `factory.org.yaml`: registry, signer identity, vulnerability gate, policy, mirrors, pinned BuildKit | Rarely; every lock goes stale |
+| Platform team, with security | The org profile: signers, vulnerability gate, policy, mirrors, pinned BuildKit; published once with `profile push` and extended by every repository ([below](#one-profile-for-every-repository)) | Rarely; each repository's weekly job proposes the new version |
 | Platform team | Run and base images (`kind: Image`) and their locks | Weekly updates, CVE fixes |
 | Platform team, one owner per language | Stacks | Toolchain bumps; every app on the stack rebuilds |
-| App teams | `app.yaml`, the source, `app.lock.yaml` | Their own releases |
-| Security | VEX statements; fleet-wide audit (e.g. [clearcutt-verify](https://github.com/northcutted/clearcutt-verify)) | When triaged |
+| App teams | `app.yaml`, the source, `app.lock.yaml`; their `factory.org.yaml`, which extends the shared profile and may only tighten it | Their own releases |
+| Security | VEX statements (in the shared profile, so they apply to every scan); fleet-wide audit (e.g. [clearcutt-verify](https://github.com/northcutted/clearcutt-verify)) | When triaged |
 
 * **Weekly updates** ([`update-locks.yml`](.github/workflows/update-locks.yml)).
   `clearcutt-factory lock --update` on every manifest, one pull request each, listing
@@ -340,10 +340,11 @@ The intended split, and the automation that keeps it current:
 * **Apps in other repositories hear about it** ([`notify.yml`](.github/workflows/notify.yml)).
   After the platform repository publishes, its `notify` job sends
   `repository_dispatch` to the owner's repositories with the topic
-  `clearcutt-app`: `clearcutt.run-image-published` for each new image and
-  `clearcutt.stack-published` for each new stack, with `{image, digest, …}`.
-  `init`'s workflow answers the first with the fleet job and the second with
-  the lock-update job, so a patched run image reaches every app in minutes,
+  `clearcutt-app`: `clearcutt.run-image-published` for each new image,
+  `clearcutt.stack-published` for each new stack, and
+  `clearcutt.profile-published` for a new shared profile, with
+  `{image, digest, …}`. `init`'s workflow answers the first with the fleet
+  job and the others with the lock-update job, so a patched run image reaches every app in minutes,
   not at its next daily run. The payload is only a hint: the receivers
   re-resolve tags from the registry and verify signatures, as they do on
   their schedules ([adopting](docs/adopting.md#waking-the-apps-when-the-platform-publishes)).
@@ -404,9 +405,45 @@ found by walking up from the manifest (or `--org`). See
 | `builder` | Pinned BuildKit, Dockerfile frontend, toolbox, Go and Nix images, default nixpkgs branch; `runtime: docker\|podman`; `addr:` for a remote buildkitd (e.g. in Kubernetes); `config:` (a `buildkitd.toml`: mirrors, plain-HTTP or insecure registries, CA certificates) and `network:` for the BuildKit container ([a registry on this machine](docs/adopting.md#a-registry-on-this-machine)) |
 | `signing` | `keyless` (Sigstore OIDC), `key` (file or any cosign KMS URI; `stackKey` signs stacks with a key of their own), or `none`; extra cosign args (a signing config for a private Sigstore, or for signing [without a transparency log](docs/adopting.md#who-signs-and-binding-signatures-to-your-repository)); who signs this repository's images (`verify`, bound to the workflow run's repository with `sourceRepository`) and its stacks (`stacks`), or a shared ClearCutt `trustPolicy` file ([adopting](docs/adopting.md#who-signs-and-binding-signatures-to-your-repository)) |
 | `sbom` | Whether to add a syft scan to the declared SBOM |
-| `vulnerabilities` | Scanner and the `failOn` severity gate, optionally `onlyFixed` |
+| `extends` | A shared org profile to build on, and who may sign it ([below](#one-profile-for-every-repository)) |
+| `vulnerabilities` | Scanner and the `failOn` severity gate, optionally `onlyFixed`; `vex` documents applied to every scan |
 | `policy` | Non-root, required labels, TOFU, allowed download hosts (tools and packages) and registries |
 | `mirrors` | URL prefix rewrites for every download (`from: https://snapshot.debian.org/`, `to: https://artifactory.acme/debian-snapshot/`); checksums still pin the content |
+
+### One profile for every repository
+
+A platform team publishes its profile once, signed, with the trust policy,
+public keys, and VEX documents it names:
+
+```sh
+clearcutt-factory profile push -f org/profile.yaml --ref ghcr.io/acme/factory/org:1
+```
+
+Each app repository's `factory.org.yaml` extends it, naming who may sign it,
+and adds what the shared profile leaves to each repository:
+
+```yaml
+extends:
+  ref: ghcr.io/acme/factory/org:1   # each lock pins its digest; lock --update moves it
+  signer:                           # who may sign the shared profile
+    certificateIdentity: https://github.com/acme/platform/.github/workflows/profile.yml@refs/heads/main
+    certificateOIDCIssuer: https://token.actions.githubusercontent.com
+registry: ghcr.io/acme/checkout
+vulnerabilities: {failOn: high}     # tighter than the shared profile: allowed
+```
+
+What the shared profile sets is fixed; a repository may only add what it
+leaves unset and tighten its gate and policy (a stricter `failOn`, more
+required labels, narrower allow lists, `requireX` on, `allowTOFU` and
+`onlyFixed` off). Anything that would loosen or change it is an error naming
+the field. VEX statements from the repository are refused unless the shared
+profile allows them. The shared profile is checked against
+`extends.signer` whenever it is loaded, at the digest the lock pins, so an
+unsigned, tampered, or otherwise signed version never applies.
+[docs/adopting.md](docs/adopting.md#6-one-org-profile-for-every-repository)
+has the full rules and why the signer is stated in the app repository.
+`clearcutt-factory init --extends REF --extends-identity ID` sets a
+repository up this way.
 
 ## What makes it reproducible
 
@@ -497,8 +534,9 @@ pipeline. On pull requests it builds, scans, and gates. On `main` it also pushes
 signs keylessly, adds SLSA provenance, and then rebuilds on a second runner from
 the signed recipe alone and attests the match. Its `published` output lists
 what the run newly published (a JSON array of `{manifest, kind, image,
-repository, digest, tags}`). `clearcutt-factory build`, `rebase`, and
-`stack push` emit `image`, `repository`, and `digest` to `$GITHUB_OUTPUT`.
+repository, digest, tags}`). `clearcutt-factory build`, `rebase`,
+`stack push`, and `profile push` emit `image`, `repository`, and `digest` to
+`$GITHUB_OUTPUT`.
 [`update-locks.yml`](.github/workflows/update-locks.yml),
 [`fleet.yml`](.github/workflows/fleet.yml), and
 [`notify.yml`](.github/workflows/notify.yml) keep the fleet current (see

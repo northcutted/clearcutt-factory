@@ -27,6 +27,16 @@ func Changes(old, cur *Lock) []string {
 			out = append(out, fmt.Sprintf("%s %s: %s → %s", label, b.Ref, short(a.Digest), short(b.Digest)))
 		}
 	}
+	switch {
+	case cur.Profile != nil:
+		var prev Image
+		if old.Profile != nil {
+			prev = *old.Profile
+		}
+		image("shared profile", prev, *cur.Profile)
+	case old.Profile != nil:
+		out = append(out, fmt.Sprintf("shared profile %s: no longer extended", old.Profile.Ref))
+	}
 	image("base", old.Base, cur.Base)
 	image("buildkit", old.Builder.BuildKit, cur.Builder.BuildKit)
 	image("frontend", old.Builder.Frontend, cur.Builder.Frontend)

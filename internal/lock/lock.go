@@ -37,6 +37,7 @@ type Lock struct {
 	Kind            string   `yaml:"kind" json:"kind"`
 	InputsDigest    string   `yaml:"inputsDigest" json:"inputsDigest"`
 	SourceDateEpoch int64    `yaml:"sourceDateEpoch" json:"sourceDateEpoch"`
+	Profile         *Image   `yaml:"profile,omitempty" json:"profile,omitempty"` // the shared org profile the org profile extends
 	Builder         Builder  `yaml:"builder" json:"builder"`
 	Base            Image    `yaml:"base" json:"base"`
 	Packages        Packages `yaml:"packages,omitempty" json:"packages,omitempty"`

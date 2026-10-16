@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/northcutted/clearcutt-factory/internal/manifest"
 )
 
 type InitOptions struct {
@@ -22,6 +24,12 @@ type InitOptions struct {
 	Registry string
 	// Force overwrites existing files.
 	Force bool
+	// Extends makes the org profile extend this shared profile (published
+	// with profile push), signed by ExtendsIdentity (a certificate
+	// identity, with ExtendsIssuer, default GitHub Actions) or ExtendsKey.
+	// Init checks the signature, and writes only what the shared profile
+	// leaves to each repository.
+	Extends, ExtendsIdentity, ExtendsIssuer, ExtendsKey string
 }
 
 var releaseRE = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$`)
@@ -50,6 +58,13 @@ func Init(ctx context.Context, opts Options, io InitOptions) error {
 		opts.logf("warning: no GitHub origin remote found; fill in OWNER/REPO (or pass --repo)")
 		repo, registry = "OWNER/REPO", firstNonEmpty(registry, "ghcr.io/OWNER")
 	}
+	org := orgTemplate
+	if io.Extends != "" || io.ExtendsIdentity != "" || io.ExtendsIssuer != "" || io.ExtendsKey != "" {
+		var err error
+		if org, err = extendingOrg(ctx, opts, dir, io); err != nil {
+			return err
+		}
+	}
 	// Release builds pin what they are; development builds follow main.
 	ref := "main"
 	if releaseRE.MatchString(opts.Version) {
@@ -59,7 +74,7 @@ func Init(ctx context.Context, opts Options, io InitOptions) error {
 
 	var wrote []string
 	for _, f := range []struct{ path, body string }{
-		{"factory.org.yaml", orgTemplate},
+		{"factory.org.yaml", org},
 		{"images/example/image.yaml", imageTemplate},
 		{".github/workflows/clearcutt-factory.yml", workflowTemplate},
 	} {
@@ -93,6 +108,71 @@ Next:
   Actions to create pull requests (Settings → Actions → General) and approve
   their CI runs by hand. See docs/adopting.md.`)
 	return nil
+}
+
+// extendingOrg checks the shared profile io.Extends names against its
+// signer and returns an org profile template that extends it, adding only
+// what it leaves to each repository: the registry, and who signs this
+// repository's images.
+func extendingOrg(ctx context.Context, opts Options, dir string, io InitOptions) (string, error) {
+	if io.Extends == "" {
+		return "", errors.New("--extends-identity, --extends-issuer, and --extends-key name who signs the shared profile --extends names")
+	}
+	e := manifest.Extends{Ref: io.Extends}
+	var signer string
+	switch {
+	case (io.ExtendsIdentity == "") == (io.ExtendsKey == ""):
+		return "", errors.New("--extends needs who signs the shared profile: --extends-identity (a certificate identity) or --extends-key")
+	case io.ExtendsKey != "":
+		if io.ExtendsIssuer != "" {
+			return "", errors.New("--extends-issuer goes with --extends-identity, not --extends-key")
+		}
+		e.Signer.Key, signer = io.ExtendsKey, io.ExtendsKey
+		if !strings.Contains(io.ExtendsKey, "://") {
+			abs, err := filepath.Abs(io.ExtendsKey)
+			if err != nil {
+				return "", err
+			}
+			e.Signer.Key = abs
+			if absDir, err := filepath.Abs(dir); err == nil {
+				if r, err := filepath.Rel(absDir, abs); err == nil {
+					signer = filepath.ToSlash(r)
+				}
+			}
+		}
+		signer = "    key: " + signer + "\n"
+	default:
+		e.Signer.CertificateIdentity = io.ExtendsIdentity
+		e.Signer.CertificateOIDCIssuer = firstNonEmpty(io.ExtendsIssuer, "https://token.actions.githubusercontent.com")
+		signer = "    certificateIdentity: " + e.Signer.CertificateIdentity + "\n    certificateOIDCIssuer: " + e.Signer.CertificateOIDCIssuer + "\n"
+	}
+	path, digest, err := fetchProfile(ctx, e, "")
+	if err != nil {
+		return "", fmt.Errorf("--extends %s: %w", io.Extends, err)
+	}
+	shared, err := manifest.ReadShared(path)
+	if err != nil {
+		return "", fmt.Errorf("--extends %s: %w", io.Extends, err)
+	}
+	opts.printf("%s (%s) is signed by the signer given", io.Extends, digest)
+
+	var b strings.Builder
+	b.WriteString(orgExtendsHeader)
+	b.WriteString("extends:\n  ref: " + io.Extends + " # each manifest's lock pins its digest; lock --update moves it\n")
+	b.WriteString("  signer: # who may sign the shared profile; checked whenever it is loaded\n" + signer)
+	if shared.Registry == "" {
+		b.WriteString("\nregistry: {{registry}} # images go to <registry>/<metadata.name>\n")
+	} else if io.Registry != "" && io.Registry != shared.Registry {
+		opts.logf("warning: the shared profile sets the registry (%s), so --registry %s isn't written", shared.Registry, io.Registry)
+	}
+	if shared.Trust == nil && shared.Signing.Verify.IsZero() {
+		if shared.Signing.Mode == "" || shared.Signing.Mode == "keyless" {
+			b.WriteString(orgVerifyBlock)
+		} else {
+			b.WriteString("\n# The shared profile signs with keys; name this repository's public key:\n# signing:\n#   verify: {key: keys/images.pub}\n")
+		}
+	}
+	return b.String(), nil
 }
 
 // workflowIdentityRegexp matches the certificate identity of ClearCutt
@@ -166,6 +246,27 @@ policy:
   # allowedHosts: [github.com, dl.k8s.io]
 `
 
+const orgExtendsHeader = `# yaml-language-server: $schema=https://raw.githubusercontent.com/northcutted/clearcutt-factory/{{ref}}/schemas/org.schema.json
+# Org profile. It extends the platform team's shared profile, which sets the
+# builder, signing, vulnerability gate, and policy: this file adds what the
+# shared profile leaves to each repository, and may tighten (never loosen)
+# the gate and policy.
+apiVersion: factory.clearcutt.dev/v1alpha1
+kind: OrgProfile
+
+`
+
+const orgVerifyBlock = `
+signing:
+  verify:
+    # Images are signed inside ClearCutt Factory's reusable workflows, so the
+    # certificate names those workflows. Any repository can call them, so
+    # sourceRepository binds signatures to runs in this repository.
+    certificateIdentityRegexp: {{identityRegexp}}
+    certificateOIDCIssuer: https://token.actions.githubusercontent.com
+    sourceRepository: https://github.com/{{repo}}
+`
+
 const imageTemplate = `# yaml-language-server: $schema=https://raw.githubusercontent.com/northcutted/clearcutt-factory/{{ref}}/schemas/manifest.schema.json
 # An example image to replace with your own. Packages come from the base's
 # package manager; anything else is a tool (see the ClearCutt Factory README).
@@ -194,8 +295,9 @@ const workflowTemplate = `# Builds, publishes, and maintains this repository's i
 # in this repository's own organization or enterprise.
 #
 # Across repositories: a platform repository's notify job wakes the
-# repositories with the topic clearcutt-app when it publishes run images or
-# stacks; theirs then rebase onto the new run image or propose the new stack.
+# repositories with the topic clearcutt-app when it publishes run images,
+# stacks, or a shared org profile; theirs then rebase onto the new run image,
+# or propose the new stack or profile.
 name: clearcutt-factory
 on:
   push:
@@ -208,7 +310,7 @@ on:
   # From a platform repository's notify job. The payload is only a hint: the
   # jobs re-resolve everything from the registry and verify it.
   repository_dispatch:
-    types: [clearcutt.run-image-published, clearcutt.stack-published]
+    types: [clearcutt.run-image-published, clearcutt.stack-published, clearcutt.profile-published]
 permissions:
   contents: read
 jobs:
@@ -221,7 +323,7 @@ jobs:
       REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
 
   update-locks:
-    if: github.event.schedule == '23 6 * * 1' || github.event_name == 'workflow_dispatch' || github.event.action == 'clearcutt.stack-published'
+    if: github.event.schedule == '23 6 * * 1' || github.event_name == 'workflow_dispatch' || github.event.action == 'clearcutt.stack-published' || github.event.action == 'clearcutt.profile-published'
     uses: northcutted/clearcutt-factory/.github/workflows/update-locks.yml@{{ref}}
     permissions: {contents: write, pull-requests: write}
     secrets:

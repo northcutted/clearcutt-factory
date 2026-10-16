@@ -74,6 +74,66 @@
       },
       "type": "object"
     },
+    "extends": {
+      "additionalProperties": false,
+      "description": "Extends is a shared org profile, published with clearcutt-factory profile push, that this one builds on: what it sets is fixed, this profile adds what it leaves to each repository, and may tighten (never loosen) its gate and policy. Each manifest's lock pins its digest.",
+      "properties": {
+        "ref": {
+          "description": "Ref is the shared profile, e.g. ghcr.io/acme/factory/org:1. Each manifest's lock pins the digest it resolved to, and lock --update moves it.",
+          "type": "string"
+        },
+        "signer": {
+          "additionalProperties": false,
+          "description": "Signer is who may sign the shared profile: a key, or a keyless certificate identity and issuer. It is stated here because the shared profile names every other signer; the profile is verified against it whenever it is loaded.",
+          "properties": {
+            "args": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "certificateIdentity": {
+              "type": "string"
+            },
+            "certificateIdentityRegexp": {
+              "type": "string"
+            },
+            "certificateOIDCIssuer": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            },
+            "sourceMatchesImage": {
+              "description": "SourceMatchesImage requires the run to be in the repository the image names as its source (org.opencontainers.image.source). Images only: a stack names no source, so a stack signer binds with sourceRepository.",
+              "type": "boolean"
+            },
+            "sourceRef": {
+              "description": "SourceRef is the ref the run was on, e.g. refs/heads/main.",
+              "type": "string"
+            },
+            "sourceRepository": {
+              "description": "SourceRepository is the repository whose workflow runs sign, e.g. https://github.com/acme/checkout.",
+              "type": "string"
+            },
+            "sourceRepositoryOwner": {
+              "description": "SourceRepositoryOwner accepts runs in any of the owner's repositories, e.g. https://github.com/acme; it limits sourceMatchesImage.",
+              "type": "string"
+            },
+            "tlog": {
+              "description": "Tlog false accepts this key signer's signatures and attestations without a transparency log entry (cosign --insecure-ignore-tlog), for a key that signs without one. Keyless signers can't set it.",
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "ref",
+        "signer"
+      ],
+      "type": "object"
+    },
     "kind": {
       "enum": [
         "OrgProfile"
@@ -166,6 +226,51 @@
         "mode": {
           "description": "Mode is keyless (Sigstore OIDC), key (file or KMS URI), or none.",
           "type": "string"
+        },
+        "profile": {
+          "additionalProperties": false,
+          "description": "Profile is who signs this profile when profile push publishes it, so that pushing it unchanged only moves its tag. Repositories that extend it trust the signer they name in extends.signer, not this.",
+          "properties": {
+            "args": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "certificateIdentity": {
+              "type": "string"
+            },
+            "certificateIdentityRegexp": {
+              "type": "string"
+            },
+            "certificateOIDCIssuer": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            },
+            "sourceMatchesImage": {
+              "description": "SourceMatchesImage requires the run to be in the repository the image names as its source (org.opencontainers.image.source). Images only: a stack names no source, so a stack signer binds with sourceRepository.",
+              "type": "boolean"
+            },
+            "sourceRef": {
+              "description": "SourceRef is the ref the run was on, e.g. refs/heads/main.",
+              "type": "string"
+            },
+            "sourceRepository": {
+              "description": "SourceRepository is the repository whose workflow runs sign, e.g. https://github.com/acme/checkout.",
+              "type": "string"
+            },
+            "sourceRepositoryOwner": {
+              "description": "SourceRepositoryOwner accepts runs in any of the owner's repositories, e.g. https://github.com/acme; it limits sourceMatchesImage.",
+              "type": "string"
+            },
+            "tlog": {
+              "description": "Tlog false accepts this key signer's signatures and attestations without a transparency log entry (cosign --insecure-ignore-tlog), for a key that signs without one. Keyless signers can't set it.",
+              "type": "boolean"
+            }
+          },
+          "type": "object"
         },
         "stackKey": {
           "description": "StackKey signs stacks (stack push) in key mode instead of Key, so stacks can have a signer of their own (see Stacks).",
@@ -277,6 +382,10 @@
     "vulnerabilities": {
       "additionalProperties": false,
       "properties": {
+        "allowLocalVEX": {
+          "description": "AllowLocalVEX, in a shared profile, also applies the VEX statements of the repositories that extend it (their profile's vex and their manifests' spec.vex), which are refused otherwise: a statement that a vulnerability doesn't apply lets an image past the gate.",
+          "type": "boolean"
+        },
         "failOn": {
           "description": "FailOn blocks push/sign at or above this severity: negligible, low, medium, high, critical. Empty never fails.",
           "type": "string"
@@ -288,6 +397,13 @@
         "scanner": {
           "description": "Scanner is grype or none.",
           "type": "string"
+        },
+        "vex": {
+          "description": "VEX are VEX documents (OpenVEX, or CSAF), relative to this profile, applied to every scan, as a manifest's spec.vex is to its own.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "type": "object"

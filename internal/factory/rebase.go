@@ -76,7 +76,7 @@ func Rebase(ctx context.Context, opts Options, ro RebaseOptions) error {
 		if ro.UpdateLock {
 			return errors.New("--update-lock needs the app manifest (-f app.yaml) instead of --image")
 		}
-		org, err := manifest.LoadOrg(opts.OrgPath, ".")
+		org, err := loadOrg(ctx, opts, ".", nil)
 		if err != nil {
 			return err
 		}
@@ -128,7 +128,7 @@ func Rebase(ctx context.Context, opts Options, ro RebaseOptions) error {
 // step: with the old toolchain, the app would link libraries (sonames) the
 // new run image may not have.
 func lockForRebuild(ctx context.Context, opts Options, pinned *manifest.Manifest, onto string) error {
-	m, org, err := load(ctx, opts, true)
+	m, org, err := loadWith(ctx, opts, true, false)
 	if err != nil {
 		return err
 	}
