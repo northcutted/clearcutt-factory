@@ -3,7 +3,7 @@
 ClearCutt Factory is pre-1.0; see [docs/stability.md](docs/stability.md) for
 what may change between releases.
 
-## Unreleased
+## v0.2.0
 
 **Rebased images get SLSA build provenance
 ([#52](https://github.com/northcutted/clearcutt-factory/issues/52)).** A
