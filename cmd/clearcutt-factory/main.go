@@ -21,8 +21,10 @@ const usage = `clearcutt-factory: declarative, reproducible, signed OCI images (
 
 Usage:
   clearcutt-factory init    [--dir .] [--repo OWNER/NAME] [--registry REGISTRY] [--force]
+                            [--extends REF (--extends-identity URL [--extends-issuer URL] | --extends-key K)]
       Set up a repository: an org profile, an example image, and a GitHub
       Actions workflow that publishes, updates, and rebases with ClearCutt Factory.
+      --extends makes the org profile extend a shared one, signed by that identity or key.
   clearcutt-factory lock    [-f image.yaml] [--update | --update-base]
       Pin every input and write the lock and Containerfile. --update re-resolves
       all of them; --update-base only the base.
@@ -51,6 +53,11 @@ Usage:
       Publish a stack so apps in any repository can name it (spec.stack: REF),
       and sign it (with --key K, signing.stackKey, or as images are signed).
       An unchanged stack the org's stack signer signed only moves the tag.
+  clearcutt-factory profile push [-f factory.org.yaml] --ref REGISTRY/REPOSITORY:TAG [--key K | --no-sign]
+      Publish an org profile, with the trust policy, keys, and VEX it names, so
+      other repositories can extend it (extends: {ref: REF, signer: …}), and sign
+      it as stacks are signed. An unchanged profile signing.profile signed only
+      moves the tag.
   clearcutt-factory version
 
 Common flags:
@@ -190,6 +197,10 @@ func run(ctx context.Context, args []string) error {
 		fs.StringVar(&io.Repo, "repo", "", "")
 		fs.StringVar(&io.Registry, "registry", "", "")
 		fs.BoolVar(&io.Force, "force", false, "")
+		fs.StringVar(&io.Extends, "extends", "", "")
+		fs.StringVar(&io.ExtendsIdentity, "extends-identity", "", "")
+		fs.StringVar(&io.ExtendsIssuer, "extends-issuer", "", "")
+		fs.StringVar(&io.ExtendsKey, "extends-key", "", "")
 		if err := parse(fs, args); err != nil {
 			return err
 		}
@@ -214,6 +225,26 @@ func run(ctx context.Context, args []string) error {
 			return errors.New("stack push needs --ref REGISTRY/REPOSITORY:TAG")
 		}
 		return factory.StackPushWith(ctx, opts, file, so)
+
+	case "profile":
+		if len(args) == 0 || args[0] != "push" {
+			return usageError{}
+		}
+		var po factory.ProfilePushOptions
+		fs.StringVar(&po.Ref, "ref", "", "")
+		fs.StringVar(&po.Key, "key", "", "")
+		fs.BoolVar(&po.NoSign, "no-sign", false, "")
+		if err := parse(fs, args[1:]); err != nil {
+			return err
+		}
+		file := "factory.org.yaml"
+		if flagSet(fs, "f") {
+			file = opts.ManifestPath
+		}
+		if po.Ref == "" {
+			return errors.New("profile push needs --ref REGISTRY/REPOSITORY:TAG")
+		}
+		return factory.ProfilePush(ctx, opts, file, po)
 
 	case "version", "--version":
 		fmt.Println(versionString())

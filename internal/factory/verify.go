@@ -96,7 +96,7 @@ func Verify(ctx context.Context, opts Options, vo VerifyOptions) error {
 		previous = filepath.Join(vo.OutDir, m.Metadata.Name, "image")
 	} else {
 		var err error
-		if org, err = manifest.LoadOrg(opts.OrgPath, "."); err != nil {
+		if org, err = loadOrg(ctx, opts, ".", nil); err != nil {
 			return err
 		}
 		signers := [][]string{vo.VerifyArgs}

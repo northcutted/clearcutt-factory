@@ -94,6 +94,9 @@ func (r *Resolver) LockFrom(ctx context.Context, m *manifest.Manifest, o *manife
 		Kind:         lock.Kind,
 		InputsDigest: lock.InputsOf(m, o).Digest(),
 	}
+	if sp := o.Shared; sp != nil {
+		l.Profile = &lock.Image{Ref: sp.Ref, Digest: sp.Digest}
+	}
 	var err error
 	pin := func(ref string, old lock.Image) lock.Image {
 		if err != nil {
@@ -167,9 +170,16 @@ func (r *Resolver) LockFrom(ctx context.Context, m *manifest.Manifest, o *manife
 	}
 
 	// Keep the build timestamp unless the pins changed, so re-locking an
-	// unchanged manifest doesn't change the image.
+	// unchanged manifest doesn't change the image. The shared profile's pin
+	// isn't one: what of it shapes the image (the builder, labels) shows
+	// elsewhere.
 	l.SourceDateEpoch = orig.SourceDateEpoch
-	if orig.SourceDateEpoch == 0 || !bytes.Equal(l.Marshal(), orig.Marshal()) {
+	unprofiled := func(x *lock.Lock) []byte {
+		c := *x
+		c.Profile = nil
+		return c.Marshal()
+	}
+	if orig.SourceDateEpoch == 0 || !bytes.Equal(unprofiled(l), unprofiled(orig)) {
 		l.SourceDateEpoch = epochFor(r.Now())
 	}
 	return l, nil
