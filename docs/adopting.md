@@ -11,7 +11,7 @@ Download a release binary for Linux or macOS from
 check its signature, made by the release workflow at that tag:
 
 ```sh
-v=v0.1.1 asset=clearcutt-factory-darwin-arm64
+v=v0.2.0 asset=clearcutt-factory-darwin-arm64
 curl -fsSLO https://github.com/northcutted/clearcutt-factory/releases/download/$v/$asset
 curl -fsSLO https://github.com/northcutted/clearcutt-factory/releases/download/$v/$asset.sigstore.json
 cosign verify-blob --bundle $asset.sigstore.json \
@@ -20,7 +20,7 @@ cosign verify-blob --bundle $asset.sigstore.json \
 install -m 0755 $asset /usr/local/bin/clearcutt-factory
 ```
 
-Or build it: `go install github.com/northcutted/clearcutt-factory/cmd/clearcutt-factory@v0.1.1`.
+Or build it: `go install github.com/northcutted/clearcutt-factory/cmd/clearcutt-factory@v0.2.0`.
 
 Building needs Docker or Podman (BuildKit runs in a container). Scanning and
 signing need `syft`, `grype`, and `cosign` on `PATH`.
@@ -195,7 +195,7 @@ platform: images.yml ─▶ notify.yml ─repository_dispatch─▶ each reposit
       published: ${{ steps.push.outputs.published == 'true' && format('[{{"kind":"stack","image":"{0}","digest":"{1}"}}]', steps.push.outputs.image, steps.push.outputs.digest) || '[]' }}
     steps:
       - uses: actions/checkout@v7
-      - uses: northcutted/clearcutt-factory@v0.1.1
+      - uses: northcutted/clearcutt-factory@v0.2.0
         with: {tools: "false"}
       - uses: docker/login-action@v4
         with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ github.token }}"}
@@ -205,7 +205,7 @@ platform: images.yml ─▶ notify.yml ─repository_dispatch─▶ each reposit
   notify-stacks:
     needs: stacks
     if: needs.stacks.outputs.published != '[]'
-    uses: northcutted/clearcutt-factory/.github/workflows/notify.yml@v0.1.1
+    uses: northcutted/clearcutt-factory/.github/workflows/notify.yml@v0.2.0
     permissions: {contents: read}
     with:
       published: ${{ needs.stacks.outputs.published }}
@@ -352,7 +352,7 @@ the field, not a silent override, so what the file says is what applies:
 
 The reusable workflows sign inside ClearCutt Factory's workflows, so the
 certificate's identity is the called workflow
-(`https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@refs/tags/v0.1.1`),
+(`https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@refs/tags/v0.2.0`),
 not your repository. Anyone can call those workflows and get the same
 identity, so an identity alone would accept images built in any repository.
 The certificate also records the repository whose run signed (Fulcio's GitHub
@@ -467,7 +467,7 @@ For workflows of your own, the action installs a signature-verified binary
 plus cosign, syft, and grype:
 
 ```yaml
-- uses: northcutted/clearcutt-factory@v0.1.1
+- uses: northcutted/clearcutt-factory@v0.2.0
 - run: clearcutt-factory build -f images/example/image.yaml
 ```
 

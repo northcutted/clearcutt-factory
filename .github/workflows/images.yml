@@ -9,7 +9,7 @@
 #
 #   jobs:
 #     images:
-#       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.1.1
+#       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.2.0
 #       permissions: {contents: read, packages: write, id-token: write, attestations: write}
 #
 # Secrets (optional): REGISTRY_USERNAME and REGISTRY_PASSWORD for a registry
@@ -42,7 +42,7 @@ on:
       factory-version:
         description: clearcutt-factory release to use
         type: string
-        default: v0.1.1
+        default: v0.2.0
     secrets:
       REGISTRY_USERNAME:
         description: Registry user, for a registry other than ghcr.io
