@@ -42,7 +42,10 @@ It writes three files and keeps any that exist (`--force` overwrites):
 | `.github/workflows/clearcutt-factory.yml` | Calls the reusable workflows: build, test, and scan on pull requests; publish on `main`; weekly lock updates; daily app rebases; across repositories, notify dependents of what it published and answer such notices ([below](#waking-the-apps-when-the-platform-publishes)) |
 
 `--repo owner/name` and `--registry` override what it reads from the `origin`
-remote. Every file names its JSON Schema, so editors with the YAML language
+remote. In an app repository of an organization that publishes a shared org
+profile, `--extends REF --extends-identity ID` (or `--extends-key K`) checks
+that profile's signature and writes a `factory.org.yaml` that extends it
+([section 6](#6-one-org-profile-for-every-repository)). Every file names its JSON Schema, so editors with the YAML language
 server complete and check fields as you type.
 
 ## 3. Write manifests and lock them
@@ -213,6 +216,137 @@ platform: images.yml ─▶ notify.yml ─repository_dispatch─▶ each reposit
 
 Dispatches queue behind any fleet or lock-update run already going in the
 app repository, so a burst of them costs at most one more run.
+
+## 6. One org profile for every repository
+
+Without this, each app repository carries its own copy of the platform
+team's `factory.org.yaml`. Copies drift, and an app repository can weaken its
+copy (drop `failOn:`, turn off `requireSignedStacks`) in the same pull
+request as its code. Instead, the platform team publishes one signed profile,
+and app repositories extend it.
+
+| Who | Owns | What it says |
+|---|---|---|
+| Platform team, with security | The shared profile, published with `profile push` | The builder, how images are signed and whom to trust, the vulnerability gate, policy, mirrors, VEX statements for every repository, and whatever else should be the same everywhere |
+| Each app repository | Its `factory.org.yaml`, which `extends` the shared one | Who may sign the shared profile, plus what the shared profile leaves to each repository (usually the registry and who signs this repository's images), and any tightening of the gate and policy |
+
+**Publish it** from the platform repository. Keep the shared profile in a
+file of its own: it leaves out what differs per repository, which the
+platform repository's own `factory.org.yaml` sets.
+
+```yaml
+# org/profile.yaml: what every repository shares
+apiVersion: factory.clearcutt.dev/v1alpha1
+kind: OrgProfile
+builder:
+  buildkit: moby/buildkit:v0.33.1
+signing:
+  mode: keyless
+  trustPolicy: trust.yaml            # image and stack signers, shared with clearcutt-verify
+  profile:                           # who signs this profile (profile push checks it)
+    certificateIdentity: https://github.com/acme/platform/.github/workflows/profile.yml@refs/heads/main
+    certificateOIDCIssuer: https://token.actions.githubusercontent.com
+vulnerabilities:
+  failOn: critical
+  onlyFixed: true
+  vex: [../vex/2026-10.openvex.json] # applied to every repository's scans
+policy:
+  requireNonRoot: true
+  requireSignedStacks: true
+  requiredLabels: [org.opencontainers.image.source]
+  allowedRegistries: [cgr.dev/chainguard/, ghcr.io/acme/]
+```
+
+```sh
+clearcutt-factory profile push -f org/profile.yaml --ref ghcr.io/acme/factory/org:1
+```
+
+The artifact (type `application/vnd.clearcutt.factory.org-profile.v1`)
+holds the profile and the files it names, renamed inside it: the trust
+policy, public keys, and VEX documents. It is signed as stacks are
+(`--key`, else `signing.stackKey` in key mode, else as images are signed).
+Like `stack push`, it is published by its content: pushing an unchanged
+profile that `signing.profile` has signed only moves the tag, and it writes
+`image`, `repository`, `digest`, and `published` to `$GITHUB_OUTPUT`. Hand
+`notify.yml` `[{"kind":"profile", "image": …, "digest": …}]` to send
+`clearcutt.profile-published`, which `init`'s workflow answers with a
+lock-update pull request.
+
+A shared profile can't extend another, set `builder.runtime`, `addr`,
+`config`, or `network` (they describe the machine that builds; each
+repository sets its own), or name a private key file in `signing.key` or
+`stackKey` (a KMS key is fine). With `policy.requireSignedStacks` it must
+name the stack signer itself.
+
+**Extend it** in each app repository (`clearcutt-factory init --extends
+ghcr.io/acme/factory/org:1 --extends-identity …` writes this, after checking
+the signature):
+
+```yaml
+apiVersion: factory.clearcutt.dev/v1alpha1
+kind: OrgProfile
+extends:
+  ref: ghcr.io/acme/factory/org:1
+  signer:              # who may sign the shared profile
+    certificateIdentity: https://github.com/acme/platform/.github/workflows/profile.yml@refs/heads/main
+    certificateOIDCIssuer: https://token.actions.githubusercontent.com
+registry: ghcr.io/acme/checkout       # what the shared profile leaves to each repository
+signing:
+  verify:
+    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet)\.yml@refs/tags/v\d+\.\d+\.\d+$
+    certificateOIDCIssuer: https://token.actions.githubusercontent.com
+    sourceRepository: https://github.com/acme/checkout
+vulnerabilities:
+  failOn: high         # stricter than the shared critical: allowed
+```
+
+**Who may sign it is stated here, never in the shared profile.** The shared
+profile names every other signer (of images and stacks) and sets the gate,
+so whoever can publish it controls what the repository accepts. A profile
+that named its own signer would vouch for itself: anyone who can push to the
+tag could publish one naming themselves. `extends.signer` is a signer like
+`signing.verify` (a key, or a certificate identity and issuer), reviewed in
+the app repository like any other change; protect `factory.org.yaml` with
+CODEOWNERS. It isn't a role in a local trust policy: the trust policy is
+part of what the shared profile provides, and its roles (`image`, `stack`)
+are shared with clearcutt-verify.
+
+**Pinned, and checked on every load.** Each manifest's lock records the
+digest the shared profile resolved to (`profile: {ref, digest}`), as it
+does for a registry stack. Every command that loads the manifest (`lock`,
+`render`, `build`, `verify`, `rebase`) uses that digest and checks its
+signature against `extends.signer` each time, so an unsigned or tampered
+profile, or one signed by someone else, fails closed, including in a pull
+request that edits the lock. `lock` keeps the pin; `lock --update` (the
+weekly job, or a `clearcutt.profile-published` notice) moves it, in a pull
+request whose description names the new digest. Moving the pin alone
+doesn't change the build timestamp, so images change only if what the
+profile sets shapes them (the builder, labels). A lock that doesn't pin the
+profile its org profile extends is stale. Commands without a manifest
+(`verify --image`, `rebase --image`, `stack push`) follow the tag, checked
+the same way. Loading needs the registry and `cosign`.
+
+**What a repository can and can't change.** A repository's profile may add
+what the shared profile leaves unset and tighten its gate and policy.
+Anything that would change or loosen the shared profile is an error naming
+the field, not a silent override, so what the file says is what applies:
+
+| Setting | Rule |
+|---|---|
+| `registry`, `tags`, `defaults.base`, `defaults.platforms`, `mirrors`, `signing.key`, `signing.stackKey`, `signing.args` | The shared profile's when it sets them (a repository may restate the same value), else the repository's |
+| `defaults.labels` | Per label: as above; repositories add labels |
+| `builder.buildkit`, `frontend`, `toolbox`, `go`, `nix`, `nixpkgs`; `signing.mode`; `vulnerabilities.scanner` | The shared profile's, or factory's default when it leaves them unset; never the repository's |
+| `builder.runtime`, `addr`, `config`, `network` | The repository's only (the machine that builds) |
+| `signing.trustPolicy` | The shared profile's only |
+| `signing.verify` | The shared profile's if it sets it; else the repository's. Refused when the shared profile has a trust policy |
+| `signing.stacks` | The shared profile's stack signer when it names one (`signing.stacks`, `signing.verify`, or its trust policy's stack signers); else the repository's |
+| `signing.profile` | Only in a profile you publish |
+| `vulnerabilities.failOn` | The repository may set a stricter (lower) severity, not a looser one |
+| `vulnerabilities.onlyFixed`, `vulnerabilities.allowLocalVEX`, `policy.allowTOFU` | Can only turn off |
+| `policy.requireNonRoot`, `policy.requireSignedStacks`, `sbom.scan` | Can only turn on |
+| `policy.requiredLabels` | Union |
+| `policy.allowedHosts`, `policy.allowedRegistries` | The repository's list, when it sets one, must lie within the shared one (a host or `.suffix` the shared list allows; a registry prefix under a shared one) |
+| `vulnerabilities.vex` | The shared profile's statements apply to every scan. The repository's (its profile's `vex` and its manifests' `spec.vex`) are refused unless the shared profile sets `vulnerabilities.allowLocalVEX: true`: a statement that a vulnerability doesn't apply lets an image past the gate |
 
 ## Who signs, and binding signatures to your repository
 

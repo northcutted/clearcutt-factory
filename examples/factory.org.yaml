@@ -1,6 +1,8 @@
 # yaml-language-server: $schema=../schemas/org.schema.json
 # Org profile: every image under this directory inherits these choices.
 # Swap registry, signer, scanner gate, and policy to match your organization.
+# App repositories can extend one the platform team publishes instead
+# (extends: {ref: …, signer: …}; see docs/adopting.md).
 apiVersion: factory.clearcutt.dev/v1alpha1
 kind: OrgProfile
 
@@ -37,11 +39,15 @@ signing:
   #   certificateIdentity: https://github.com/acme/platform/.github/workflows/stacks.yml@refs/heads/main
   #   certificateOIDCIssuer: https://token.actions.githubusercontent.com
   # trustPolicy: trust.yaml  # or one clearcutt.dev/v1 TrustPolicy shared with clearcutt-verify
+  # profile:               # published with profile push: who signs this profile (repositories pin it in extends.signer)
+  #   certificateIdentity: https://github.com/acme/platform/.github/workflows/profile.yml@refs/heads/main
+  #   certificateOIDCIssuer: https://token.actions.githubusercontent.com
 
 vulnerabilities:
   scanner: grype
   failOn: critical
   onlyFixed: true          # don't block on CVEs nobody can fix yet
+  # vex: [vex/go-2026-10.openvex.json]   # applied to every scan
 
 # Route downloads through a caching proxy; checksums still pin every byte.
 # mirrors:
