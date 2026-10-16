@@ -43,10 +43,21 @@ type RebaseOptions struct {
 	NoScan bool
 	NoSign bool
 	NoTest bool
+	// ForceTags moves the tags to a result published before even when they
+	// hold a newer image (a deliberate rollback).
+	ForceTags bool
 	// UpdateLock (manifest mode) then pins the app's lock to the base the
-	// image is on, so the next build from source doesn't move it back. If
-	// the rebase is refused, the lock still moves: building is the fix.
+	// image is on, so the next build from source doesn't move it back. The
+	// build image stays pinned: the app's layer was built with it. If the
+	// rebase is refused, the lock still moves, and with it the stack and its
+	// build image (see lockForRebuild): building is the fix.
 	UpdateLock bool
+
+	// held is set when a build rebases its own image before tagging it (see
+	// publishBuild): what each tag held when the build decided to. Then a
+	// tag that has moved since fails the rebase rather than being left with
+	// a warning, and the build writes the GitHub Actions outputs.
+	held map[string]string
 }
 
 // refusedError means the rebase would be unsafe; rebuilding is the remedy.
@@ -58,6 +69,9 @@ func (e refusedError) Error() string { return e.msg }
 // rebuilding it, after checking that this is safe, then tests, scans, gates,
 // and (with Push) pushes, signs, and attests the result like Build.
 func Rebase(ctx context.Context, opts Options, ro RebaseOptions) error {
+	if ro.Check && ro.UpdateLock {
+		return errors.New("--check only reports and changes nothing, so it can't --update-lock; drop one of them")
+	}
 	if ro.Image != "" {
 		if ro.UpdateLock {
 			return errors.New("--update-lock needs the app manifest (-f app.yaml) instead of --image")
@@ -66,7 +80,7 @@ func Rebase(ctx context.Context, opts Options, ro RebaseOptions) error {
 		if err != nil {
 			return err
 		}
-		_, err = rebaseImage(ctx, opts, org, ro, nil, "")
+		_, _, err = rebaseImage(ctx, opts, org, ro, nil, "")
 		return err
 	}
 
@@ -87,32 +101,79 @@ func Rebase(ctx context.Context, opts Options, ro RebaseOptions) error {
 	} else if ro.UpdateLock && ro.Onto != m.Spec.Base {
 		return fmt.Errorf("--update-lock pins the stack's run image (%s); drop --onto, or change the stack", m.Spec.Base)
 	}
-	onto, err := rebaseImage(ctx, opts, org, ro, m.Spec.Test, m.Metadata.Name)
+	onto, _, err := rebaseImage(ctx, opts, org, ro, m.Spec.Test, m.Metadata.Name)
 	var refused refusedError
 	if err != nil && !errors.As(err, &refused) {
 		return err
 	}
 	if ro.UpdateLock {
-		if _, lerr := lockManifest(ctx, opts, m, org, LockOptions{UpdateBase: true, BaseDigest: onto}); lerr != nil {
-			return errors.Join(err, lerr)
-		}
 		if refused.msg != "" {
-			return fmt.Errorf("%w\n%s now pins the new base; build the app to move it", err, rel(m.LockPath()))
+			if lerr := lockForRebuild(ctx, opts, m, onto); lerr != nil {
+				return errors.Join(err, lerr)
+			}
+			return fmt.Errorf("%w\n%s now pins the new base and the stack's newest build image; build the app to move it", err, rel(m.LockPath()))
+		}
+		if lerr := lockManifest(ctx, opts, m, org, LockOptions{UpdateBase: true, BaseDigest: onto}); lerr != nil {
+			return errors.Join(err, lerr)
 		}
 	}
 	return err
 }
 
+// lockForRebuild re-locks an app whose rebase was refused for the build that
+// replaces it: the stack (a registry stack where its reference points now),
+// its build image, and its run image (at onto, the build the rebase was
+// refused for, unless the stack now names another run image). The build
+// image moves with the run image, because the platform team builds them in
+// step: with the old toolchain, the app would link libraries (sonames) the
+// new run image may not have.
+func lockForRebuild(ctx context.Context, opts Options, pinned *manifest.Manifest, onto string) error {
+	m, org, err := load(ctx, opts, true)
+	if err != nil {
+		return err
+	}
+	if err := verifyStack(ctx, m, org); err != nil {
+		return err
+	}
+	lo := LockOptions{UpdateStack: true}
+	if m.Spec.Base == pinned.Spec.Base {
+		lo.BaseDigest = onto
+	}
+	return lockManifest(ctx, opts, m, org, lo)
+}
+
 // rebaseImage rebases ro.Image and returns the digest of the base it is now
-// on (also when it already was, or the rebase was refused).
-func rebaseImage(ctx context.Context, opts Options, org *manifest.Org, ro RebaseOptions, test *manifest.Test, label string) (string, error) {
+// on (also when it already was, or the rebase was refused), and the rebased
+// image when it pushed one (repo@digest).
+//
+// With ro.Push, a tag moves to the result only if it still holds what it
+// did when the rebase started (for the tag ro.Image names, the image
+// rebased): when a newer publish took it meanwhile, the result is pushed
+// by digest only and the tag stays, so the next rebase picks up the new
+// image.
+func rebaseImage(ctx context.Context, opts Options, org *manifest.Org, ro RebaseOptions, test *manifest.Test, label string) (onto, image string, err error) {
 	plan, err := planRebase(ctx, rebaseInputs{image: ro.Image, from: ro.From, onto: ro.Onto})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	onto := digestOf(plan.onto.Ref)
+	onto = digestOf(plan.onto.Ref)
 	if err := policy.CheckImages(org, plan.onto.Name); err != nil {
-		return "", err
+		return "", "", err
+	}
+	tags := ro.Tags
+	if len(tags) == 0 && plan.tag != "" {
+		tags = []string{plan.tag}
+	}
+	held := ro.held
+	if held == nil && ro.Push && !ro.ForceTags {
+		held = map[string]string{}
+		for _, t := range tags {
+			if t == plan.tag {
+				held[t] = plan.app.Digest
+			} else if held[t], err = registry.Lookup(ctx, plan.repo+":"+t); err != nil {
+				return "", "", err
+			}
+		}
 	}
 	opts.printf("rebasing %s onto %s (%s)", plan.appRef, plan.onto.Name, digestOf(plan.onto.Ref))
 	current := true
@@ -122,12 +183,12 @@ func rebaseImage(ctx context.Context, opts Options, org *manifest.Org, ro Rebase
 	}
 	if current {
 		opts.printf("already on the newest base; nothing to do")
-		return onto, nil
+		return onto, "", nil
 	}
 
 	reports, err := plan.analyze()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	var violations, breaks bool
 	for _, p := range plan.platforms {
@@ -148,16 +209,16 @@ func rebaseImage(ctx context.Context, opts Options, org *manifest.Org, ro Rebase
 	}
 	switch {
 	case violations:
-		return onto, refusedError{"not rebaseable: the image's own layers change or hide base files, so its copies would win over the new base's; rebuild it instead"}
+		return onto, "", refusedError{"not rebaseable: the image's own layers change or hide base files, so its copies would win over the new base's; rebuild it instead"}
 	case breaks && !ro.Force:
-		return onto, refusedError{"the new base may break this image; rebuild it, or pass --force to rebase anyway"}
+		return onto, "", refusedError{"the new base may break this image; rebuild it, or pass --force to rebase anyway"}
 	case ro.Check:
-		return onto, nil
+		return onto, "", nil
 	}
 
 	art, rebased, err := plan.build()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	opts.printf("rebased %s", art.Digest)
 	record := attest.Rebase{
@@ -183,27 +244,23 @@ func rebaseImage(ctx context.Context, opts Options, org *manifest.Org, ro Rebase
 
 	work, err := filepath.Abs(filepath.Join(ro.OutDir, safeName(lastElem(plan.repo))+"-rebase"))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	layoutDir := filepath.Join(work, "image")
 	if err := registry.WriteLayout(layoutDir, art); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if art, err = registry.OpenLayout(layoutDir); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if art.Digest != record.Result.Digest {
-		return "", fmt.Errorf("written layout is %s, not %s", art.Digest, record.Result.Digest)
+		return "", "", fmt.Errorf("written layout is %s, not %s", art.Digest, record.Result.Digest)
 	}
 	plats, err := art.Platforms()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	tags := ro.Tags
-	if len(tags) == 0 && plan.tag != "" {
-		tags = []string{plan.tag}
-	}
 	result := Result{
 		Repository: plan.repo, Digest: art.Digest, Tags: tags,
 		Platforms: map[string]string{}, Layout: layoutDir, SBOMs: map[string]string{},
@@ -211,9 +268,13 @@ func rebaseImage(ctx context.Context, opts Options, org *manifest.Org, ro Rebase
 	switch {
 	case test != nil && !ro.NoTest:
 		if err := smokeTest(ctx, opts, org, test, label, plats, work); err != nil {
-			return "", err
+			return "", "", err
 		}
 		result.Tested = true
+		record.Test = &attest.RebaseTest{Test: *test, Platforms: map[string]string{}}
+		for _, p := range plats {
+			record.Test.Platforms[p.Platform] = attest.TestPassed
+		}
 	case test == nil && label == "":
 		opts.printf("  no smoke test (rebase -f app.yaml runs the app's)")
 	}
@@ -224,14 +285,14 @@ func rebaseImage(ctx context.Context, opts Options, org *manifest.Org, ro Rebase
 		record.Result.Platforms[p.Platform] = p.Digest
 		cf, err := p.Image.ConfigFile()
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		from := lock.Image{Ref: plan.repo, Digest: plan.platform(p.Platform).app.Digest}
 		base := lock.Image{Ref: plan.onto.Name, Digest: plan.platform(p.Platform).newDigest}
 		declared := sbom.Rebased(plan.repo, p.Platform, p.Digest, cf.Created.Time, base, from, opts.Version)
 		po, err := sbomAndScan(ctx, org, declared, nil, p, work, ro.NoScan)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		outputs = append(outputs, po)
 		result.SBOMs[p.Platform] = po.sbomPath
@@ -250,10 +311,10 @@ func rebaseImage(ctx context.Context, opts Options, org *manifest.Org, ro Rebase
 	attDir := filepath.Join(work, "attestations")
 	recordPath := filepath.Join(attDir, "rebase.predicate.json")
 	if err := attest.WriteJSON(recordPath, record); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if err := attest.WriteJSON(filepath.Join(attDir, "rebase.intoto.json"), attest.NewStatement(plan.repo, art.Digest, attest.RebasePredicateType, record)); err != nil {
-		return "", err
+		return "", "", err
 	}
 	result.Attestations = append(result.Attestations, recordPath)
 	for _, po := range outputs {
@@ -265,24 +326,34 @@ func rebaseImage(ctx context.Context, opts Options, org *manifest.Org, ro Rebase
 	resultPath := filepath.Join(work, "result.json")
 	if len(blocked) > 0 {
 		_ = attest.WriteJSON(resultPath, result)
-		return "", fmt.Errorf("vulnerability gate (failOn: %s) blocked the image:\n  %s", org.Vulnerabilities.FailOn, strings.Join(blocked, "\n  "))
+		return "", "", fmt.Errorf("vulnerability gate (failOn: %s) blocked the image:\n  %s", org.Vulnerabilities.FailOn, strings.Join(blocked, "\n  "))
 	}
 
 	if ro.Push {
-		if result.Image, result.Published, result.Signed, err = publish(ctx, opts, org, art, plan.repo, tags, attest.RebasePredicateType, recordPath, outputs, ro.NoSign); err != nil {
-			return "", err
+		result.Image, result.Published, result.Signed, err = publish(ctx, opts, org, art, plan.repo, tags, attest.RebasePredicateType, recordPath, outputs, ro.NoSign, ro.ForceTags, held)
+		var moved movedTags
+		if errors.As(err, &moved) && ro.held == nil {
+			for _, m := range moved {
+				opts.logf("warning: %v during the rebase, so it stays there; pushed %s by digest only (the next rebase picks up what the tag holds now)", m, result.Image)
+			}
+			err = nil
 		}
-		if err := githubOutput(result); err != nil {
-			return "", err
+		if err != nil {
+			return "", result.Image, err
+		}
+		if ro.held == nil {
+			if err := githubOutput(result); err != nil {
+				return "", "", err
+			}
 		}
 	} else {
 		opts.printf("not pushed (use --push); unsigned attestations are in %s", rel(attDir))
 	}
 	if err := attest.WriteJSON(resultPath, result); err != nil {
-		return "", err
+		return "", "", err
 	}
 	opts.printf("wrote %s", rel(resultPath))
-	return onto, nil
+	return onto, result.Image, nil
 }
 
 // rebaseInputs name what to rebase. From may be one old base for every
@@ -470,10 +541,29 @@ func (p *rebasePlan) analyze() (map[string]*rebase.Report, error) {
 
 // build assembles the rebased image (an index when the input was one).
 func (p *rebasePlan) build() (*registry.Artifact, map[string]*rebase.Rebased, error) {
+	return p.buildAs(rebase.AsBuilt)
+}
+
+// repeat assembles a recorded rebase again. factory v0.1.1 and earlier wrote
+// rebased manifests differently (rebase.Legacy), so when the rebase doesn't
+// give expected, the old format may.
+func (p *rebasePlan) repeat(opts Options, expected string) (*registry.Artifact, error) {
+	art, _, err := p.build()
+	if err != nil || art.Digest == expected {
+		return art, err
+	}
+	if old, _, err := p.buildAs(rebase.Legacy); err == nil && old.Digest == expected {
+		opts.printf("(in the format of factory v0.1.1 and earlier)")
+		return old, nil
+	}
+	return art, nil
+}
+
+func (p *rebasePlan) buildAs(f rebase.Format) (*registry.Artifact, map[string]*rebase.Rebased, error) {
 	out := map[string]*rebase.Rebased{}
 	byOld := map[v1.Hash]v1.Image{}
 	for _, pp := range p.platforms {
-		r, err := rebase.Image(pp.app.Image, pp.oldBase, pp.newBase, p.onto.Name)
+		r, err := f.Image(pp.app.Image, pp.oldBase, pp.newBase, p.onto.Name)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", pp.platform, err)
 		}
@@ -485,7 +575,7 @@ func (p *rebasePlan) build() (*registry.Artifact, map[string]*rebase.Rebased, er
 		byOld[h] = r.Image
 	}
 	if p.app.Index != nil {
-		idx, err := rebase.Index(p.app.Index, byOld, p.onto.Name)
+		idx, err := f.Index(p.app.Index, byOld, p.onto.Name)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -503,25 +593,25 @@ func (p *rebasePlan) build() (*registry.Artifact, map[string]*rebase.Rebased, er
 	return &registry.Artifact{Digest: d.String(), Image: img}, out, nil
 }
 
-// verifyRebase repeats a recorded rebase and compares the digest.
-func verifyRebase(ctx context.Context, opts Options, rec *attest.Rebase, expected string) error {
+// verifyRebase repeats a recorded rebase and returns the digest it gives,
+// which must be expected.
+func verifyRebase(ctx context.Context, opts Options, rec *attest.Rebase, expected string) (string, error) {
 	if rec.Result.Digest != expected {
-		return fmt.Errorf("rebase record was made for %s, not %s", rec.Result.Digest, expected)
+		return "", fmt.Errorf("rebase record was made for %s, not %s", rec.Result.Digest, expected)
 	}
 	plan, err := planRebase(ctx, rebaseInputs{image: rec.Image, fromPlatforms: rec.From, onto: rec.Onto.Ref, ontoName: rec.Onto.Name})
 	if err != nil {
-		return err
+		return "", err
 	}
 	opts.printf("repeating the rebase of %s onto %s", rec.Image, rec.Onto.Ref)
-	art, _, err := plan.build()
+	art, err := plan.repeat(opts, expected)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if art.Digest != expected {
-		return fmt.Errorf("NOT reproducible: expected %s, the rebase gives %s", expected, art.Digest)
+		return "", fmt.Errorf("NOT reproducible: expected %s, the rebase gives %s", expected, art.Digest)
 	}
-	opts.printf("reproducible: rebase gives %s again", art.Digest)
-	return nil
+	return art.Digest, nil
 }
 
 func digestOf(ref string) string {

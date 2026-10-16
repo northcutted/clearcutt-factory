@@ -70,8 +70,9 @@ type Spec struct {
 	// App only: the stack to build with (a stack file, or a stack
 	// published with clearcutt-factory stack push, by reference), the source
 	// directory (default:
-	// the manifest's directory), source paths to leave out, and variables
-	// for the stack's build steps.
+	// the manifest's directory), source paths to leave out (besides .git,
+	// /out, and factory's own files: the app's lock and Containerfile, and
+	// the org profile), and variables for the stack's build steps.
 	Stack    string            `yaml:"stack,omitempty" json:"stack,omitempty"`
 	Source   string            `yaml:"source,omitempty" json:"source,omitempty"`
 	Exclude  []string          `yaml:"exclude,omitempty" json:"exclude,omitempty"`
@@ -85,6 +86,9 @@ type Spec struct {
 	VEXFiles []string `yaml:"-" json:"-"`
 	// Mirrors are the org's download URL rewrites, applied when rendering.
 	Mirrors []Mirror `yaml:"-" json:"-"`
+	// OrgFile is the org profile's path (empty for the defaults); an app
+	// leaves it out of its source.
+	OrgFile string `yaml:"-" json:"-"`
 }
 
 // Tool sources.
@@ -339,6 +343,7 @@ func (m *Manifest) ApplyOrg(o *Org) error {
 		m.Spec.Base = o.Defaults.Base
 	}
 	m.Spec.Mirrors = o.Mirrors
+	m.Spec.OrgFile = o.Path
 	if len(m.Spec.Platforms) == 0 {
 		m.Spec.Platforms = o.Defaults.Platforms
 	}

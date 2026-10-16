@@ -11,11 +11,16 @@ cd "$(dirname "$0")/.."
 grep -q "^## $version" CHANGELOG.md || { echo "CHANGELOG.md has no '## $version' section" >&2; exit 1; }
 [ -z "$(git status --porcelain)" ] || { echo "working tree is not clean" >&2; exit 1; }
 
-# Reusable workflow defaults and every pinned reference to this repository.
-# (The only version-shaped input defaults are factory-version's.)
-perl -pi -e 's/^(\s+default: )v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/${1}'"$version"'/' .github/workflows/*.yml
-perl -pi -e 's#(northcutted/clearcutt-factory(?:/\.github/workflows/[a-z-]+\.yml)?)\@v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?#$1\@'"$version"'#g' \
+# Reusable workflow defaults and every pinned reference to this repository:
+# the action, the reusable workflows (also as certificate identities, at
+# @refs/tags/), and go install. (The only version-shaped input defaults are
+# factory-version's.)
+semver='v\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?'
+perl -pi -e 's/^(\s+default: )'"$semver"'$/${1}'"$version"'/' .github/workflows/*.yml
+perl -pi -e 's#(northcutted/clearcutt-factory(?:/\.github/workflows/[a-z-]+\.yml|/cmd/clearcutt-factory)?\@(?:refs/tags/)?)'"$semver"'#${1}'"$version"'#g' \
   .github/workflows/*.yml action.yml README.md docs/*.md
+# The release the install instructions download (v=… in docs/adopting.md).
+perl -pi -e 's/^v='"$semver"'(?= )/v='"$version"'/' README.md docs/*.md
 
 go test ./internal/factory -run TestInit >/dev/null
 git add -A

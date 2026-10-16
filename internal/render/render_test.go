@@ -244,6 +244,35 @@ func appFixture(t *testing.T) (*manifest.Manifest, *lock.Lock) {
 	return m, l
 }
 
+// TestAppOwnFiles checks that factory's own files are left out of an app's
+// source when they are in it, wherever the source is.
+func TestAppOwnFiles(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []struct {
+		name, manifest, source, org string
+		want                        string
+	}{
+		{"source is the manifest's directory", "app.yaml", ".", "factory.org.yaml", "/app.lock.yaml,/app.Containerfile,/factory.org.yaml"},
+		{"org profile above the source", "app.yaml", ".", "../factory.org.yaml", "/app.lock.yaml,/app.Containerfile"},
+		{"default org profile", "app.yaml", ".", "", "/app.lock.yaml,/app.Containerfile"},
+		{"source above the manifest", "apps/web/web.yaml", ".", "factory.org.yaml", "/apps/web/web.lock.yaml,/apps/web/web.Containerfile,/factory.org.yaml"},
+		{"source beside the manifest", "deploy/app.yaml", "src", "deploy/factory.org.yaml", ""},
+		{"names with pattern characters", "[x]/a*.yaml", ".", "", `/\[x]/a\*.lock.yaml,/\[x]/a\*.Containerfile`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := &manifest.Manifest{Path: filepath.Join(dir, c.manifest)}
+			m.Spec.SourceDir = filepath.Join(dir, c.source)
+			if c.org != "" {
+				m.Spec.OrgFile = filepath.Join(dir, c.org)
+			}
+			got := ownFiles(m)
+			if strings.Join(got, ",") != c.want {
+				t.Errorf("ownFiles = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 func TestRenderApp(t *testing.T) {
 	m, l := appFixture(t)
 	out, err := Render(m, l)
@@ -263,8 +292,16 @@ func TestRenderApp(t *testing.T) {
 	if string(want) != string(out.Containerfile) {
 		t.Errorf("Containerfile differs from %s (run go test ./internal/render -update):\n%s", golden, out.Containerfile)
 	}
-	if len(out.Context) != 1 || out.Context[0].Rel != "src" || strings.Join(out.Context[0].Exclude, ",") != ".git,/out,docs/" {
+	if len(out.Context) != 1 || out.Context[0].Rel != "src" || strings.Join(out.Context[0].Exclude, ",") != ".git,/out,/app.lock.yaml,/app.Containerfile,docs/" {
 		t.Errorf("context: %+v", out.Context)
+	}
+	// The build stage runs as root whatever the build image's user, and the
+	// app as the stack's user.
+	s := string(out.Containerfile)
+	build, app, _ := strings.Cut(s, "# ---- app ----")
+	if !strings.Contains(build, " AS build\n# never shipped; root so the steps can write /out, /src, and the caches\nUSER 0\nARG ") ||
+		strings.Count(s, "USER ") != 2 || !strings.Contains(app, "USER 65532\n") {
+		t.Errorf("build stage should run as root and the app as 65532:\n%s", s)
 	}
 	wantAnn := "annotation-manifest[linux/arm64].org.opencontainers.image.base.digest=sha256:" + strings.Repeat("2", 64)
 	if len(out.Annotations) != 4 || out.Annotations[3] != wantAnn ||

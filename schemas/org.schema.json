@@ -18,12 +18,20 @@
           "description": "BuildKit is the moby/buildkit image used for every build. Pinning it is what makes rebuilds bit-for-bit comparable across machines.",
           "type": "string"
         },
+        "config": {
+          "description": "Config is a buildkitd.toml for the BuildKit container, relative to this profile: registry mirrors, plain-HTTP or insecure registries, CA certificates. Not with addr (configure that buildkitd instead).",
+          "type": "string"
+        },
         "frontend": {
           "description": "Frontend is the Dockerfile frontend pinned via `# syntax=`.",
           "type": "string"
         },
         "go": {
           "description": "Go is the default builder image for `from: go` tools.",
+          "type": "string"
+        },
+        "network": {
+          "description": "Network is the BuildKit container's network (docker or podman run --network), e.g. host, so BuildKit reaches a registry on this machine's localhost. Not with addr.",
           "type": "string"
         },
         "nix": {
@@ -117,7 +125,7 @@
           "type": "boolean"
         },
         "requireSignedStacks": {
-          "description": "RequireSignedStacks requires stacks fetched from a registry to carry a signature from signing.verify's identity, checked when locking.",
+          "description": "RequireSignedStacks requires stacks fetched from a registry to carry a signature from the org's stack signer: signing.stacks (else signing.verify), or the stack signers of signing.trustPolicy.",
           "type": "boolean"
         },
         "requiredLabels": {
@@ -152,10 +160,15 @@
           "type": "array"
         },
         "key": {
+          "description": "Key signs images in key mode: a file (relative to this profile) or a cosign KMS URI.",
           "type": "string"
         },
         "mode": {
           "description": "Mode is keyless (Sigstore OIDC), key (file or KMS URI), or none.",
+          "type": "string"
+        },
+        "stackKey": {
+          "description": "StackKey signs stacks (stack push) in key mode instead of Key, so stacks can have a signer of their own (see Stacks).",
           "type": "string"
         },
         "stacks": {
@@ -181,7 +194,7 @@
               "type": "string"
             },
             "sourceMatchesImage": {
-              "description": "SourceMatchesImage requires the run to be in the repository the image names as its source (org.opencontainers.image.source).",
+              "description": "SourceMatchesImage requires the run to be in the repository the image names as its source (org.opencontainers.image.source). Images only: a stack names no source, so a stack signer binds with sourceRepository.",
               "type": "boolean"
             },
             "sourceRef": {
@@ -195,6 +208,10 @@
             "sourceRepositoryOwner": {
               "description": "SourceRepositoryOwner accepts runs in any of the owner's repositories, e.g. https://github.com/acme; it limits sourceMatchesImage.",
               "type": "string"
+            },
+            "tlog": {
+              "description": "Tlog false accepts this key signer's signatures and attestations without a transparency log entry (cosign --insecure-ignore-tlog), for a key that signs without one. Keyless signers can't set it.",
+              "type": "boolean"
             }
           },
           "type": "object"
@@ -226,7 +243,7 @@
               "type": "string"
             },
             "sourceMatchesImage": {
-              "description": "SourceMatchesImage requires the run to be in the repository the image names as its source (org.opencontainers.image.source).",
+              "description": "SourceMatchesImage requires the run to be in the repository the image names as its source (org.opencontainers.image.source). Images only: a stack names no source, so a stack signer binds with sourceRepository.",
               "type": "boolean"
             },
             "sourceRef": {
@@ -240,6 +257,10 @@
             "sourceRepositoryOwner": {
               "description": "SourceRepositoryOwner accepts runs in any of the owner's repositories, e.g. https://github.com/acme; it limits sourceMatchesImage.",
               "type": "string"
+            },
+            "tlog": {
+              "description": "Tlog false accepts this key signer's signatures and attestations without a transparency log entry (cosign --insecure-ignore-tlog), for a key that signs without one. Keyless signers can't set it.",
+              "type": "boolean"
             }
           },
           "type": "object"

@@ -20,6 +20,8 @@ ARG TARGETARCH
 
 # ---- build: stack go ----
 FROM --platform=$BUILDPLATFORM golang:1@sha256:e432b43af23a9328d56a7c499be0476810aa344acbcf65fc7c455d4ff5a40602 AS build
+# never shipped; root so the steps can write /out, /src, and the caches
+USER 0
 ARG TARGETOS TARGETARCH SOURCE_DATE_EPOCH
 ENV APP_NAME="hello-app"
 ENV CGO_ENABLED="0"

@@ -40,7 +40,7 @@ rebuilding the app, after checking that this is safe.
 Install a signed release binary from
 [Releases](https://github.com/northcutted/clearcutt-factory/releases) (see
 [docs/adopting.md](docs/adopting.md#1-install) to verify it), or
-`go install github.com/northcutted/clearcutt-factory/cmd/clearcutt-factory@v0.1.0`.
+`go install github.com/northcutted/clearcutt-factory/cmd/clearcutt-factory@v0.1.1`.
 Building needs Docker or Podman (BuildKit runs inside a container, pinned by
 digest); scanning and signing need `syft`, `grype`, and `cosign` on `PATH`.
 
@@ -200,7 +200,7 @@ metadata: {name: hello-app}
 spec:
   stack: ../stacks/go.yaml
   source: .                 # default: the manifest's directory
-  exclude: [docs/]          # .gitignore-style; .git and /out are always left out
+  exclude: [docs/]          # .gitignore-style; .git, /out, and factory's own files are always left out
   buildEnv: {MAIN: ./cmd/server}
   env: {PORT: "8080"}       # env, labels, user, workdir, entrypoint, cmd override the stack's
 ```
@@ -210,7 +210,12 @@ spec:
 lock pins the build and run images and records the stack's digest, so a stack
 change makes every app's lock stale. The generated `app.Containerfile` runs
 the steps in the pinned build image and copies only `/out` onto the pinned run
-image with `COPY --link`. The app's layer therefore never touches the run
+image with `COPY --link`. The steps run as root whatever user the build image
+names (so a build image that meets `policy.requireNonRoot` works): that stage
+never ships, and the app runs as the stack's or app's `user`. The source the
+steps see leaves out `.git`, `/out`, and factory's own files when they are in
+it (the app's lock and Containerfile, and the org profile), so a pull request
+that only pins a new base doesn't change it. The app's layer therefore never touches the run
 image's files, and the image records its base in the standard
 `org.opencontainers.image.base.name`/`.base.digest` annotations. Those two
 properties are what make it safe to rebase.
@@ -221,7 +226,11 @@ which resolves manifest paths to image references and signs it), and apps in
 any repository name it: `stack: ghcr.io/acme/stacks/go:1`. The app's lock pins
 the stack's digest until `lock --update` moves it, and
 `policy.requireSignedStacks` accepts only stacks signed by the org's stack
-signer (`signing.stacks`).
+signer (`signing.stacks`). Every command that uses the stack checks the
+version the lock pins, so editing the lock can't bring in an unsigned one.
+Pushing an unchanged stack again only moves its tag once the stack signer
+has signed it, and in key mode stacks are signed with `signing.stackKey`
+(or `stack push --key`) when the platform's stacks have a key of their own.
 
 Apps can't declare packages, tools, or files: anything an app needs from the
 OS belongs in the stack's run image, which is itself a factory image. Quote
@@ -235,16 +244,27 @@ it follows the base the image names in its annotations (the stack's run image
 tag), so after the platform team pushes a patched run image, rebasing every
 app takes seconds and needs no source. `--onto` picks another base; `--from`
 names the old one for images without annotations (built with plain
-Dockerfiles, say). With a tag, `--push` moves that tag to the result.
+Dockerfiles, say). With a tag, `--push` moves that tag to the result, unless
+another publish took the tag while the rebase ran: then the result is pushed
+by digest only, the tag stays on the newer image, and a warning says so
+(`--tag` tags likewise move only if they still hold what they did when the
+rebase started). Where the registry supports conditional requests, the tag
+is written with an ETag precondition, so a publish between that check and
+the write is caught too.
 
 For apps, `clearcutt-factory rebase -f app.yaml` rebases the app's published image
 (`metadata.ref` and its first tag) onto its stack's run image and runs the
 app's smoke test on the result before pushing. `--update-lock` then pins
 `app.lock.yaml` to that base (`clearcutt-factory lock --update-base`), so the next build
-from source doesn't quietly go back to the unpatched one. If the rebase is
-refused, the lock still moves and the command fails: rebuilding is the fix.
+from source doesn't quietly go back to the unpatched one. The build image
+stays pinned: the app's layer was built with it, and the lock says how the
+image was built. If the rebase is refused, the command fails and the lock
+moves anyway, for the rebuild that is the fix: to the new run image, and to
+the stack's newest build image (a registry stack to its newest version), so
+the app links against the libraries the new run image has.
 
-Before rebasing, `clearcutt-factory` checks each platform (`--check` stops there):
+Before rebasing, `clearcutt-factory` checks each platform (`--check` stops
+there and changes nothing, so it doesn't take `--update-lock`):
 
 * **The image's own layers only add files.** If they replace, delete, or hide
   a base file, write through a base symlink, or change package-manager state
@@ -261,10 +281,31 @@ directory, ports, and volumes stay as built, and `clearcutt-factory` notes where
 base would differ. Environment variables and labels the image inherited
 unchanged from the old base follow the new one (a changed `PATH`, say).
 
+**The rebase record** (predicate type
+`https://github.com/northcutted/clearcutt-factory/rebase/v1`, on the
+rebased index) holds `image`, the image that was rebased (`repo@digest`);
+`from`, each platform's old base; `onto`, the new base's `name` and the
+`ref` it resolved to; `config`, per platform, the configuration that
+followed the base; `result`, the new digests; and `test` when the rebase ran
+the app's smoke test (`rebase -f` without `--no-test`): the app's
+`spec.test` as declared (`command`, `http`, `timeout`) and `platforms`,
+each platform's result. A failing test stops the rebase before anything is
+published, so a published record says `passed`; `rebase --image` (which has
+no test) and `--no-test` record no `test`.
+
 A rebase is a pure function of its inputs. The result carries a signed
-**rebase record** (the image, old and new base digests) instead of a recipe,
+**rebase record** (above) instead of a recipe,
 so `clearcutt-factory verify --image` repeats the rebase and compares digests in seconds.
 SBOM and vulnerability attestations are made for the result as for builds.
+
+A rebased app is also the image a build from source on the new base gives,
+bit for bit: `clearcutt-factory` writes the manifests as BuildKit does and
+describes the new base's layers as a BuildKit build on it would. So
+building the app from the lock `--update-lock` pinned (merging the fleet's
+pull request) finds the rebased image already published and only moves its
+tags. The exception is a new base that changes an environment variable or
+label the app inherited: the rebase then writes the image config in another
+order than a build does, so that build publishes once more.
 
 ## Running a fleet
 
@@ -284,13 +325,28 @@ The intended split, and the automation that keeps it current:
   pull request builds, smoke-tests, scans, and gates; merging publishes.
   Auto-merging these when the gates pass is reasonable.
 * **Base patches reach apps without app teams** ([`fleet.yml`](.github/workflows/fleet.yml)).
-  Daily and after every publish on `main`, `clearcutt-factory rebase -f <app> --push
-  --update-lock` for each app: rebase if safe, smoke-test, scan, push, sign,
-  repeat from the signed record, then a pull request pinning the app's lock
-  to the same base. An app that can't be rebased gets the same pull request
-  (merging rebuilds it) and a failed job.
+  Daily and after every successful run of the images workflow for a push to
+  `main`, `clearcutt-factory rebase -f <app> --push --update-lock` for each
+  app: rebase if safe, smoke-test, scan, push, sign, repeat from the signed
+  record (and attest the match), then a pull request pinning the app's lock
+  to the same base. If the repeat fails, the pull request is still opened
+  (the image is published either way), marked as not independently
+  reproduced, and the job fails. An app that can't be rebased gets a pull
+  request that also moves its stack's build image (merging rebuilds it on
+  both) and a failed job. A push that publishes while the fleet rebases
+  keeps the tag; the next run rebases it.
 * **CVE response** is the same path on demand: fix the run image (re-lock,
   merge), and the fleet job moves every app onto it in minutes.
+* **Apps in other repositories hear about it** ([`notify.yml`](.github/workflows/notify.yml)).
+  After the platform repository publishes, its `notify` job sends
+  `repository_dispatch` to the owner's repositories with the topic
+  `clearcutt-app`: `clearcutt.run-image-published` for each new image and
+  `clearcutt.stack-published` for each new stack, with `{image, digest, …}`.
+  `init`'s workflow answers the first with the fleet job and the second with
+  the lock-update job, so a patched run image reaches every app in minutes,
+  not at its next daily run. The payload is only a hint: the receivers
+  re-resolve tags from the registry and verify signatures, as they do on
+  their schedules ([adopting](docs/adopting.md#waking-the-apps-when-the-platform-publishes)).
 * **Toolchain and stack changes** rebuild rather than rebase (the app's own
   layer changes): the weekly job's pull request per app does it, tested by
   each app's CI.
@@ -298,11 +354,42 @@ The intended split, and the automation that keeps it current:
   purpose. Publish a new run image and stack version beside the old ones;
   apps move with a one-line change and a rebuild.
 
-Pull requests opened with the default `GITHUB_TOKEN` don't start other
-workflows, so set a `CLEARCUTT_BOT_TOKEN` secret (a GitHub App token, or a
-fine-grained token with contents and pull-requests write) for CI to run on
-them. Deploy by digest and let GitOps follow the tags; keep old run images
-(a rebase needs the old base's manifest) and old app digests (rollback).
+Pull requests opened with the default `GITHUB_TOKEN` are
+`github-actions[bot]`'s, and GitHub holds the CI runs they trigger until a
+maintainer approves them on the pull request (the runs show as
+`action_required`), so nothing gates the change on its own. Give the jobs an
+identity of their own and CI starts by itself: a **GitHub App**
+(a `CLEARCUTT_APP_ID` variable and a `CLEARCUTT_APP_PRIVATE_KEY` secret), from
+which each job mints a token that expires within the hour and reaches only
+its repository's contents and pull requests; or a `CLEARCUTT_BOT_TOKEN` secret
+(a fine-grained token with contents and pull-requests write). The App wins
+when both are set ([adopting](docs/adopting.md#a-github-app-for-the-automation)).
+
+Deploy by digest and let GitOps follow the tags; keep old run images (a
+rebase needs the old base's manifest) and old app digests (rollback).
+
+**Tags only move forward.** Until an app's pin pull request merges, a build
+from unchanged source uses the old lock and reproduces the image the fleet
+rebased. Publishing an image the registry already has moves its tags to it,
+except a tag that holds a newer image: this image rebased onto a newer build
+of its base (its own layers on another base, while its base's tag has moved
+on), or an image created later (built from a newer lock: a build's created
+time is its lock's `SOURCE_DATE_EPOCH`). That tag stays, with a warning.
+`--force-tags` (on `build` and `rebase`) moves it anyway, for a deliberate
+rollback.
+
+A build from changed source before the pin pull request merges is a new
+image, on the old base. When a tag of an app holds an image on a newer build
+of that base (by its `org.opencontainers.image.base.*` annotations: the
+build the base's tag points at now, or one created later),
+`clearcutt-factory build --push` pushes the new image by digest only,
+rebases it onto the base's newest build as the fleet would (the same checks,
+smoke test, scan, gate, and signed rebase record, which the images workflow
+repeats), and moves the tags to the result. If the rebase is refused or
+fails, the tags stay and the build fails: merge the pin pull request (or run
+`clearcutt-factory lock --update-base`) and build again. `--force-tags` tags
+the new image as built. Merge pin pull requests promptly all the same: each
+app build until then also rebases.
 
 ## The org profile
 
@@ -314,8 +401,8 @@ found by walking up from the manifest (or `--org`). See
 |---|---|
 | `registry`, `tags` | Where images go and how they are tagged |
 | `defaults` | Base image, platforms, and labels for every manifest |
-| `builder` | Pinned BuildKit, Dockerfile frontend, toolbox, Go and Nix images, default nixpkgs branch; `runtime: docker\|podman`; `addr:` for a remote buildkitd (e.g. in Kubernetes) |
-| `signing` | `keyless` (Sigstore OIDC), `key` (file or any cosign KMS URI), or `none`; extra cosign args (private Sigstore, no tlog); who signs this repository's images (`verify`, bound to the workflow run's repository with `sourceRepository`) and its stacks (`stacks`), or a shared ClearCutt `trustPolicy` file ([adopting](docs/adopting.md#who-signs-and-binding-signatures-to-your-repository)) |
+| `builder` | Pinned BuildKit, Dockerfile frontend, toolbox, Go and Nix images, default nixpkgs branch; `runtime: docker\|podman`; `addr:` for a remote buildkitd (e.g. in Kubernetes); `config:` (a `buildkitd.toml`: mirrors, plain-HTTP or insecure registries, CA certificates) and `network:` for the BuildKit container ([a registry on this machine](docs/adopting.md#a-registry-on-this-machine)) |
+| `signing` | `keyless` (Sigstore OIDC), `key` (file or any cosign KMS URI; `stackKey` signs stacks with a key of their own), or `none`; extra cosign args (a signing config for a private Sigstore, or for signing [without a transparency log](docs/adopting.md#who-signs-and-binding-signatures-to-your-repository)); who signs this repository's images (`verify`, bound to the workflow run's repository with `sourceRepository`) and its stacks (`stacks`), or a shared ClearCutt `trustPolicy` file ([adopting](docs/adopting.md#who-signs-and-binding-signatures-to-your-repository)) |
 | `sbom` | Whether to add a syft scan to the declared SBOM |
 | `vulnerabilities` | Scanner and the `failOn` severity gate, optionally `onlyFixed` |
 | `policy` | Non-root, required labels, TOFU, allowed download hosts (tools and packages) and registries |
@@ -354,19 +441,67 @@ it names the first differing layer and the files that differ.
 | SBOM (CycloneDX) | each platform image | syft scan merged with components declared by the lock (purls, hashes, download URLs, verification method) |
 | Vulnerabilities (`cosign …/vuln/v1`) | each platform image | grype results with VEX applied |
 | Rebase record (`…/rebase/v1`) | index of a rebased image (instead of a recipe) | the image that was rebased, each platform's old base, the new base; enough to repeat the rebase |
+| Reproduction (`…/reproduction/v1`) | index, once reproduced (`verify --image --attest`) | how (`recipe-rebuild` or `rebase-repeat`), the digest it gave, the recipe or rebase record it started from, factory and BuildKit versions, the run and machine, when |
 | SLSA provenance | index | from the CI platform (see [`images.yml`](.github/workflows/images.yml)) |
 
 Unsigned copies of all of these are written to `out/<name>/attestations/`, and
 `out/<name>/result.json` summarizes the build for CI.
+
+**Reproductions.** `clearcutt-factory verify --image IMAGE --attest` rebuilds
+the image from its signed recipe without cache (or repeats its signed rebase
+record) and, when the digest matches, signs a statement saying so onto the
+image with the org's `signing` settings, as builds sign their recipes. The
+reusable workflows do it on a second runner after each publish (`images.yml`)
+and after each rebase (`fleet.yml`), so a verifier can see that an image was
+reproduced, how, where, and when, without rebuilding it. The predicate
+(`https://github.com/northcutted/clearcutt-factory/reproduction/v1`):
+
+```json
+{
+  "method": "recipe-rebuild",
+  "image": "ghcr.io/acme/platform-tools@sha256:4f…",
+  "digest": "sha256:4f…",
+  "from": {
+    "predicateType": "https://github.com/northcutted/clearcutt-factory/recipe/v1",
+    "digest": {"sha256": "9a…"}
+  },
+  "factory": {"version": "v0.2.0"},
+  "buildkit": "moby/buildkit:v0.33.1@sha256:…",
+  "builder": {
+    "id": "https://github.com/acme/platform/actions/runs/123/attempts/1",
+    "workflow": "acme/platform/.github/workflows/clearcutt-factory.yml@refs/heads/main",
+    "job": "reproduce",
+    "runner": "github-hosted",
+    "os": "linux",
+    "arch": "amd64"
+  },
+  "reproducedAt": "2026-10-13T06:41:09Z"
+}
+```
+
+`digest` is what the reproduction gave, always the subject's digest (only
+matches are attested). `from` names the recipe or rebase record by the
+sha256 of its in-toto statement (the signed DSSE payload). A verifier should
+check that the attestation is signed by a signer it trusts for the image,
+that `digest` is the subject's, and that `from` is a recipe or rebase record
+on the same image that it verified too. `builder` comes from the
+environment of the job that reproduced it, and the certificate binds the
+attestation to that run's workflow and repository; it shows the image
+rebuilt on a fresh machine, not who else could rebuild it. For that,
+rebuild it yourself with `verify --image`.
 
 ## CI
 
 [`.github/workflows/images.yml`](.github/workflows/images.yml) is a complete
 pipeline. On pull requests it builds, scans, and gates. On `main` it also pushes,
 signs keylessly, adds SLSA provenance, and then rebuilds on a second runner from
-the signed recipe alone. `clearcutt-factory` emits `image`, `repository`, and `digest` to
-`$GITHUB_OUTPUT`. [`update-locks.yml`](.github/workflows/update-locks.yml)
-and [`fleet.yml`](.github/workflows/fleet.yml) keep the fleet current (see
+the signed recipe alone and attests the match. Its `published` output lists
+what the run newly published (a JSON array of `{manifest, kind, image,
+repository, digest, tags}`). `clearcutt-factory build`, `rebase`, and
+`stack push` emit `image`, `repository`, and `digest` to `$GITHUB_OUTPUT`.
+[`update-locks.yml`](.github/workflows/update-locks.yml),
+[`fleet.yml`](.github/workflows/fleet.yml), and
+[`notify.yml`](.github/workflows/notify.yml) keep the fleet current (see
 [Running a fleet](#running-a-fleet)). Other CI systems call the same commands;
 nothing is GitHub-specific.
 
@@ -395,9 +530,12 @@ nothing is GitHub-specific.
   usual contract; test rebased images like any other.
 * Rebasing needs the old base's manifest, so keep old run images in the
   registry.
-* The fleet workflow finds apps by their manifests in this repository. Apps
-  in other repositories run the same job on their own, or a registry-wide
-  inventory (clearcutt-verify's `estate dependents`) drives `clearcutt-factory rebase --image`.
+* The fleet workflow rebases the apps whose manifests are in its own
+  repository. Apps elsewhere run it themselves, on their schedule or when
+  `notify.yml` wakes them; `notify.yml` finds them by a topic, not by what
+  they are built on. clearcutt-verify's `estate dependents` lists the images
+  actually built on a base (by layer digest), for `notify.yml`'s
+  `repositories` input or for `clearcutt-factory rebase --image`.
 * Smoke tests run images on the build machine, other architectures through
   emulation (QEMU in CI); `--no-test` skips them.
 

@@ -231,14 +231,27 @@ func Exists(ctx context.Context, ref string) (bool, error) {
 		return false, err
 	}
 	_, err = remote.Head(r, opts(ctx)...)
-	var terr *transport.Error
+	if err != nil && !notFound(err) {
+		// Some registries reject HEAD; ask again with GET, as Digest does.
+		if _, gerr := remote.Get(r, opts(ctx)...); gerr == nil || notFound(gerr) {
+			err = gerr
+		} else {
+			err = fmt.Errorf("%w (and with GET: %w)", err, gerr)
+		}
+	}
 	switch {
 	case err == nil:
 		return true, nil
-	case errors.As(err, &terr) && terr.StatusCode == http.StatusNotFound:
+	case notFound(err):
 		return false, nil
 	}
 	return false, fmt.Errorf("checking %s: %w", ref, err)
+}
+
+// notFound reports whether err is the registry's 404.
+func notFound(err error) bool {
+	var terr *transport.Error
+	return errors.As(err, &terr) && terr.StatusCode == http.StatusNotFound
 }
 
 // Tag points each tag of ref's repository at ref (by digest).
@@ -257,6 +270,135 @@ func Tag(ctx context.Context, ref string, tags []string) error {
 		}
 	}
 	return nil
+}
+
+// Lookup returns the digest ref points at, or "" when it doesn't exist.
+func Lookup(ctx context.Context, ref string) (string, error) {
+	r, err := name.ParseReference(ref)
+	if err != nil {
+		return "", err
+	}
+	return lookup(r, opts(ctx))
+}
+
+func lookup(r name.Reference, o []remote.Option) (string, error) {
+	desc, err := remote.Head(r, o...)
+	if err == nil {
+		return desc.Digest.String(), nil
+	}
+	var terr *transport.Error
+	if errors.As(err, &terr) && terr.StatusCode == http.StatusNotFound {
+		return "", nil
+	}
+	// Some registries reject HEAD; fall back to GET.
+	d, gerr := remote.Get(r, o...)
+	if gerr == nil {
+		return d.Digest.String(), nil
+	}
+	if errors.As(gerr, &terr) && terr.StatusCode == http.StatusNotFound {
+		return "", nil
+	}
+	return "", fmt.Errorf("resolving %s: %w", r, gerr)
+}
+
+// MovedError means a tag no longer holds the digest a TagIf expected.
+type MovedError struct {
+	Tag   string // repository:tag
+	Want  string // the digest it was expected to hold, "" for none
+	Holds string // the digest it holds now, "" for none
+}
+
+func (e *MovedError) Error() string {
+	return fmt.Sprintf("%s moved from %s to %s", e.Tag, orNone(e.Want), orNone(e.Holds))
+}
+
+func orNone(d string) string {
+	if d == "" {
+		return "nothing"
+	}
+	return d
+}
+
+// TagIf points tag, in ref's repository, at ref (by digest) only if the tag
+// still holds want ("" for a tag that must not exist yet); otherwise it
+// returns a *MovedError. It reads the tag, then writes it with the ETag the
+// registry returned as a precondition (If-Match, or If-None-Match: * for a
+// new tag), so a registry that supports conditional requests refuses the
+// write if the tag moved in between, as the OCI distribution spec suggests
+// for tags that several clients update. Elsewhere a moment remains between
+// the read and the write. A refused write is checked again: if the tag
+// still holds want, the registry's ETags don't work as conditions, and the
+// write is repeated without one.
+func TagIf(ctx context.Context, ref, tag, want string) error {
+	d, err := name.NewDigest(ref)
+	if err != nil {
+		return err
+	}
+	t := d.Context().Tag(tag)
+	desc, err := remote.Get(d, opts(ctx)...)
+	if err != nil {
+		return err
+	}
+	c := &conditional{inner: remote.DefaultTransport, path: "/v2/" + t.RepositoryStr() + "/manifests/" + tag}
+	o := append(opts(ctx), remote.WithTransport(c))
+	for _, conditionally := range []bool{true, false} {
+		holds, err := lookup(t, o)
+		if err != nil {
+			return err
+		}
+		if holds != want {
+			return &MovedError{Tag: t.String(), Want: want, Holds: holds}
+		}
+		c.ifMatch, c.ifNoneMatch = "", false
+		if conditionally {
+			c.ifNoneMatch = want == ""
+			if want != "" && !strings.HasPrefix(c.etag, "W/") {
+				c.ifMatch = c.etag
+			}
+		}
+		err = remote.Tag(t, desc, o...)
+		var terr *transport.Error
+		if !errors.As(err, &terr) || terr.StatusCode != http.StatusPreconditionFailed {
+			if err != nil {
+				return fmt.Errorf("tagging %s: %w", t, err)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("tagging %s: the registry refused the write without a precondition (412)", t)
+}
+
+// conditional records the ETag a registry returns for one manifest path and
+// sends it back as a precondition when writing that path.
+type conditional struct {
+	inner       http.RoundTripper
+	path        string
+	etag        string
+	ifMatch     string
+	ifNoneMatch bool
+}
+
+func (c *conditional) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Path != c.path {
+		return c.inner.RoundTrip(req)
+	}
+	if req.Method == http.MethodPut && (c.ifMatch != "" || c.ifNoneMatch) {
+		req = req.Clone(req.Context())
+		if c.ifMatch != "" {
+			req.Header.Set("If-Match", c.ifMatch)
+		}
+		if c.ifNoneMatch {
+			req.Header.Set("If-None-Match", "*")
+		}
+	}
+	resp, err := c.inner.RoundTrip(req)
+	if err == nil && (req.Method == http.MethodHead || req.Method == http.MethodGet) {
+		c.etag = ""
+		if resp.StatusCode == http.StatusOK {
+			c.etag = resp.Header.Get("Etag")
+		}
+	}
+	return resp, err
 }
 
 // WriteLayout writes the artifact as an OCI layout (one entry in index.json,

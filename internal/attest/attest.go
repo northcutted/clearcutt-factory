@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/northcutted/clearcutt-factory/internal/manifest"
 )
 
 const (
@@ -29,6 +31,10 @@ const (
 	// RebasePredicateType identifies the record of a rebase, which is
 	// enough to repeat it.
 	RebasePredicateType = "https://github.com/northcutted/clearcutt-factory/rebase/v1"
+	// ReproductionPredicateType identifies the record that an image was
+	// reproduced: rebuilt from its recipe, or its rebase repeated from its
+	// record, giving the same digest.
+	ReproductionPredicateType = "https://github.com/northcutted/clearcutt-factory/reproduction/v1"
 
 	// Predicate types from before the project was named clearcutt-factory,
 	// accepted when verifying images published then.
@@ -74,6 +80,9 @@ type Recipe struct {
 	Lock          string         `json:"lock"`
 	Context       []ContextEntry `json:"context,omitempty"`
 	Image         ImageDigests   `json:"image"`
+
+	// Verified names the attestation the recipe was read from.
+	Verified Evidence `json:"-"`
 }
 
 // Rebase records a rebase: the image whose layers moved, the base each
@@ -86,9 +95,62 @@ type Rebase struct {
 	// From is the old base of each platform (repo@digest of its image).
 	From map[string]string `json:"from"`
 	Onto RebaseBase        `json:"onto"`
+	// Test is the smoke test that ran on the result before it was
+	// published. Absent when none ran (rebase --image, or --no-test).
+	Test *RebaseTest `json:"test,omitempty"`
 	// Config lists, per platform, configuration that followed the base.
 	Config map[string][]string `json:"config,omitempty"`
 	Result ImageDigests        `json:"result"`
+
+	// Verified names the attestation the record was read from.
+	Verified Evidence `json:"-"`
+}
+
+// Reproduction records that an image was reproduced: rebuilt without cache
+// from its signed recipe (method recipe-rebuild), or its rebase repeated from
+// its signed record (rebase-repeat), giving the image's digest again. Its
+// subject is the image (the index) that was reproduced.
+type Reproduction struct {
+	// Method is recipe-rebuild or rebase-repeat.
+	Method string `json:"method"`
+	// Image is the image that was reproduced (repo@digest).
+	Image string `json:"image"`
+	// Digest is what the reproduction gave, which is the image's digest.
+	Digest string `json:"digest"`
+	// From is the verified recipe or rebase record it was reproduced from.
+	From Evidence `json:"from"`
+	// Factory is the clearcutt-factory that reproduced it.
+	Factory FactoryInfo `json:"factory"`
+	// BuildKit is the pinned BuildKit the recipe was rebuilt with
+	// (recipe-rebuild only).
+	BuildKit string `json:"buildkit,omitempty"`
+	// Builder is where it was reproduced.
+	Builder Builder `json:"builder"`
+	// ReproducedAt is when (RFC 3339, UTC).
+	ReproducedAt string `json:"reproducedAt"`
+}
+
+// Evidence names an attestation: its predicate type and the digest of its
+// in-toto statement (the signed DSSE payload).
+type Evidence struct {
+	PredicateType string            `json:"predicateType"`
+	Digest        map[string]string `json:"digest"`
+}
+
+// Builder is the machine, and the CI run if any, that reproduced an image.
+type Builder struct {
+	// ID is the CI run: on GitHub Actions, the run attempt's URL.
+	ID string `json:"id,omitempty"`
+	// Workflow is the workflow the run belongs to (GitHub's
+	// GITHUB_WORKFLOW_REF: the calling workflow, for a reusable one), and
+	// Job the job in it.
+	Workflow string `json:"workflow,omitempty"`
+	Job      string `json:"job,omitempty"`
+	// Runner is github-hosted or self-hosted, on GitHub Actions.
+	Runner string `json:"runner,omitempty"`
+	// OS and Arch are the machine's (Go's GOOS and GOARCH).
+	OS   string `json:"os"`
+	Arch string `json:"arch"`
 }
 
 // RebaseBase is the new base: its name (recorded in the image's base
@@ -101,6 +163,18 @@ type RebaseBase struct {
 type FactoryInfo struct {
 	Version string `json:"version"`
 }
+
+// RebaseTest is the smoke test a rebase ran on the rebased image: the app's
+// spec.test as declared (command, http, timeout) and the result on each
+// platform. A rebase whose test fails is not published, so a published
+// record says passed for every platform.
+type RebaseTest struct {
+	manifest.Test
+	Platforms map[string]string `json:"platforms"`
+}
+
+// TestPassed is a platform's result in RebaseTest.
+const TestPassed = "passed"
 
 type BuildSettings struct {
 	BuildKit        string   `json:"buildkit"`
@@ -284,7 +358,7 @@ func (c Cosign) Attest(ctx context.Context, ref, predicateType, predicatePath st
 
 // VerifyRecipe verifies and returns the recipe attestation on ref.
 func VerifyRecipe(ctx context.Context, ref string, args []string) (*Recipe, error) {
-	raw, err := verifyEither(ctx, ref, RecipePredicateType, legacyRecipePredicateType, args)
+	raw, ev, err := verifyEither(ctx, ref, RecipePredicateType, legacyRecipePredicateType, args)
 	if err != nil {
 		return nil, err
 	}
@@ -292,12 +366,13 @@ func VerifyRecipe(ctx context.Context, ref string, args []string) (*Recipe, erro
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return nil, fmt.Errorf("parsing recipe: %w", err)
 	}
+	r.Verified = ev
 	return &r, nil
 }
 
 // VerifyRebase verifies and returns the rebase record on ref.
 func VerifyRebase(ctx context.Context, ref string, args []string) (*Rebase, error) {
-	raw, err := verifyEither(ctx, ref, RebasePredicateType, legacyRebasePredicateType, args)
+	raw, ev, err := verifyEither(ctx, ref, RebasePredicateType, legacyRebasePredicateType, args)
 	if err != nil {
 		return nil, err
 	}
@@ -305,41 +380,50 @@ func VerifyRebase(ctx context.Context, ref string, args []string) (*Rebase, erro
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return nil, fmt.Errorf("parsing rebase record: %w", err)
 	}
+	r.Verified = ev
 	return &r, nil
 }
 
 // verifyEither verifies the current predicate type, then the legacy one.
-func verifyEither(ctx context.Context, ref, current, legacy string, args []string) (json.RawMessage, error) {
-	raw, err := VerifyPredicate(ctx, ref, current, args)
+func verifyEither(ctx context.Context, ref, current, legacy string, args []string) (json.RawMessage, Evidence, error) {
+	raw, ev, err := verifyStatement(ctx, ref, current, args)
 	if err == nil {
-		return raw, nil
+		return raw, ev, nil
 	}
-	if raw, lerr := VerifyPredicate(ctx, ref, legacy, args); lerr == nil {
-		return raw, nil
+	if raw, ev, lerr := verifyStatement(ctx, ref, legacy, args); lerr == nil {
+		return raw, ev, nil
 	}
-	return nil, err
+	return nil, Evidence{}, err
 }
 
 // VerifyPredicate verifies the attestations of predicateType on ref with
 // cosign and returns the predicate.
 func VerifyPredicate(ctx context.Context, ref, predicateType string, args []string) (json.RawMessage, error) {
+	raw, _, err := verifyStatement(ctx, ref, predicateType, args)
+	return raw, err
+}
+
+// verifyStatement verifies the attestations of predicateType on ref with
+// cosign and returns the predicate and which statement it came from.
+func verifyStatement(ctx context.Context, ref, predicateType string, args []string) (json.RawMessage, Evidence, error) {
 	bin, err := exec.LookPath("cosign")
 	if err != nil {
-		return nil, errors.New("cosign not found on PATH")
+		return nil, Evidence{}, errors.New("cosign not found on PATH")
 	}
 	cmd := exec.CommandContext(ctx, bin, append([]string{"verify-attestation", "--type", predicateType, "--output", "json"}, append(args, ref)...)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("cosign verify-attestation: %w\n%s", err, stderr.String())
+		return nil, Evidence{}, fmt.Errorf("cosign verify-attestation: %w\n%s", err, stderr.String())
 	}
 	return predicateFromEnvelopes(out, predicateType)
 }
 
 // predicateFromEnvelopes extracts the predicate from cosign's DSSE envelope
-// output (one JSON envelope per line).
-func predicateFromEnvelopes(out []byte, predicateType string) (json.RawMessage, error) {
+// output (one JSON envelope per line), and names the statement it is in by
+// the sha256 of the payload.
+func predicateFromEnvelopes(out []byte, predicateType string) (json.RawMessage, Evidence, error) {
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	sc.Buffer(make([]byte, 64<<20), 64<<20)
 	for sc.Scan() {
@@ -358,8 +442,9 @@ func predicateFromEnvelopes(out []byte, predicateType string) (json.RawMessage, 
 			Predicate     json.RawMessage `json:"predicate"`
 		}
 		if json.Unmarshal(payload, &st) == nil && st.PredicateType == predicateType {
-			return st.Predicate, nil
+			sum := sha256.Sum256(payload)
+			return st.Predicate, Evidence{PredicateType: predicateType, Digest: map[string]string{"sha256": hex.EncodeToString(sum[:])}}, nil
 		}
 	}
-	return nil, fmt.Errorf("no %s attestation found in cosign output", predicateType)
+	return nil, Evidence{}, fmt.Errorf("no %s attestation found in cosign output", predicateType)
 }
