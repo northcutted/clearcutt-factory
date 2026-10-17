@@ -9,7 +9,7 @@
 #
 #   jobs:
 #     images:
-#       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.2.0
+#       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.3.0
 #       permissions: {contents: read, packages: write, id-token: write, attestations: write}
 #
 # Secrets (optional): REGISTRY_USERNAME and REGISTRY_PASSWORD for a registry
@@ -30,14 +30,14 @@
 #
 #   jobs:
 #     images:
-#       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.2.0
+#       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.3.0
 #       permissions: {contents: read, packages: write, id-token: write, attestations: write}
 #       with:
 #         reproduce: false
 #     reproduce:
 #       needs: images
 #       if: ${{ !cancelled() && needs.images.outputs.published != '[]' && needs.images.outputs.published != '' }}
-#       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.2.0
+#       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.3.0
 #       permissions: {contents: read, packages: write, id-token: write, attestations: write}
 #       with:
 #         published: ${{ needs.images.outputs.published }}
@@ -75,7 +75,7 @@ on:
       factory-version:
         description: clearcutt-factory release to use
         type: string
-        default: v0.2.0
+        default: v0.3.0
     secrets:
       REGISTRY_USERNAME:
         description: Registry user, for a registry other than ghcr.io
