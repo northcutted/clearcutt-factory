@@ -252,9 +252,14 @@ jobs:
             echo "the lock was not pinned; leaving any pull request as it is"
             exit 0
           fi
+          # Titled by outcome: a rebuild needs a person (its CI builds with a
+          # new toolchain), so it mustn't look like a routine pin in a list.
+          # Same branch either way, so a later safe rebase takes it over.
           if [ "$FAILED" = true ]; then
+            title="Rebuild $what on the newest run and build images"
             intro="The published image could not be rebased. This moves the lock to the newest run image and the stack's newest build image, so merging rebuilds the app from source with the toolchain made for that run image."
           else
+            title="Pin $what to the newest run image"
             intro="The published image is on the newest run image. This pins the lock to the same base, so the next build from source doesn't move it back."
           fi
           {
@@ -268,7 +273,7 @@ jobs:
               echo; echo "Repeating the rebase:"; echo; echo '```'; cat "$RUNNER_TEMP/repeat.out"; echo '```'
             fi
           } > "$RUNNER_TEMP/body.md"
-          "$FACTORY_DIR/.github/scripts/open-pr.sh" "factory/rebase/$name" "Pin $what to the newest run image" "$RUNNER_TEMP/body.md" "${paths[@]}"
+          "$FACTORY_DIR/.github/scripts/open-pr.sh" "factory/rebase/$name" "$title" "$RUNNER_TEMP/body.md" "${paths[@]}"
 
       - name: Fail if the app must be rebuilt
         if: steps.rebase.outputs.failed == 'true'

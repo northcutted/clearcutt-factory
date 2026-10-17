@@ -332,8 +332,8 @@ The intended split, and the automation that keeps it current:
   pinning the app's lock to the same base. If the repeat fails, the pull
   request is still opened (the image is published either way), marked as not
   independently reproduced, and the job fails. An app that can't be rebased
-  gets a pull request that also moves its stack's build image (merging
-  rebuilds it on both) and a failed job. A push that publishes while the
+  gets a pull request titled "Rebuild …" that also moves its stack's build
+  image (merging rebuilds it on both) and a failed job. A push that publishes while the
   fleet rebases keeps the tag; the next run rebases it.
 * **CVE response** is the same path on demand: fix the run image (re-lock,
   merge), and the fleet job moves every app onto it in minutes.
