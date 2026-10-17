@@ -3,6 +3,17 @@
 ClearCutt Factory is pre-1.0; see [docs/stability.md](docs/stability.md) for
 what may change between releases.
 
+## Unreleased
+
+**A refused rebase's pull request is titled as a rebuild
+([#57](https://github.com/northcutted/clearcutt-factory/issues/57)).** When
+`fleet.yml` can't rebase an app, its pull request moves the lock to the
+newest run image and the stack's newest build image, so merging it rebuilds
+the app with a new toolchain. It was titled like a routine pin ("Pin catalog
+to the newest run image"); it is now "Rebuild catalog on the newest run and
+build images". The branch is the same, so a later safe rebase takes it over
+and retitles it as a pin.
+
 ## v0.2.0
 
 **Rebased images get SLSA build provenance

@@ -77,7 +77,7 @@ check rebase examples/hello-app/app.yaml "factory/rebase/examples-hello-app|Pin 
 # .clearcutt-factory/ at the root don't count as changes to a root app.
 check rebase app.yaml "" true
 echo "  base: moved" >> "$repo/app.lock.yaml"
-check rebase app.yaml "factory/rebase/root-app|Pin app.yaml to the newest run image|app.yaml app.lock.yaml app.Containerfile" true
+check rebase app.yaml "factory/rebase/root-app|Rebuild app.yaml on the newest run and build images|app.yaml app.lock.yaml app.Containerfile" true
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures failed"
