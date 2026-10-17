@@ -31,11 +31,11 @@ func Changes(old, cur *Lock) []string {
 	case cur.Profile != nil:
 		var prev Image
 		if old.Profile != nil {
-			prev = *old.Profile
+			prev = Image{Ref: old.Profile.Name(), Digest: old.Profile.Digest}
 		}
-		image("shared profile", prev, *cur.Profile)
+		image("shared profile", prev, Image{Ref: cur.Profile.Name(), Digest: cur.Profile.Digest})
 	case old.Profile != nil:
-		out = append(out, fmt.Sprintf("shared profile %s: no longer extended", old.Profile.Ref))
+		out = append(out, fmt.Sprintf("shared profile %s: no longer extended", old.Profile.Name()))
 	}
 	image("base", old.Base, cur.Base)
 	image("buildkit", old.Builder.BuildKit, cur.Builder.BuildKit)

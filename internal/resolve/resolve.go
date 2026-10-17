@@ -95,7 +95,7 @@ func (r *Resolver) LockFrom(ctx context.Context, m *manifest.Manifest, o *manife
 		InputsDigest: lock.InputsOf(m, o).Digest(),
 	}
 	if sp := o.Shared; sp != nil {
-		l.Profile = &lock.Image{Ref: sp.Ref, Digest: sp.Digest}
+		l.Profile = &lock.Profile{Ref: sp.Ref, Path: sp.Path, Digest: sp.Digest}
 	}
 	var err error
 	pin := func(ref string, old lock.Image) lock.Image {

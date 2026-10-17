@@ -3,6 +3,7 @@ package factory
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	ggcrregistry "github.com/google/go-containerregistry/pkg/registry"
@@ -29,6 +31,7 @@ const profileIdentity = "https://github.com/acme/platform/.github/workflows/prof
 type profileWorld struct {
 	t    *testing.T
 	ctx  context.Context
+	srv  *httptest.Server
 	host string
 	dir  string
 	out  bytes.Buffer
@@ -41,7 +44,11 @@ func newProfileWorld(t *testing.T, files map[string]string) *profileWorld {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
-	w := &profileWorld{t: t, ctx: context.Background(), host: strings.TrimPrefix(srv.URL, "http://"), dir: t.TempDir()}
+	// Outside CI, unless a test says otherwise (see reverify).
+	for _, k := range []string{"CI", "GITHUB_ACTIONS", reverifyEnv} {
+		t.Setenv(k, "")
+	}
+	w := &profileWorld{t: t, ctx: context.Background(), srv: srv, host: strings.TrimPrefix(srv.URL, "http://"), dir: t.TempDir()}
 	for n, body := range files {
 		w.write(n, strings.ReplaceAll(body, "HOST", w.host))
 	}
@@ -213,10 +220,10 @@ func sharedFiles(signer string) map[string]string {
 }
 
 // TestSharedProfileEnforced: the shared profile is verified against
-// extends.signer whenever a command loads it, at the digest the lock pins,
-// so a lock edited to pin an unsigned (or tampered) version, or a profile
-// signed by someone else, fails everywhere, before anything is built or
-// written.
+// extends.signer whenever a command loads it, at the digest the lock pins
+// (or found verified on this machine at that digest, by that signer), so a
+// lock edited to pin an unsigned (or tampered) version, or a profile signed
+// by someone else, fails everywhere, before anything is built or written.
 func TestSharedProfileEnforced(t *testing.T) {
 	w := newProfileWorld(t, sharedFiles(profileIdentity))
 	signedDigest := w.push("platform/factory.org.yaml")
@@ -230,7 +237,7 @@ func TestSharedProfileEnforced(t *testing.T) {
 	lockPath := filepath.Join(w.dir, "team/img/image.lock.yaml")
 	pin := func(digest string) []byte {
 		t.Helper()
-		l := &lock.Lock{APIVersion: manifest.APIVersion, Kind: lock.Kind, Profile: &lock.Image{Ref: w.host + "/factory/org:1", Digest: digest}}
+		l := &lock.Lock{APIVersion: manifest.APIVersion, Kind: lock.Kind, Profile: &lock.Profile{Ref: w.host + "/factory/org:1", Digest: digest}}
 		if err := l.Write(lockPath); err != nil {
 			t.Fatal(err)
 		}
@@ -248,10 +255,15 @@ func TestSharedProfileEnforced(t *testing.T) {
 	if c := cosign.calls(); len(c) != 1 || !strings.HasPrefix(c[0], "verify ") || !strings.Contains(c[0], "--certificate-identity "+profileIdentity+" --certificate-oidc-issuer "+ghIssuer) || !strings.HasSuffix(c[0], " "+repo+"@"+signedDigest) {
 		t.Errorf("cosign calls: %q", c)
 	}
-	// Loading it again verifies again (the cached copy isn't trusted on
-	// its own).
-	if _, _, err := load(w.ctx, opts, false); err != nil || len(cosign.calls()) != 1 {
+	// Loading it again reuses that check (TestSharedProfileVerifiedCache);
+	// --reverify checks again.
+	if _, _, err := load(w.ctx, opts, false); err != nil || len(cosign.calls()) != 0 {
 		t.Errorf("second load: %v", err)
+	}
+	reverified := opts
+	reverified.Reverify = true
+	if _, _, err := load(w.ctx, reverified, false); err != nil || len(cosign.calls()) != 1 {
+		t.Errorf("--reverify: %v", err)
 	}
 
 	// A lock edited to pin the unsigned version fails everywhere.
@@ -299,6 +311,215 @@ func TestSharedProfileEnforced(t *testing.T) {
 	w.write("team/factory.org.yaml", strings.ReplaceAll(sharedFiles("https://github.com/mallory/platform/.github/workflows/profile.yml@refs/heads/main")["team/factory.org.yaml"], "HOST", w.host))
 	if _, _, err := load(w.ctx, opts, false); err == nil || !strings.Contains(err.Error(), "is not signed by extends.signer") {
 		t.Errorf("another signer: %v", err)
+	}
+}
+
+// TestSharedProfileVerifiedCache: a signature check of a shared profile
+// counts on this machine for a day, keyed by the pinned digest and the
+// signer, outside CI and unless asked to check again. Only cosign is
+// skipped: the content is read at the pinned digest, from the registry or
+// the cache, and a cached copy that doesn't match the digest isn't used.
+// Failures aren't recorded.
+func TestSharedProfileVerifiedCache(t *testing.T) {
+	files := sharedFiles(profileIdentity)
+	files["team/keys/profile.pub"] = "-----BEGIN PUBLIC KEY-----\nprofile\n-----END PUBLIC KEY-----\n"
+	w := newProfileWorld(t, files)
+	signed := w.push("platform/factory.org.yaml")
+	w.write("platform/factory.org.yaml", strings.Replace(strings.ReplaceAll(files["platform/factory.org.yaml"], "HOST", w.host), "failOn: high", "failOn: medium", 1))
+	unsigned := w.push("platform/factory.org.yaml")
+	repo := w.host + "/factory/org"
+	cosign := newFakeCosign(t, "--certificate-identity "+profileIdentity, repo+"@"+signed)
+	opts := w.opts()
+	opts.ManifestPath = filepath.Join(w.dir, "team/img/image.yaml")
+	pin := func(digest string) {
+		t.Helper()
+		l := &lock.Lock{APIVersion: manifest.APIVersion, Kind: lock.Kind, Profile: &lock.Profile{Ref: w.host + "/factory/org:1", Digest: digest}}
+		if err := l.Write(filepath.Join(w.dir, "team/img/image.lock.yaml")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// loads loads the manifest with opts and reports how many times cosign
+	// ran.
+	loads := func(name string, opts Options, want int) *manifest.Org {
+		t.Helper()
+		_, org, err := load(w.ctx, opts, false)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if c := cosign.calls(); len(c) != want {
+			t.Errorf("%s: cosign ran %d times, want %d: %q", name, len(c), want, c)
+		}
+		return org
+	}
+
+	pin(signed)
+	loads("first load", opts, 1)
+	if org := loads("again", opts, 0); org.Shared.Digest != signed || org.Vulnerabilities.FailOn != "high" {
+		t.Errorf("cached: %+v", org.Shared)
+	}
+
+	// Asked to check again, or in CI.
+	reverified := opts
+	reverified.Reverify = true
+	loads("--reverify", reverified, 1)
+	for _, env := range []map[string]string{
+		{reverifyEnv: "1"}, {reverifyEnv: "true"}, {reverifyEnv: "bogus"},
+		{"CI": "true"}, {"GITHUB_ACTIONS": "true"}, {"CI": "true", reverifyEnv: "1"},
+	} {
+		for k, v := range env {
+			t.Setenv(k, v)
+		}
+		loads(fmt.Sprint(env), opts, 1)
+		for k := range env {
+			t.Setenv(k, "")
+		}
+	}
+	t.Setenv("CI", "true")
+	t.Setenv(reverifyEnv, "0")
+	loads("CI with CLEARCUTT_FACTORY_REVERIFY=0", opts, 0)
+	t.Setenv("CI", "")
+	t.Setenv(reverifyEnv, "")
+
+	// A day later, it is checked again, and then counts for another day.
+	defer func(f func() time.Time) { verifyClock = f }(verifyClock)
+	later := time.Now().Add(profileVerifiedFor + time.Minute)
+	verifyClock = func() time.Time { return later }
+	loads("a day later", opts, 1)
+	loads("then", opts, 0)
+	// A record from the future doesn't count.
+	verifyClock = func() time.Time { return later.Add(-time.Hour) }
+	loads("clock set back", opts, 1)
+	verifyClock = time.Now
+	loads("today", opts, 1)
+
+	// A failure isn't recorded: it is checked every time.
+	pin(unsigned)
+	for i := 0; i < 2; i++ {
+		if _, _, err := load(w.ctx, opts, false); err == nil || !strings.Contains(err.Error(), "is not signed by extends.signer") {
+			t.Errorf("unsigned, load %d: %v", i, err)
+		}
+		if c := cosign.calls(); len(c) != 1 {
+			t.Errorf("unsigned, load %d: cosign calls %q", i, c)
+		}
+	}
+
+	// The record is the signer's: another signer, or a key file changed in
+	// place, is checked.
+	pin(signed)
+	w.write("team/factory.org.yaml", "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nextends:\n  ref: "+w.host+"/factory/org:1\n  signer: {key: keys/profile.pub}\nregistry: "+w.host+"/team\n")
+	_ = os.WriteFile(cosign.path+".identity", []byte("--key "+filepath.Join(w.dir, "team/keys/profile.pub")), 0o644)
+	loads("another signer", opts, 1)
+	loads("that signer again", opts, 0)
+	w.write("team/keys/profile.pub", "-----BEGIN PUBLIC KEY-----\nrotated in place\n-----END PUBLIC KEY-----\n")
+	loads("the key file changed", opts, 1)
+
+	// A cached copy that doesn't match the digest isn't used: it is
+	// fetched again.
+	base, err := cacheDir("profiles")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached := filepath.Join(base, strings.ReplaceAll(signed, ":", "-"), "files", manifest.OrgFileName)
+	if b, err := os.ReadFile(cached); err != nil || !strings.Contains(string(b), "failOn: high") {
+		t.Fatalf("cache entry: %v\n%s", err, b)
+	}
+	w.write("team/factory.org.yaml", strings.ReplaceAll(files["team/factory.org.yaml"], "HOST", w.host))
+	loads("keyless signer, recorded", opts, 0)
+	if err := os.WriteFile(cached, []byte("apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if org := loads("tampered cache", opts, 0); org.Vulnerabilities.FailOn != "high" {
+		t.Errorf("the tampered copy loaded")
+	}
+	if b, _ := os.ReadFile(cached); !strings.Contains(string(b), "failOn: high") {
+		t.Errorf("the cache entry wasn't replaced:\n%s", b)
+	}
+
+	// Offline: a pinned, recently checked profile loads from the cache. A
+	// copy that doesn't match its digest can't be fetched again, and
+	// doesn't load.
+	w.srv.Close()
+	if org := loads("offline", opts, 0); org.Vulnerabilities.FailOn != "high" {
+		t.Error("offline: not the pinned profile")
+	}
+	_ = os.WriteFile(cached, []byte("apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\n"), 0o644)
+	if _, _, err := load(w.ctx, opts, false); err == nil {
+		t.Error("offline: a tampered copy loaded")
+	}
+}
+
+// TestSharedProfileSignerRotation: under extends.signers, a version signed
+// by any one of them loads, so the platform can move to a new signer
+// without every repository changing at that moment; once a repository
+// drops the old signer, versions only it signed no longer load.
+func TestSharedProfileSignerRotation(t *testing.T) {
+	files := sharedFiles("")
+	files["team/factory.org.yaml"] = "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\n" +
+		"extends:\n  ref: HOST/factory/org:1\n  signers:\n    - {key: keys/old.pub}\n    - {key: keys/new.pub}\nregistry: HOST/team\n"
+	files["team/keys/old.pub"] = "-----BEGIN PUBLIC KEY-----\nold\n-----END PUBLIC KEY-----\n"
+	files["team/keys/new.pub"] = "-----BEGIN PUBLIC KEY-----\nnew\n-----END PUBLIC KEY-----\n"
+	w := newProfileWorld(t, files)
+	before := w.push("platform/factory.org.yaml")
+	w.write("platform/factory.org.yaml", strings.ReplaceAll(strings.Replace(files["platform/factory.org.yaml"], "failOn: high", "failOn: medium", 1), "HOST", w.host))
+	after := w.push("platform/factory.org.yaml")
+	repo := w.host + "/factory/org"
+	oldKey, newKey := "--key "+filepath.Join(w.dir, "team/keys/old.pub"), "--key "+filepath.Join(w.dir, "team/keys/new.pub")
+	cosign := newFakeCosign(t, oldKey, repo+"@"+before)
+	signedBy := func(identity, digest string) {
+		t.Helper()
+		if err := os.WriteFile(cosign.path+".identity", []byte(identity), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(cosign.path+".signed", []byte(repo+"@"+digest+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opts := w.opts()
+	opts.ManifestPath = filepath.Join(w.dir, "team/img/image.yaml")
+	pin := func(digest string) {
+		t.Helper()
+		l := &lock.Lock{APIVersion: manifest.APIVersion, Kind: lock.Kind, Profile: &lock.Profile{Ref: w.host + "/factory/org:1", Digest: digest}}
+		if err := l.Write(filepath.Join(w.dir, "team/img/image.lock.yaml")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A version the old key signed: the first signer verifies it.
+	pin(before)
+	_, org, err := load(w.ctx, opts, false)
+	if err != nil || org.Shared.Digest != before || org.Vulnerabilities.FailOn != "high" {
+		t.Fatalf("signed by the old key: %v", err)
+	}
+	if c := cosign.calls(); len(c) != 1 || !strings.Contains(c[0], oldKey+" ") {
+		t.Errorf("old key: cosign calls %q", c)
+	}
+
+	// The platform rotated: the next version is signed by the new key
+	// only. The old key doesn't verify it, the new one does.
+	signedBy(newKey, after)
+	pin(after)
+	if _, org, err = load(w.ctx, opts, false); err != nil || org.Vulnerabilities.FailOn != "medium" {
+		t.Fatalf("signed by the new key: %v", err)
+	}
+	if c := cosign.calls(); len(c) != 2 || !strings.Contains(c[0], oldKey+" ") || !strings.Contains(c[1], newKey+" ") {
+		t.Errorf("new key: cosign calls %q", c)
+	}
+
+	// The repository dropped the old key: a version only it signed no
+	// longer loads, as signers or as signer.
+	signedBy(oldKey, before)
+	pin(before)
+	for _, c := range []struct{ extends, want string }{
+		{"  signers: [{key: keys/new.pub}]\n", "is not signed by any of extends.signers"},
+		{"  signer: {key: keys/new.pub}\n", "is not signed by extends.signer"},
+	} {
+		w.write("team/factory.org.yaml", "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nextends:\n  ref: "+w.host+"/factory/org:1\n"+c.extends+"registry: "+w.host+"/team\n")
+		if _, _, err := load(w.ctx, opts, false); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: a version only the dropped signer signed: %v", strings.TrimSpace(c.extends), err)
+		}
+		if calls := cosign.calls(); len(calls) != 1 || !strings.Contains(calls[0], newKey+" ") {
+			t.Errorf("%s: cosign calls %q", strings.TrimSpace(c.extends), calls)
+		}
 	}
 }
 
@@ -387,6 +608,97 @@ func TestSharedProfileLock(t *testing.T) {
 	w.write("team/factory.org.yaml", "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nregistry: "+w.host+"/team\nbuilder: {buildkit: "+w.host+"/buildkit:1, frontend: "+w.host+"/frontend:1, toolbox: "+w.host+"/toolbox:1}\n")
 	if err := Render(w.ctx, opts, true, ""); err == nil || !strings.Contains(err.Error(), "no longer extends") {
 		t.Errorf("pin without extends: %v", err)
+	}
+}
+
+// TestSharedProfileByPath: the platform repository extends the profile it
+// publishes by path. Nothing is verified (it is the repository's own
+// file); the lock pins the digest profile push publishes it at, and goes
+// stale when the file, or a file it names, changes.
+func TestSharedProfileByPath(t *testing.T) {
+	w := newProfileWorld(t, map[string]string{
+		"platform/.git/HEAD": "ref: refs/heads/main\n",
+		"platform/org/profile.yaml": "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\n" +
+			"builder: {buildkit: HOST/buildkit:1, frontend: HOST/frontend:1, toolbox: HOST/toolbox:1}\n" +
+			"vulnerabilities: {failOn: high, vex: [../vex/triage.json]}\n",
+		"platform/vex/triage.json": `{"@context": "https://openvex.dev/ns/v0.2.0"}`,
+		"platform/factory.org.yaml": "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\n" +
+			"extends: {path: org/profile.yaml}\nregistry: HOST/platform\n",
+		"platform/img/image.yaml": "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Image\nmetadata: {name: img}\nspec:\n  base: HOST/base:1\n  platforms: [linux/amd64]\n",
+	})
+	for _, r := range []string{"base", "buildkit", "frontend", "toolbox"} {
+		w.image(r)
+	}
+	cosign := newFakeCosign(t, "nobody")
+	opts := w.opts()
+	opts.ManifestPath = filepath.Join(w.dir, "platform/img/image.yaml")
+	lockPath := filepath.Join(w.dir, "platform/img/image.lock.yaml")
+	read := func() *lock.Lock {
+		t.Helper()
+		l, err := lock.Read(lockPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+
+	if err := Lock(w.ctx, opts, LockOptions{}); err != nil {
+		t.Fatalf("lock: %v\n%s", err, w.out.String())
+	}
+	// The pin is the digest profile push publishes the profile at.
+	published := w.push("platform/org/profile.yaml")
+	if p := read().Profile; p == nil || p.Path != "org/profile.yaml" || p.Ref != "" || p.Digest != published {
+		t.Fatalf("lock pins %+v, want org/profile.yaml at %s", p, published)
+	}
+	if !strings.Contains(w.out.String(), "shared profile org/profile.yaml: pinned at") {
+		t.Errorf("lock output:\n%s", w.out.String())
+	}
+	_, org, err := load(w.ctx, opts, false)
+	if err != nil || org.Vulnerabilities.FailOn != "high" || len(org.Vulnerabilities.VEXFiles) != 1 || org.Registry != w.host+"/platform" || org.Builder.BuildKit != w.host+"/buildkit:1" {
+		t.Fatalf("load: %v", err)
+	}
+	if err := Render(w.ctx, opts, true, ""); err != nil {
+		t.Errorf("render --check: %v", err)
+	}
+	if c := cosign.calls(); len(c) != 0 {
+		t.Errorf("cosign ran on the repository's own profile: %q", c)
+	}
+
+	// The same merge rules.
+	w.write("platform/factory.org.yaml", "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nextends: {path: org/profile.yaml}\nregistry: "+w.host+"/platform\nvulnerabilities: {failOn: critical}\n")
+	if err := Render(w.ctx, opts, true, ""); err == nil || !strings.Contains(err.Error(), "vulnerabilities.failOn: critical is looser") {
+		t.Errorf("loosening: %v", err)
+	}
+	w.write("platform/factory.org.yaml", "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nextends: {path: org/profile.yaml}\nregistry: "+w.host+"/platform\n")
+
+	// A changed file it names makes the lock stale; lock pins the new
+	// digest.
+	w.write("platform/vex/triage.json", `{"@context": "https://openvex.dev/ns/v0.2.0", "statements": []}`)
+	if err := Render(w.ctx, opts, true, ""); err == nil || !strings.Contains(err.Error(), "is stale (the shared profile org/profile.yaml changed since it was pinned at "+published+")") {
+		t.Errorf("changed VEX: %v", err)
+	}
+	w.out.Reset()
+	if err := Lock(w.ctx, opts, LockOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	moved := read().Profile.Digest
+	if want := "shared profile org/profile.yaml: sha256:" + published[7:19] + " → sha256:" + moved[7:19]; moved == published || !strings.Contains(w.out.String(), want) {
+		t.Errorf("lock output lacks %q:\n%s", want, w.out.String())
+	}
+	if err := Render(w.ctx, opts, true, ""); err != nil {
+		t.Errorf("render --check after lock: %v", err)
+	}
+	if moved != w.push("platform/org/profile.yaml") {
+		t.Error("the pin isn't the digest profile push publishes")
+	}
+
+	// Moving to the published profile: the lock pins it by path, not
+	// by reference, so it is stale.
+	w.write("platform/factory.org.yaml", "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nextends: {ref: "+w.host+"/factory/org:1, signer: {certificateIdentity: "+profileIdentity+", certificateOIDCIssuer: "+ghIssuer+"}}\nregistry: "+w.host+"/platform\n")
+	_ = os.WriteFile(cosign.path+".identity", []byte("--certificate-identity "+profileIdentity), 0o644)
+	_ = os.WriteFile(cosign.path+".signed", []byte(w.host+"/factory/org@"+moved+"\n"), 0o644)
+	if err := Render(w.ctx, opts, true, ""); err == nil || !strings.Contains(err.Error(), "doesn't pin the shared profile "+w.host+"/factory/org:1") {
+		t.Errorf("path pin, ref extends: %v", err)
 	}
 }
 

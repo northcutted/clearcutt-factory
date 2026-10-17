@@ -439,11 +439,19 @@ required labels, narrower allow lists, `requireX` on, `allowTOFU` and
 the field. VEX statements from the repository are refused unless the shared
 profile allows them. The shared profile is checked against
 `extends.signer` whenever it is loaded, at the digest the lock pins, so an
-unsigned, tampered, or otherwise signed version never applies.
+unsigned, tampered, or otherwise signed version never applies. (Outside
+CI, a check counts on that machine for a day, per digest and signer;
+`--reverify` checks again.)
+`extends.signers` lists several signers instead, any one of which may sign
+it, so the platform can rotate its signer without every repository changing
+at that moment.
 [docs/adopting.md](docs/adopting.md#6-one-org-profile-for-every-repository)
 has the full rules and why the signer is stated in the app repository.
 `clearcutt-factory init --extends REF --extends-identity ID` sets a
-repository up this way.
+repository up this way. The platform repository extends the profile it
+publishes by path (`extends: {path: org/profile.yaml}`), under the same
+rules and with no signer, since it is its own file; its locks pin the digest
+`profile push` publishes it at.
 
 ## What makes it reproducible
 

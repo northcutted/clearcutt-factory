@@ -28,17 +28,32 @@ const (
 	TrustPolicyFile = "trust-policy.yaml"
 )
 
-// Extends names a shared org profile and who may sign it.
+// Extends names a shared org profile: a published one and who may sign
+// it, or this repository's own by path.
 type Extends struct {
 	// Ref is the shared profile, e.g. ghcr.io/acme/factory/org:1. Each
 	// manifest's lock pins the digest it resolved to, and lock --update
 	// moves it.
-	Ref string `yaml:"ref"`
+	Ref string `yaml:"ref,omitempty"`
+	// Path is a shared profile in this repository, relative to this
+	// profile, e.g. org/profile.yaml: for the platform repository that
+	// publishes it, so it builds on what it publishes. It is this
+	// repository's own file, so it names no signer and isn't verified; the
+	// same merge rules apply. It and the files it names must be inside the
+	// repository. Each manifest's lock pins the digest profile push would
+	// publish it at, so a lock goes stale when it changes. Set ref or path,
+	// not both.
+	Path string `yaml:"path,omitempty"`
 	// Signer is who may sign the shared profile: a key, or a keyless
 	// certificate identity and issuer. It is stated here because the shared
 	// profile names every other signer; the profile is verified against it
-	// whenever it is loaded.
-	Signer VerifyIdentity `yaml:"signer"`
+	// whenever it is loaded. Signers names several instead.
+	Signer VerifyIdentity `yaml:"signer,omitempty"`
+	// Signers are who may sign the shared profile, any one of them, so that
+	// its signer can be rotated: list the new signer beside the old, then
+	// drop the old once every version still in use is signed by the new.
+	// Set signer or signers, not both.
+	Signers []VerifyIdentity `yaml:"signers,omitempty"`
 }
 
 // UnmarshalYAML explains a bare reference, and refuses unknown fields as
@@ -60,33 +75,93 @@ func (e *Extends) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
+// AllSigners returns who may sign the shared profile: signers, or signer
+// as a list of one.
+func (e Extends) AllSigners() []VerifyIdentity {
+	if len(e.Signers) > 0 {
+		return e.Signers
+	}
+	if !e.Signer.IsZero() {
+		return []VerifyIdentity{e.Signer}
+	}
+	return nil
+}
+
+// SignerField names the field the signers come from, for messages.
+func (e Extends) SignerField() string {
+	if len(e.Signers) > 0 {
+		return "any of extends.signers"
+	}
+	return "extends.signer"
+}
+
+// Name is the shared profile as written: its reference or its path.
+func (e Extends) Name() string { return firstNonEmpty(e.Ref, e.Path) }
+
 func (e Extends) validate() error {
 	var errs []error
-	if e.Ref == "" {
-		errs = append(errs, errors.New("ref is required: the shared profile's reference, e.g. ghcr.io/acme/factory/org:1"))
+	switch {
+	case e.Ref != "" && e.Path != "":
+		return errors.New("set ref (a published shared profile) or path (this repository's own), not both")
+	case e.Path != "":
+		if !e.Signer.IsZero() || e.Signers != nil {
+			errs = append(errs, errors.New("path names this repository's own shared profile, which isn't signed: remove signer and signers"))
+		}
+		if filepath.IsAbs(e.Path) {
+			errs = append(errs, fmt.Errorf("path %s must be relative to this profile", e.Path))
+		}
+		return errors.Join(errs...)
+	case e.Ref == "":
+		errs = append(errs, errors.New("ref is required: the shared profile's reference, e.g. ghcr.io/acme/factory/org:1 (or path, for this repository's own)"))
+	}
+	check := func(name string, v VerifyIdentity) {
+		switch {
+		case v.IsZero():
+			errs = append(errs, fmt.Errorf("%s names no signer (a key, or certificateIdentity and certificateOIDCIssuer)", name))
+			return
+		case v.SourceMatchesImage:
+			errs = append(errs, fmt.Errorf("%s: sourceMatchesImage only applies to images (a profile names no source repository); use sourceRepository", name))
+		}
+		if err := v.validate(); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", name, err))
+		}
 	}
 	switch {
+	case !e.Signer.IsZero() && e.Signers != nil:
+		errs = append(errs, errors.New("set signer or signers, not both (signer is signers with one entry)"))
+	case e.Signers != nil:
+		if len(e.Signers) == 0 {
+			errs = append(errs, errors.New("signers is empty: name who may sign the shared profile"))
+		}
+		for i, v := range e.Signers {
+			check(fmt.Sprintf("signers[%d]", i), v)
+		}
 	case e.Signer.IsZero():
-		errs = append(errs, errors.New("signer is required: who may sign the shared profile (a key, or certificateIdentity and certificateOIDCIssuer); the shared profile can't say who signs it"))
-	case e.Signer.SourceMatchesImage:
-		errs = append(errs, errors.New("signer: sourceMatchesImage only applies to images (a profile names no source repository); use sourceRepository"))
-	}
-	if err := e.Signer.validate(); err != nil && !e.Signer.IsZero() {
-		errs = append(errs, fmt.Errorf("signer: %w", err))
+		errs = append(errs, errors.New("signer is required: who may sign the shared profile (a key, or certificateIdentity and certificateOIDCIssuer; signers for several); the shared profile can't say who signs it"))
+	default:
+		check("signer", e.Signer)
 	}
 	return errors.Join(errs...)
 }
 
 // SharedProfile is the shared profile an org profile was loaded with.
 type SharedProfile struct {
-	Ref    string // as written in extends.ref
-	Digest string // of the artifact
-	Path   string // its factory.org.yaml, unpacked with the files it names
+	Ref  string // as written in extends.ref
+	Path string // as written in extends.path
+	// Digest is the artifact's: for Path, the digest profile push would
+	// publish it at.
+	Digest string
+	File   string // its factory.org.yaml, unpacked with the files it names
 }
 
-// ProfileLoader fetches the shared profile e names, checks its signature
-// against e.Signer, unpacks it, and returns the path of its
-// factory.org.yaml and the artifact's digest.
+// Name is the shared profile as written: its reference or its path.
+func (s SharedProfile) Name() string { return firstNonEmpty(s.Ref, s.Path) }
+
+// ProfileLoader fetches the shared profile e names, checks that one of
+// e.AllSigners signed it, unpacks it, and returns the path of its
+// factory.org.yaml and the artifact's digest. For extends.path, e.Path is
+// absolute (and inside the repository), and the loader packs it as profile
+// push would, verifying nothing.
 type ProfileLoader func(e Extends) (path, digest string, err error)
 
 // extend loads the shared profile o extends and merges o over it.
@@ -96,22 +171,68 @@ func (o *Org) extend(load ProfileLoader, set keySet) (*Org, error) {
 		return nil, fmt.Errorf("extends: %w", err)
 	}
 	if load == nil {
-		return nil, fmt.Errorf("extends %s: this command can't load a shared profile", e.Ref)
+		return nil, fmt.Errorf("extends %s: this command can't load a shared profile", e.Name())
 	}
-	path, digest, err := load(e)
+	le := e
+	if e.Path != "" {
+		var err error
+		if le.Path, err = o.localShared(e.Path); err != nil {
+			return nil, fmt.Errorf("extends %s: %w", e.Path, err)
+		}
+	}
+	path, digest, err := load(le)
 	if err != nil {
-		return nil, fmt.Errorf("extends %s: %w", e.Ref, err)
+		return nil, fmt.Errorf("extends %s: %w", e.Name(), err)
 	}
 	s, err := ReadShared(path)
 	if err != nil {
-		return nil, fmt.Errorf("extends %s: %w", e.Ref, err)
+		return nil, fmt.Errorf("extends %s: %w", e.Name(), err)
 	}
 	out, err := extendWith(s, o, set)
 	if err != nil {
-		return nil, fmt.Errorf("extends %s, which this profile may only add to and tighten:\n%w", e.Ref, err)
+		return nil, fmt.Errorf("extends %s, which this profile may only add to and tighten:\n%w", e.Name(), err)
 	}
-	out.Shared = &SharedProfile{Ref: e.Ref, Digest: digest, Path: path}
+	out.Shared = &SharedProfile{Ref: e.Ref, Path: e.Path, Digest: digest, File: path}
 	return out, nil
+}
+
+// localShared resolves extends.path p against o's directory and checks
+// that the shared profile there, and every file it names, is inside the
+// repository: the directory holding .git at or above o, else o's own
+// directory. A profile extended by path is the repository's own file, so
+// what applies is what the repository holds.
+func (o *Org) localShared(p string) (string, error) {
+	dir := filepath.Dir(o.Path)
+	root := dir
+	if g, err := findUp(dir, ".git"); err != nil {
+		return "", err
+	} else if g != "" {
+		root = filepath.Dir(g)
+	}
+	abs := filepath.Join(dir, filepath.FromSlash(p))
+	// Through symlinks too.
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", err
+	}
+	if r, err := filepath.Rel(realRoot, real); err != nil || !filepath.IsLocal(r) {
+		return "", fmt.Errorf("%s is outside the repository (%s)", real, root)
+	}
+	s, _, err := decodeOrg(abs)
+	if err != nil {
+		return "", err
+	}
+	if err := s.resolve(); err != nil {
+		return "", fmt.Errorf("%s: %w", abs, err)
+	}
+	if err := s.checkInside(root, "the repository"); err != nil {
+		return "", fmt.Errorf("%s: %w", abs, err)
+	}
+	return abs, nil
 }
 
 // ReadShared reads a shared profile unpacked from its artifact, as written
@@ -125,15 +246,15 @@ func ReadShared(path string) (*Org, error) {
 	if err := s.resolve(); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	if err := errors.Join(s.checkInside(filepath.Dir(s.Path)), s.checkShared()); err != nil {
+	if err := errors.Join(s.checkInside(filepath.Dir(s.Path), "the shared profile"), s.checkShared()); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return s, nil
 }
 
 // checkInside requires every file the (resolved) profile names to be in
-// dir.
-func (o *Org) checkInside(dir string) error {
+// dir, which is what, for messages.
+func (o *Org) checkInside(dir, what string) error {
 	files := map[string]string{"signing.trustPolicy": o.Signing.TrustPolicy}
 	for name, v := range map[string]VerifyIdentity{"signing.verify": o.Signing.Verify, "signing.stacks": o.Signing.Stacks, "signing.profile": o.Signing.Profile} {
 		files[name+".key"] = v.Key
@@ -153,7 +274,7 @@ func (o *Org) checkInside(dir string) error {
 			continue
 		}
 		if r, err := filepath.Rel(dir, p); err != nil || !filepath.IsLocal(r) {
-			errs = append(errs, fmt.Errorf("%s: %s is outside the shared profile", name, p))
+			errs = append(errs, fmt.Errorf("%s: %s is outside %s", name, p, what))
 		}
 	}
 	return errors.Join(errs...)
@@ -164,7 +285,7 @@ func (o *Org) checkShared() error {
 	var errs []error
 	add := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
 	if o.Extends != nil {
-		add("a shared profile can't extend another (extends %s)", o.Extends.Ref)
+		add("a shared profile can't extend another (extends %s)", o.Extends.Name())
 	}
 	b := o.Builder
 	for _, f := range []struct{ name, v string }{{"runtime", b.Runtime}, {"addr", b.Addr}, {"config", b.Config}, {"network", b.Network}} {
@@ -302,7 +423,7 @@ func extendWith(s, l *Org, set keySet) (*Org, error) {
 		refuse("signing.trustPolicy: whom to trust comes from the shared profile; remove it here")
 	}
 	if !lg.Profile.IsZero() {
-		refuse("signing.profile is who signs a profile you publish; this one extends another, whose signer is extends.signer")
+		refuse("signing.profile is who signs a profile you publish; this one extends another, whose signers are in extends")
 	}
 	switch {
 	case s.Trust != nil:
@@ -422,7 +543,7 @@ func PackProfile(path string) (*Org, []BundledFile, error) {
 		return nil, nil, err
 	}
 	if o.Extends != nil {
-		return nil, nil, fmt.Errorf("%s extends %s: a shared profile can't extend another; publish that one, or this one without extends", path, o.Extends.Ref)
+		return nil, nil, fmt.Errorf("%s extends %s: a shared profile can't extend another; publish that one, or this one without extends", path, o.Extends.Name())
 	}
 	if err := o.resolve(); err != nil {
 		return nil, nil, fmt.Errorf("%s: %w", path, err)

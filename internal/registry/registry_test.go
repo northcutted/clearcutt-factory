@@ -325,3 +325,71 @@ func TestFilesArtifact(t *testing.T) {
 		}
 	}
 }
+
+// TestReadBundle: an artifact kept outside the registry reads back only
+// as the artifact its digest names: the manifest it was fetched with, and
+// files that match it.
+func TestReadBundle(t *testing.T) {
+	srv := httptest.NewServer(ggcrregistry.New(ggcrregistry.Logger(log.New(io.Discard, "", 0))))
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	ctx := context.Background()
+	const typ = "application/vnd.example.bundle.v1"
+	files := []File{
+		{Name: "profile.yaml", MediaType: typ + "+yaml", Content: []byte("a: 1\n")},
+		{Name: "vex/triage.json", MediaType: "application/json", Content: []byte(`{"b": 2}`)},
+	}
+	packed, err := PackFiles(typ, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, err := PushFiles(ctx, host+"/bundle:1", typ, files); err != nil || d != packed.Digest {
+		t.Fatalf("pushed %s, packed %s: %v", d, packed.Digest, err)
+	}
+	fetched, err := FetchBundle(ctx, host+"/bundle@"+packed.Digest, typ)
+	if err != nil || fetched.Digest != packed.Digest || string(fetched.Manifest) != string(packed.Manifest) {
+		t.Fatalf("fetched %+v: %v", fetched, err)
+	}
+
+	stored := map[string][]byte{}
+	for _, f := range files {
+		stored[f.Name] = f.Content
+	}
+	read := func(name string, _ int64) ([]byte, error) {
+		b, ok := stored[name]
+		if !ok {
+			return nil, errors.New("missing")
+		}
+		return b, nil
+	}
+	got, err := ReadBundle(fetched.Manifest, fetched.Digest, typ, read)
+	if err != nil || len(got) != 2 || got[1].Name != "vex/triage.json" || string(got[1].Content) != `{"b": 2}` || got[1].MediaType != "application/json" {
+		t.Fatalf("read back %+v: %v", got, err)
+	}
+
+	other, _ := PackFiles(typ, files[:1])
+	for _, c := range []struct {
+		name     string
+		manifest []byte
+		digest   string
+		typ      string
+		change   func()
+	}{
+		{"another manifest", other.Manifest, packed.Digest, typ, nil},
+		{"another digest", packed.Manifest, other.Digest, typ, nil},
+		{"another type", packed.Manifest, packed.Digest, "application/other", nil},
+		{"a changed file", packed.Manifest, packed.Digest, typ, func() { stored["vex/triage.json"] = []byte(`{"b": 3}`) }},
+		{"a missing file", packed.Manifest, packed.Digest, typ, func() { delete(stored, "profile.yaml") }},
+		{"no digest", packed.Manifest, "", typ, nil},
+	} {
+		if c.change != nil {
+			c.change()
+		}
+		if _, err := ReadBundle(c.manifest, c.digest, c.typ, read); err == nil {
+			t.Errorf("%s: read back", c.name)
+		}
+		for _, f := range files {
+			stored[f.Name] = f.Content
+		}
+	}
+}

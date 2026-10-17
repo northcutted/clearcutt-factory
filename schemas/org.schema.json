@@ -76,15 +76,51 @@
     },
     "extends": {
       "additionalProperties": false,
-      "description": "Extends is a shared org profile, published with clearcutt-factory profile push, that this one builds on: what it sets is fixed, this profile adds what it leaves to each repository, and may tighten (never loosen) its gate and policy. Each manifest's lock pins its digest.",
+      "description": "Extends is a shared org profile, published with clearcutt-factory profile push (or this repository's own, by path), that this one builds on: what it sets is fixed, this profile adds what it leaves to each repository, and may tighten (never loosen) its gate and policy. Each manifest's lock pins its digest.",
+      "oneOf": [
+        {
+          "properties": {
+            "path": false,
+            "signers": false
+          },
+          "required": [
+            "ref",
+            "signer"
+          ]
+        },
+        {
+          "properties": {
+            "path": false,
+            "signer": false
+          },
+          "required": [
+            "ref",
+            "signers"
+          ]
+        },
+        {
+          "properties": {
+            "ref": false,
+            "signer": false,
+            "signers": false
+          },
+          "required": [
+            "path"
+          ]
+        }
+      ],
       "properties": {
+        "path": {
+          "description": "Path is a shared profile in this repository, relative to this profile, e.g. org/profile.yaml: for the platform repository that publishes it, so it builds on what it publishes. It is this repository's own file, so it names no signer and isn't verified; the same merge rules apply. It and the files it names must be inside the repository. Each manifest's lock pins the digest profile push would publish it at, so a lock goes stale when it changes. Set ref or path, not both.",
+          "type": "string"
+        },
         "ref": {
           "description": "Ref is the shared profile, e.g. ghcr.io/acme/factory/org:1. Each manifest's lock pins the digest it resolved to, and lock --update moves it.",
           "type": "string"
         },
         "signer": {
           "additionalProperties": false,
-          "description": "Signer is who may sign the shared profile: a key, or a keyless certificate identity and issuer. It is stated here because the shared profile names every other signer; the profile is verified against it whenever it is loaded.",
+          "description": "Signer is who may sign the shared profile: a key, or a keyless certificate identity and issuer. It is stated here because the shared profile names every other signer; the profile is verified against it whenever it is loaded. Signers names several instead.",
           "properties": {
             "args": {
               "items": {
@@ -126,12 +162,58 @@
             }
           },
           "type": "object"
+        },
+        "signers": {
+          "description": "Signers are who may sign the shared profile, any one of them, so that its signer can be rotated: list the new signer beside the old, then drop the old once every version still in use is signed by the new. Set signer or signers, not both.",
+          "items": {
+            "additionalProperties": false,
+            "description": "VerifyIdentity is one signer: a public key, or a keyless certificate identity with its OIDC issuer. Images signed in ClearCutt Factory's reusable workflows carry the called workflow as their certificate identity, and any repository can call them, so a keyless identity should also say which repository's runs count: sourceRepository, or sourceMatchesImage (the repository the image names as its source), optionally limited to sourceRepositoryOwner. cosign checks the certificate's GitHub workflow repository against it.",
+            "properties": {
+              "args": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "certificateIdentity": {
+                "type": "string"
+              },
+              "certificateIdentityRegexp": {
+                "type": "string"
+              },
+              "certificateOIDCIssuer": {
+                "type": "string"
+              },
+              "key": {
+                "type": "string"
+              },
+              "sourceMatchesImage": {
+                "description": "SourceMatchesImage requires the run to be in the repository the image names as its source (org.opencontainers.image.source). Images only: a stack names no source, so a stack signer binds with sourceRepository.",
+                "type": "boolean"
+              },
+              "sourceRef": {
+                "description": "SourceRef is the ref the run was on, e.g. refs/heads/main.",
+                "type": "string"
+              },
+              "sourceRepository": {
+                "description": "SourceRepository is the repository whose workflow runs sign, e.g. https://github.com/acme/checkout.",
+                "type": "string"
+              },
+              "sourceRepositoryOwner": {
+                "description": "SourceRepositoryOwner accepts runs in any of the owner's repositories, e.g. https://github.com/acme; it limits sourceMatchesImage.",
+                "type": "string"
+              },
+              "tlog": {
+                "description": "Tlog false accepts this key signer's signatures and attestations without a transparency log entry (cosign --insecure-ignore-tlog), for a key that signs without one. Keyless signers can't set it.",
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
         }
       },
-      "required": [
-        "ref",
-        "signer"
-      ],
       "type": "object"
     },
     "kind": {
@@ -229,7 +311,7 @@
         },
         "profile": {
           "additionalProperties": false,
-          "description": "Profile is who signs this profile when profile push publishes it, so that pushing it unchanged only moves its tag. Repositories that extend it trust the signer they name in extends.signer, not this.",
+          "description": "Profile is who signs this profile when profile push publishes it, so that pushing it unchanged only moves its tag. Repositories that extend it trust the signers they name in extends, not this.",
           "properties": {
             "args": {
               "items": {

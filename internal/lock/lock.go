@@ -37,7 +37,7 @@ type Lock struct {
 	Kind            string   `yaml:"kind" json:"kind"`
 	InputsDigest    string   `yaml:"inputsDigest" json:"inputsDigest"`
 	SourceDateEpoch int64    `yaml:"sourceDateEpoch" json:"sourceDateEpoch"`
-	Profile         *Image   `yaml:"profile,omitempty" json:"profile,omitempty"` // the shared org profile the org profile extends
+	Profile         *Profile `yaml:"profile,omitempty" json:"profile,omitempty"` // the shared org profile the org profile extends
 	Builder         Builder  `yaml:"builder" json:"builder"`
 	Base            Image    `yaml:"base" json:"base"`
 	Packages        Packages `yaml:"packages,omitempty" json:"packages,omitempty"`
@@ -64,6 +64,24 @@ type Builder struct {
 	BuildKit Image `yaml:"buildkit" json:"buildkit"`
 	Frontend Image `yaml:"frontend" json:"frontend"`
 	Toolbox  Image `yaml:"toolbox" json:"toolbox"`
+}
+
+// Profile pins the shared org profile the org profile extends: a
+// published one by the digest its reference resolved to, or the
+// repository's own (extends.path) by the digest profile push would publish
+// it at.
+type Profile struct {
+	Ref    string `yaml:"ref,omitempty" json:"ref,omitempty"`
+	Path   string `yaml:"path,omitempty" json:"path,omitempty"`
+	Digest string `yaml:"digest" json:"digest"`
+}
+
+// Name is the shared profile as written: its reference or its path.
+func (p Profile) Name() string {
+	if p.Ref != "" {
+		return p.Ref
+	}
+	return p.Path
 }
 
 // Image is a reference as written plus the digest it resolved to.
