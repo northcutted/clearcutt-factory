@@ -25,9 +25,10 @@ Usage:
       Set up a repository: an org profile, an example image, and a GitHub
       Actions workflow that publishes, updates, and rebases with ClearCutt Factory.
       --extends makes the org profile extend a shared one, signed by that identity or key.
-  clearcutt-factory lock    [-f image.yaml] [--update | --update-base]
+  clearcutt-factory lock    [-f image.yaml] [--update | --update-base | --update-package NAME[,NAME…]…]
       Pin every input and write the lock and Containerfile. --update re-resolves
-      all of them; --update-base only the base.
+      all of them; --update-base only the base; --update-package only the named
+      distro packages (and what they now need), keeping every other package pin.
   clearcutt-factory render  [-f image.yaml] [--check] [--context-dir DIR]
       Regenerate (or check) the Containerfile.
   clearcutt-factory build   [-f image.yaml] [--push] [--out DIR] [--no-test] [--no-scan] [--no-sign] [--no-cache] [--force-tags]
@@ -102,6 +103,7 @@ func run(ctx context.Context, args []string) error {
 		var lo factory.LockOptions
 		fs.BoolVar(&lo.Update, "update", false, "")
 		fs.BoolVar(&lo.UpdateBase, "update-base", false, "")
+		fs.Var((*listFlag)(&lo.UpdatePackages), "update-package", "")
 		if err := parse(fs, args); err != nil {
 			return err
 		}
@@ -255,6 +257,24 @@ func run(ctx context.Context, args []string) error {
 		return nil
 	}
 	return usageError{}
+}
+
+// listFlag collects a repeatable flag whose values may also be
+// comma-separated.
+type listFlag []string
+
+func (l *listFlag) String() string { return strings.Join(*l, ",") }
+
+func (l *listFlag) Set(v string) error {
+	for _, s := range strings.Split(v, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			*l = append(*l, s)
+		}
+	}
+	if len(*l) == 0 {
+		return errors.New("name at least one package")
+	}
+	return nil
 }
 
 func parse(fs *flag.FlagSet, args []string) error {

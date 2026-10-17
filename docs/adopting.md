@@ -59,7 +59,10 @@ clearcutt-factory build -f images/example/image.yaml   # build, smoke-test, SBOM
 ```
 
 Commit the manifest, `image.lock.yaml`, and `image.Containerfile`. The lock is
-what reviewers read: every version and hash that changed.
+what reviewers read: every version and hash that changed. To move only some
+distro packages (a CVE fix, a released hold), name them:
+`clearcutt-factory lock --update-package openssl,libssl3` keeps every other
+package where it is, or says which would have to move too.
 
 ## 4. Turn on the automation
 

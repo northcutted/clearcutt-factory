@@ -5,6 +5,19 @@ what may change between releases.
 
 ## Unreleased
 
+**`lock --update-package` moves only the packages it names
+([#59](https://github.com/northcutted/clearcutt-factory/issues/59)).**
+Releasing a hold or taking a CVE fix re-resolved every package of the image,
+so the pull request also carried unrelated updates (openssl-4.0 r6 → r7 in
+the showcase's CVE drill). `clearcutt-factory lock --update-package
+NAME[,NAME…]` (repeatable) re-resolves the named apk, apt, or dnf packages
+and whatever their new versions need, and keeps every other package at its
+pin. When that isn't possible (the new versions need a kept package at
+another version, or a kept version is gone from the repositories), it fails
+and names the packages that would have to move. For apt, kept packages come
+from the Debian snapshots they were locked from. `lock --update` and
+`update-locks.yml` still update everything.
+
 **A refused rebase's pull request is titled as a rebuild
 ([#57](https://github.com/northcutted/clearcutt-factory/issues/57)).** When
 `fleet.yml` can't rebase an app, its pull request moves the lock to the

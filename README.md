@@ -161,6 +161,20 @@ The build never asks a repository what is current.
 | apt | os-release `debian`/`ubuntu` | `apt-get` in the base; Debian sources point at snapshot.debian.org | Debian: snapshot.debian.org. Ubuntu: Launchpad, which keeps every published file | apt verifies the signed indexes |
 | dnf | os-release `fedora`/`rhel`/`amzn`/… | `dnf --downloadonly` in the base | Fedora: Koji's signed copy of the build (byte-identical to the repository's). Amazon Linux: its content-addressed CDN. Others: the repository (mirror it) | `rpm -K` against the distribution's keys |
 
+**Moving one package.** `clearcutt-factory lock --update-package NAME[,NAME…]`
+(repeatable) re-resolves only the named packages and whatever their new
+versions need, and keeps every other package at its pin, so the pull request
+for a CVE fix changes what the fix needs and nothing else. A kept package that
+nothing needs any more is dropped. If the new versions need a kept package at
+another version, or a kept version is gone from the repositories, `lock`
+fails and names the packages that would have to move; name them too. To
+release a hold, drop the version from its `packages:` entry
+(`libcrypto3=3.6.3-r4` → `libcrypto3`) and name it. apt and dnf packages built
+from one source usually need each other's exact version, so name them
+together (`curl,libcurl4t64`). Plain `lock` after an edit to `packages:`
+re-resolves every package, and `update-locks.yml` still updates everything
+weekly.
+
 Override detection with `spec.packageManager`. Each manager's leftovers that
 differ between runs (logs, caches, ldconfig's aux-cache, apt's binary caches,
 SQLite's shared-memory file) are removed in the install layer. Amazon Linux's
@@ -335,8 +349,9 @@ The intended split, and the automation that keeps it current:
   gets a pull request titled "Rebuild …" that also moves its stack's build
   image (merging rebuilds it on both) and a failed job. A push that publishes while the
   fleet rebases keeps the tag; the next run rebases it.
-* **CVE response** is the same path on demand: fix the run image (re-lock,
-  merge), and the fleet job moves every app onto it in minutes.
+* **CVE response** is the same path on demand: fix the run image
+  (`lock --update-package` the fixed packages, so the pull request moves only
+  them; merge), and the fleet job moves every app onto it in minutes.
 * **Apps in other repositories hear about it** ([`notify.yml`](.github/workflows/notify.yml)).
   After the platform repository publishes, its `notify` job sends
   `repository_dispatch` to the owner's repositories with the topic

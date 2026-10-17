@@ -15,16 +15,54 @@ import (
 // dnfScript runs in an RPM-based base. dnf decides what to install and
 // downloads it; rpm reports each file's identity and checks its signature
 // against the distribution keys shipped in the image.
+//
+// To keep packages at their locked versions (lock --update-package), each
+// --pin=NAME=NEVRA names one. A first resolution without them finds which
+// are still needed; those still in the repositories are then requested at
+// their locked versions, so a dependency that needs another version fails
+// the resolution rather than moving the pin.
 const dnfScript = `set -eu
 command -v dnf >/dev/null 2>&1 || { echo "clearcutt-factory: dnf is not available in the base image (microdnf-only images can't be locked yet)" >&2; exit 3; }
 . /etc/os-release
 echo "### os"
 echo "${ID:-} ${VERSION_ID:-}"
-dnf -q -y install --downloadonly --setopt=install_weak_deps=False --setopt=keepcache=True "$@" >&2
-files=""
-for f in /var/cache/dnf/*/packages/*.rpm /var/cache/libdnf5/*/packages/*.rpm /var/cache/yum/*/*/packages/*.rpm; do
-  [ -f "$f" ] && files="$files $f"
+pins=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --pin=*) pins="$pins ${1#--pin=}" ;;
+    *) break ;;
+  esac
+  shift
 done
+download() {
+  dnf -q -y install --downloadonly --setopt=install_weak_deps=False --setopt=keepcache=True "$@" >&2
+}
+cached() {
+  for f in /var/cache/dnf/*/packages/*.rpm /var/cache/libdnf5/*/packages/*.rpm /var/cache/yum/*/*/packages/*.rpm; do
+    [ -f "$f" ] && echo "$f"
+  done
+  return 0
+}
+download "$@"
+if [ -n "$pins" ]; then
+  needed=" "
+  for f in $(cached); do
+    needed="$needed$(rpm -qp --nosignature --qf '%{NAME}' "$f") "
+  done
+  specs=""
+  for p in $pins; do specs="$specs ${p#*=}"; done
+  available=" $(dnf -q repoquery --qf '%{name}-%{epoch}:%{version}-%{release}.%{arch} ' $specs 2>/dev/null | tr '\n' ' ') "
+  keep=""
+  for p in $pins; do
+    case "$needed" in *" ${p%%=*} "*) ;; *) continue ;; esac
+    case "$available" in *" ${p#*=} "*) keep="$keep ${p#*=}" ;; esac
+  done
+  if [ -n "$keep" ]; then
+    for f in $(cached); do rm -f "$f"; done
+    download "$@" $keep
+  fi
+fi
+files=$(cached)
 echo "### rpms"
 for f in $files; do
   printf '%s\t' "$(sha256sum "$f" | cut -d' ' -f1)"
@@ -43,13 +81,29 @@ done
 [ -z "$nevras" ] || dnf -q repoquery --location $nevras
 `
 
-// ResolveDNF resolves packages for one platform in image.
-func ResolveDNF(ctx context.Context, run container.RunFunc, image, platform string, packages []string) (*Result, error) {
-	out, err := run(ctx, image, platform, dnfScript, packages...)
+// ResolveDNF resolves packages for one platform in image. keep lists
+// packages to keep at their versions wherever dnf needs them (from
+// lock --update-package); it is empty for a plain resolution.
+func ResolveDNF(ctx context.Context, run container.RunFunc, image, platform string, packages []string, keep []lock.Package) (*Result, error) {
+	out, err := run(ctx, image, platform, dnfScript, dnfArgs(packages, keep)...)
 	if err != nil {
 		return nil, err
 	}
 	return parseDNF(out)
+}
+
+// dnfArgs are dnfScript's arguments: a --pin=NAME=NEVRA for each kept
+// package, then the packages.
+func dnfArgs(packages []string, keep []lock.Package) []string {
+	var args []string
+	for _, p := range keep {
+		v := p.Version
+		if !strings.Contains(v, ":") {
+			v = "0:" + v
+		}
+		args = append(args, fmt.Sprintf("--pin=%s=%s-%s.%s", p.Name, p.Name, v, p.Arch))
+	}
+	return append(args, packages...)
 }
 
 func parseDNF(out []byte) (*Result, error) {

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"slices"
@@ -28,6 +29,9 @@ const (
 
 func (r *Resolver) lockPackages(ctx context.Context, m *manifest.Manifest, base lock.Image, prev lock.Packages) (lock.Packages, error) {
 	if len(m.Spec.Packages) == 0 {
+		if len(r.UpdatePackages) > 0 {
+			return lock.Packages{}, fmt.Errorf("--update-package: spec.packages is empty")
+		}
 		return lock.Packages{}, nil
 	}
 	inputs := lock.Digest(struct {
@@ -37,7 +41,7 @@ func (r *Resolver) lockPackages(ctx context.Context, m *manifest.Manifest, base 
 		Packages  []string
 		Platforms []string
 	}{base.Digest, m.Spec.PackageManager, m.Spec.Repositories, m.Spec.Packages, m.Spec.Platforms})
-	if prev.InputsDigest == inputs {
+	if prev.InputsDigest == inputs && len(r.UpdatePackages) == 0 {
 		return prev, nil
 	}
 
@@ -65,22 +69,39 @@ func (r *Resolver) lockPackages(ctx context.Context, m *manifest.Manifest, base 
 		return lock.Packages{}, fmt.Errorf("spec.repositories only applies to apk; for %s, configure repositories in the base image", mgr)
 	}
 
+	var keep *keeping
+	if len(r.UpdatePackages) > 0 {
+		var err error
+		if keep, err = r.keepingFor(m, mgr, prev); err != nil {
+			return lock.Packages{}, err
+		}
+	}
 	var out lock.Packages
 	var err error
 	if mgr == lock.ManagerAPK {
-		out, err = r.lockAPK(ctx, m, base)
+		out, err = r.lockAPK(ctx, m, base, keep)
 	} else {
-		out, err = r.lockNative(ctx, m, base, mgr)
+		out, err = r.lockNative(ctx, m, base, mgr, keep)
 	}
 	if err != nil {
 		return lock.Packages{}, err
+	}
+	if keep != nil {
+		if err := keep.check(out); err != nil {
+			return lock.Packages{}, err
+		}
+		keep.restore(&out)
 	}
 	out.Manager = mgr
 	out.InputsDigest = inputs
 	return out, nil
 }
 
-func (r *Resolver) lockAPK(ctx context.Context, m *manifest.Manifest, base lock.Image) (lock.Packages, error) {
+// lockAPK resolves apk packages with the Go solver over the base's
+// repositories. With keep, it holds every kept package at its pin; a pin
+// that can't stay is recorded in keep (and resolved without, to find any
+// further pins that would have to move).
+func (r *Resolver) lockAPK(ctx context.Context, m *manifest.Manifest, base lock.Image, keep *keeping) (lock.Packages, error) {
 	out := lock.Packages{Platforms: map[string][]lock.Package{}}
 	indexes := map[string]*apk.Index{}
 	for _, plat := range m.Spec.Platforms {
@@ -143,7 +164,15 @@ func (r *Resolver) lockAPK(ctx context.Context, m *manifest.Manifest, base lock.
 				r.logf("warning: %s from the base is not in the repositories; leaving it as installed", p.Name)
 			}
 		}
-		pkgs, err := idx.Resolve(roots)
+		pins := keep.versions(plat)
+		pkgs, err := idx.ResolveKeeping(roots, pins)
+		for pe := (*apk.PinError)(nil); errors.As(err, &pe); {
+			keep.block(plat, pe.Names, pe.Problems)
+			for _, n := range pe.Names {
+				delete(pins, n)
+			}
+			pkgs, err = idx.ResolveKeeping(roots, pins)
+		}
 		if err != nil {
 			return lock.Packages{}, err
 		}
@@ -158,7 +187,7 @@ func (r *Resolver) lockAPK(ctx context.Context, m *manifest.Manifest, base lock.
 }
 
 // lockNative lets apt or dnf resolve inside the base image for each platform.
-func (r *Resolver) lockNative(ctx context.Context, m *manifest.Manifest, base lock.Image, mgr string) (lock.Packages, error) {
+func (r *Resolver) lockNative(ctx context.Context, m *manifest.Manifest, base lock.Image, mgr string, keep *keeping) (lock.Packages, error) {
 	out := lock.Packages{Platforms: map[string][]lock.Package{}}
 	snapshot := r.Now().UTC().Format("20060102T150405Z")
 	for _, plat := range m.Spec.Platforms {
@@ -166,9 +195,13 @@ func (r *Resolver) lockNative(ctx context.Context, m *manifest.Manifest, base lo
 		var res *native.Result
 		var err error
 		if mgr == lock.ManagerAPT {
-			res, err = native.ResolveAPT(ctx, r.Run, base.Pinned(), plat, snapshot, m.Spec.Packages)
+			res, err = native.ResolveAPT(ctx, r.Run, base.Pinned(), plat, snapshot, m.Spec.Packages, keep.list(plat))
 		} else {
-			res, err = native.ResolveDNF(ctx, r.Run, base.Pinned(), plat, m.Spec.Packages)
+			res, err = native.ResolveDNF(ctx, r.Run, base.Pinned(), plat, m.Spec.Packages, keep.list(plat))
+		}
+		if err != nil && keep != nil {
+			return lock.Packages{}, fmt.Errorf("packages (%s), keeping every package but %s at its locked version: %w\nIf %s lists a kept package it can't install, name that package in --update-package too",
+				plat, strings.Join(keep.update, ", "), err, mgr)
 		}
 		if err != nil {
 			return lock.Packages{}, fmt.Errorf("packages (%s): %w", plat, err)

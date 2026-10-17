@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -320,5 +321,332 @@ func TestUpdateKeepsSameContent(t *testing.T) {
 	}
 	if string(again.Marshal()) != string(first.Marshal()) {
 		t.Errorf("an update that changed nothing moved the lock:\n%s", strings.Join(lock.Changes(first, again), "\n"))
+	}
+}
+
+// The drill's run image: libcrypto3 held at a version with a CVE, and an
+// unrelated openssl-4.0 that has an update of its own.
+const oldAPKIndex = `P:libcrypto3
+V:3.6.3-r4
+A:aarch64
+C:Q1lc-old=
+D:openssl-config>=3.6
+
+P:openssl-config
+V:3.6.3-r4
+A:aarch64
+C:Q1oc-old=
+
+P:openssl-4.0-libcrypto
+V:4.0.3-r6
+A:aarch64
+C:Q1o4-old=
+
+P:busybox
+V:1.38.0-r2
+A:aarch64
+C:Q1bb=
+`
+
+// The fix: libcrypto3 3.6.5 needs a newer openssl-config and zlib.
+const newAPKIndex = oldAPKIndex + `
+P:libcrypto3
+V:3.6.5-r2
+A:aarch64
+C:Q1lc-new=
+D:openssl-config>=3.6.5 so:libz.so.1
+
+P:openssl-config
+V:3.6.5-r2
+A:aarch64
+C:Q1oc-new=
+
+P:zlib
+V:1.3.1-r0
+A:aarch64
+C:Q1z=
+p:so:libz.so.1=1
+
+P:openssl-4.0-libcrypto
+V:4.0.3-r7
+A:aarch64
+C:Q1o4-new=
+`
+
+func serveAPKIndex(r *Resolver, index *string) {
+	r.FetchAPKIndex = func(_ context.Context, repos []string, arch string, _ map[string][]byte) (*apk.Index, error) {
+		pkgs, err := apk.ParseIndex(strings.NewReader(strings.ReplaceAll(*index, "aarch64", arch)))
+		for _, p := range pkgs {
+			p.Repo = repos[0]
+		}
+		return apk.NewIndex(arch, pkgs), err
+	}
+}
+
+func versionsOn(l *lock.Lock, plat string) string {
+	var s []string
+	for _, p := range l.Packages.Platforms[plat] {
+		s = append(s, p.Name+"="+p.Version)
+	}
+	return strings.Join(s, " ")
+}
+
+func TestUpdatePackageAPK(t *testing.T) {
+	srv, _ := fakeUpstream(t)
+	index := oldAPKIndex
+	r := testResolver(t, srv)
+	serveAPKIndex(r, &index)
+	m, o := testManifest(srv)
+	m.Spec.Tools = nil
+	m.Spec.Packages = []string{"libcrypto3", "openssl-4.0-libcrypto"}
+	old, err := r.Lock(context.Background(), m, o, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := versionsOn(old, "linux/arm64"); got != "busybox=1.38.0-r2 libcrypto3=3.6.3-r4 openssl-4.0-libcrypto=4.0.3-r6 openssl-config=3.6.3-r4" {
+		t.Fatalf("old lock: %s", got)
+	}
+
+	// The fix is published. Updating libcrypto3 alone would move
+	// openssl-config: the error says so, and how to move it too.
+	index = newAPKIndex
+	update := func(names ...string) (*lock.Lock, error) {
+		r := testResolver(t, srv)
+		serveAPKIndex(r, &index)
+		r.Now = func() time.Time { return time.Unix(1800000000, 0) }
+		r.UpdatePackages = names
+		return r.Lock(context.Background(), m, o, old, false)
+	}
+	_, err = update("libcrypto3")
+	if err == nil || !strings.Contains(err.Error(), "libcrypto3-3.6.5-r2 needs openssl-config>=3.6.5, but openssl-config is pinned at 3.6.3-r4") ||
+		!strings.Contains(err.Error(), "openssl-config would have to move too; to update them as well: --update-package libcrypto3,openssl-config") {
+		t.Fatalf("expected openssl-config to block, got %v", err)
+	}
+	if strings.Contains(err.Error(), "(on linux/") || strings.Contains(err.Error(), "would move") {
+		t.Errorf("a problem on every platform needn't name them, nor be repeated: %v", err)
+	}
+
+	// Named both: they move, zlib comes in for the new libcrypto3, and the
+	// unrelated openssl-4.0 stays where it was.
+	l, err := update("libcrypto3", "openssl-config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"package libcrypto3: 3.6.3-r4 → 3.6.5-r2",
+		"package openssl-config: 3.6.3-r4 → 3.6.5-r2",
+		"package zlib: added 1.3.1-r0",
+	}
+	if got := lock.Changes(old, l); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("changes:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if l.SourceDateEpoch == old.SourceDateEpoch {
+		t.Error("an update that moved packages should move the epoch")
+	}
+
+	// Nothing newer: the lock stays as it is.
+	same, err := update("busybox")
+	if err != nil || string(same.Marshal()) != string(old.Marshal()) {
+		t.Errorf("updating a current package changed the lock: %v\n%s", err, strings.Join(lock.Changes(old, same), "\n"))
+	}
+
+	// A plain --update moves everything, as before.
+	r2 := testResolver(t, srv)
+	serveAPKIndex(r2, &index)
+	all, err := r2.Lock(context.Background(), m, o, old, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := versionsOn(all, "linux/amd64"); !strings.Contains(got, "openssl-4.0-libcrypto=4.0.3-r7") {
+		t.Errorf("--update: %s", got)
+	}
+
+	if _, err := update("libssl3", "nope"); err == nil || !strings.Contains(err.Error(), "libssl3, nope is neither in spec.packages nor in the lock") {
+		t.Errorf("expected unknown package error, got %v", err)
+	}
+}
+
+// Releasing a hold in the manifest, the drill's way: the held entry loses
+// its version and is named, and nothing else moves.
+func TestUpdatePackageReleasesHold(t *testing.T) {
+	srv, _ := fakeUpstream(t)
+	index := newAPKIndex
+	r := testResolver(t, srv)
+	serveAPKIndex(r, &index)
+	m, o := testManifest(srv)
+	m.Spec.Tools = nil
+	m.Spec.Packages = []string{"libcrypto3=3.6.3-r4", "openssl-config=3.6.3-r4", "openssl-4.0-libcrypto=4.0.3-r6"}
+	held, err := r.Lock(context.Background(), m, o, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m.Spec.Packages = []string{"libcrypto3", "openssl-config", "openssl-4.0-libcrypto=4.0.3-r6"}
+	r.UpdatePackages = []string{"libcrypto3", "openssl-config"}
+	l, err := r.Lock(context.Background(), m, o, held, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := versionsOn(l, "linux/arm64"); got != "busybox=1.38.0-r2 libcrypto3=3.6.5-r2 openssl-4.0-libcrypto=4.0.3-r6 openssl-config=3.6.5-r2 zlib=1.3.1-r0" {
+		t.Errorf("released: %s", got)
+	}
+	if l.Packages.InputsDigest == held.Packages.InputsDigest {
+		t.Error("the package inputs changed with the manifest")
+	}
+}
+
+// aptOutput is what aptScript prints for packages (name, version, sha256)
+// resolved through snapshot.
+func aptOutput(snapshot string, pkgs ...[3]string) string {
+	var sim, uris, recs strings.Builder
+	for _, p := range pkgs {
+		file := p[0] + "_" + p[1] + "_arm64.deb"
+		fmt.Fprintf(&sim, "Inst %s (%s Debian:13.7/stable [arm64])\n", p[0], p[1])
+		fmt.Fprintf(&uris, "'http://snapshot.debian.org/archive/debian/%s/pool/main/x/%s/%s' %s 1 MD5Sum:00\n", snapshot, p[0], file, file)
+		fmt.Fprintf(&recs, "Package: %s\nVersion: %s\nArchitecture: arm64\nFilename: pool/main/x/%s/%s\nSHA256: %s\n\n", p[0], p[1], p[0], file, p[2])
+	}
+	return "### os\ndebian 13\n### sources\nhttp://snapshot.debian.org/archive/debian/" + snapshot + "/\n### simulate\n" + sim.String() +
+		"### uris\n" + uris.String() + "### records\n" + recs.String()
+}
+
+func TestUpdatePackageAPT(t *testing.T) {
+	srv, _ := fakeUpstream(t)
+	r := testResolver(t, srv)
+	m, o := testManifest(srv)
+	m.Spec.Tools = nil
+	m.Spec.PackageManager = lock.ManagerAPT
+	m.Spec.Platforms = []string{"linux/arm64"}
+	m.Spec.Packages = []string{"curl"}
+	r.Run = func(_ context.Context, _, _, _ string, args ...string) ([]byte, error) {
+		return []byte(aptOutput(args[0], [3]string{"curl", "8.14.1-2", "c1"}, [3]string{"libc6", "2.41-12", "l1"})), nil
+	}
+	old, err := r.Lock(context.Background(), m, o, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A fixed curl two weeks later, beside a newer libc6 that isn't needed.
+	var gotArgs []string
+	libc6 := "2.41-12"
+	r = testResolver(t, srv)
+	r.Now = func() time.Time { return time.Unix(1700000000+14*86400, 0) }
+	r.UpdatePackages = []string{"curl"}
+	r.Run = func(_ context.Context, _, _, _ string, args ...string) ([]byte, error) {
+		gotArgs = args
+		return []byte(aptOutput(args[0], [3]string{"curl", "8.14.1-2+deb13u1", "c2"}, [3]string{"libc6", libc6, "l1"})), nil
+	}
+	l, err := r.Lock(context.Background(), m, o, old, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(gotArgs, " "); got != "20231128T221320Z --keep-snapshot=20231114T221320Z --pin=libc6=2.41-12 curl" {
+		t.Errorf("apt args: %s", got)
+	}
+	if got := strings.Join(lock.Changes(old, l), "\n"); got != "package curl: 8.14.1-2 → 8.14.1-2+deb13u1" {
+		t.Errorf("changes: %s", got)
+	}
+	kept := l.Packages.Platforms["linux/arm64"][1]
+	if kept != old.Packages.Platforms["linux/arm64"][1] || !strings.Contains(kept.URL, "/20231114T221320Z/") {
+		t.Errorf("the kept libc6 should be the locked entry, from its own snapshot: %+v", kept)
+	}
+
+	// apt moved the pin (its version gone from the archive, say): fail,
+	// naming it.
+	libc6 = "2.41-13"
+	if _, err := r.Lock(context.Background(), m, o, old, false); err == nil ||
+		!strings.Contains(err.Error(), "libc6 would move from 2.41-12 to 2.41-13") ||
+		!strings.Contains(err.Error(), "--update-package curl,libc6") {
+		t.Errorf("expected libc6 to block, got %v", err)
+	}
+
+	// apt can't resolve with the pins: its error, and what to do.
+	r.Run = func(context.Context, string, string, string, ...string) ([]byte, error) {
+		return nil, errors.New("curl : Depends: libc6 (>= 2.41-13) but 2.41-12 is to be installed")
+	}
+	if _, err := r.Lock(context.Background(), m, o, old, false); err == nil ||
+		!strings.Contains(err.Error(), "keeping every package but curl at its locked version: curl : Depends: libc6") ||
+		!strings.Contains(err.Error(), "name that package in --update-package too") {
+		t.Errorf("expected apt's error with a hint, got %v", err)
+	}
+}
+
+// dnfOutput is what dnfScript prints for packages (name, version-release,
+// sha256) on Amazon Linux.
+func dnfOutput(pkgs ...[3]string) string {
+	var rpms, sigs, urls strings.Builder
+	for _, p := range pkgs {
+		file := p[0] + "-" + p[1] + ".aarch64.rpm"
+		ver, rel, _ := strings.Cut(p[1], "-")
+		fmt.Fprintf(&rpms, "%s\t%s\t0\t%s\t%s\taarch64\t%s-%s.src.rpm\tMIT\n", p[2], p[0], ver, rel, p[0], p[1])
+		fmt.Fprintf(&sigs, "/var/cache/dnf/amazonlinux-1/packages/%s: digests signatures OK\n", file)
+		fmt.Fprintf(&urls, "https://cdn.amazonlinux.com/al2023/core/guids/abc/aarch64/../../../../blobstore/%s/%s\n", p[2], file)
+	}
+	return "### os\namzn 2023\n### rpms\n" + rpms.String() + "### signatures\n" + sigs.String() + "### urls\n" + urls.String()
+}
+
+func TestUpdatePackageDNF(t *testing.T) {
+	srv, _ := fakeUpstream(t)
+	r := testResolver(t, srv)
+	m, o := testManifest(srv)
+	m.Spec.Tools = nil
+	m.Spec.PackageManager = lock.ManagerDNF
+	m.Spec.Platforms = []string{"linux/arm64"}
+	m.Spec.Packages = []string{"jq", "openssl"}
+	r.Run = func(context.Context, string, string, string, ...string) ([]byte, error) {
+		return []byte(dnfOutput([3]string{"jq", "1.7.1-49.amzn2023", "j1"}, [3]string{"oniguruma", "6.9.7-1.amzn2023", "o1"}, [3]string{"openssl", "3.0.8-1.amzn2023", "s1"})), nil
+	}
+	old, err := r.Lock(context.Background(), m, o, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var gotArgs []string
+	r.UpdatePackages = []string{"jq"}
+	r.Run = func(_ context.Context, _, _, _ string, args ...string) ([]byte, error) {
+		gotArgs = args
+		return []byte(dnfOutput([3]string{"jq", "1.7.1-50.amzn2023", "j2"}, [3]string{"oniguruma", "6.9.7-1.amzn2023", "o1"}, [3]string{"openssl", "3.0.8-1.amzn2023", "s1"})), nil
+	}
+	l, err := r.Lock(context.Background(), m, o, old, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(gotArgs, " "); got != "--pin=oniguruma=oniguruma-0:6.9.7-1.amzn2023.aarch64 --pin=openssl=openssl-0:3.0.8-1.amzn2023.aarch64 jq openssl" {
+		t.Errorf("dnf args: %s", got)
+	}
+	if got := strings.Join(lock.Changes(old, l), "\n"); got != "package jq: 1.7.1-49.amzn2023 → 1.7.1-50.amzn2023" {
+		t.Errorf("changes: %s", got)
+	}
+
+	// The new jq needs a newer oniguruma, which dnf took: fail, naming it.
+	r.Run = func(context.Context, string, string, string, ...string) ([]byte, error) {
+		return []byte(dnfOutput([3]string{"jq", "1.7.1-50.amzn2023", "j2"}, [3]string{"oniguruma", "6.9.7-2.amzn2023", "o2"}, [3]string{"openssl", "3.0.8-1.amzn2023", "s1"})), nil
+	}
+	if _, err := r.Lock(context.Background(), m, o, old, false); err == nil ||
+		!strings.Contains(err.Error(), "oniguruma would move from 6.9.7-1.amzn2023 to 6.9.7-2.amzn2023") ||
+		!strings.Contains(err.Error(), "--update-package jq,oniguruma") {
+		t.Errorf("expected oniguruma to block, got %v", err)
+	}
+}
+
+func TestMentions(t *testing.T) {
+	for _, c := range []struct {
+		entry, name, mgr string
+		want             bool
+	}{
+		{"libcrypto3", "libcrypto3", lock.ManagerAPK, true},
+		{"libcrypto3=3.6.3-r4", "libcrypto3", lock.ManagerAPK, true},
+		{"libcrypto3>=3.6", "libcrypto3", lock.ManagerAPK, true},
+		{"libcrypto3-doc", "libcrypto3", lock.ManagerAPK, false},
+		{"curl=8.14.1-2", "curl", lock.ManagerAPT, true},
+		{"curl/trixie-backports", "curl", lock.ManagerAPT, true},
+		{"curlie", "curl", lock.ManagerAPT, false},
+		{"openssl-libs-3.0.8-1.amzn2023", "openssl-libs", lock.ManagerDNF, true},
+		{"openssl-libs.aarch64", "openssl-libs", lock.ManagerDNF, true},
+		{"openssl-libs", "openssl", lock.ManagerDNF, false},
+		{"python3.14", "python3", lock.ManagerDNF, false},
+	} {
+		if got := mentions(c.entry, c.name, c.mgr); got != c.want {
+			t.Errorf("mentions(%q, %q, %s) = %v", c.entry, c.name, c.mgr, got)
+		}
 	}
 }
