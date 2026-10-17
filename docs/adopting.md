@@ -232,7 +232,8 @@ and app repositories extend it.
 
 **Publish it** from the platform repository. Keep the shared profile in a
 file of its own: it leaves out what differs per repository, which the
-platform repository's own `factory.org.yaml` sets.
+platform repository's own `factory.org.yaml` sets (it extends the shared
+profile by path; [below](#the-platform-repository-extends-it-by-path)).
 
 ```yaml
 # org/profile.yaml: what every repository shares
@@ -372,6 +373,39 @@ the field, not a silent override, so what the file says is what applies:
 | `policy.requiredLabels` | Union |
 | `policy.allowedHosts`, `policy.allowedRegistries` | The repository's list, when it sets one, must lie within the shared one (a host or `.suffix` the shared list allows; a registry prefix under a shared one) |
 | `vulnerabilities.vex` | The shared profile's statements apply to every scan. The repository's (its profile's `vex` and its manifests' `spec.vex`) are refused unless the shared profile sets `vulnerabilities.allowLocalVEX: true`: a statement that a vulnerability doesn't apply lets an image past the gate |
+
+### The platform repository extends it by path
+
+The platform repository builds images too (its stacks, its tools), under
+the profile it publishes. Its own `factory.org.yaml` extends that file by
+path, so it can't drift from what it publishes and works before the first
+publish:
+
+```yaml
+# factory.org.yaml in the platform repository
+apiVersion: factory.clearcutt.dev/v1alpha1
+kind: OrgProfile
+extends:
+  path: org/profile.yaml             # relative to this file
+registry: ghcr.io/acme/platform
+```
+
+The same merge rules apply as for a published profile. There is no signer
+(`signer` or `signers` with `path` is an error, as is `path` with `ref`):
+it is the repository's own file, reviewed with the rest of the
+repository, so nothing is verified. The path, and every file the shared
+profile names (trust policy, keys, VEX), must be inside the repository: the
+directory holding `.git` above `factory.org.yaml`, or `factory.org.yaml`'s
+own directory outside a git checkout.
+
+Each manifest's lock pins it as `profile: {path, digest}`. The digest is
+the one `profile push` publishes the profile at, computed the same way
+(the profile and the files it names, packed as one artifact), so it covers
+the files the profile names as well as the profile, and once published it
+equals the published digest. When the profile or one of its files changes,
+the lock is stale until `lock` pins the new digest; `lock` (unlike for a
+published profile, whose pin only `lock --update` moves) always pins the
+file as it is.
 
 ## Who signs, and binding signatures to your repository
 

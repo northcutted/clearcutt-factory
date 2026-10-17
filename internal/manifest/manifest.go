@@ -327,7 +327,7 @@ func merge(parent, child *Manifest) *Manifest {
 // profile, and validates the result.
 func (m *Manifest) ApplyOrg(o *Org) error {
 	if o.Shared != nil && !o.Vulnerabilities.AllowLocalVEX && len(m.Spec.VEX) > 0 {
-		return fmt.Errorf("spec.vex: the shared profile %s doesn't take VEX statements from the repositories that extend it (vulnerabilities.allowLocalVEX); add them to the shared profile", o.Shared.Ref)
+		return fmt.Errorf("spec.vex: the shared profile %s doesn't take VEX statements from the repositories that extend it (vulnerabilities.allowLocalVEX); add them to the shared profile", o.Shared.Name())
 	}
 	if m.Kind == KindApp {
 		if err := m.applyStack(o); err != nil {

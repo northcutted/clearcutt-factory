@@ -76,26 +76,44 @@
     },
     "extends": {
       "additionalProperties": false,
-      "description": "Extends is a shared org profile, published with clearcutt-factory profile push, that this one builds on: what it sets is fixed, this profile adds what it leaves to each repository, and may tighten (never loosen) its gate and policy. Each manifest's lock pins its digest.",
+      "description": "Extends is a shared org profile, published with clearcutt-factory profile push (or this repository's own, by path), that this one builds on: what it sets is fixed, this profile adds what it leaves to each repository, and may tighten (never loosen) its gate and policy. Each manifest's lock pins its digest.",
       "oneOf": [
         {
           "properties": {
+            "path": false,
             "signers": false
           },
           "required": [
+            "ref",
             "signer"
           ]
         },
         {
           "properties": {
+            "path": false,
             "signer": false
           },
           "required": [
+            "ref",
             "signers"
+          ]
+        },
+        {
+          "properties": {
+            "ref": false,
+            "signer": false,
+            "signers": false
+          },
+          "required": [
+            "path"
           ]
         }
       ],
       "properties": {
+        "path": {
+          "description": "Path is a shared profile in this repository, relative to this profile, e.g. org/profile.yaml: for the platform repository that publishes it, so it builds on what it publishes. It is this repository's own file, so it names no signer and isn't verified; the same merge rules apply. It and the files it names must be inside the repository. Each manifest's lock pins the digest profile push would publish it at, so a lock goes stale when it changes. Set ref or path, not both.",
+          "type": "string"
+        },
         "ref": {
           "description": "Ref is the shared profile, e.g. ghcr.io/acme/factory/org:1. Each manifest's lock pins the digest it resolved to, and lock --update moves it.",
           "type": "string"
@@ -196,9 +214,6 @@
           "type": "array"
         }
       },
-      "required": [
-        "ref"
-      ],
       "type": "object"
     },
     "kind": {

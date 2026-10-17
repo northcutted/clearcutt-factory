@@ -103,9 +103,13 @@ func signedBy(ctx context.Context, v manifest.VerifyIdentity, ref string) bool {
 // loadOrg loads the org profile for startDir (or --org). A shared profile
 // it extends is fetched at the digest pin returns for its reference (where
 // the reference points now when pin is nil or returns "") and verified
-// against extends.signer (or any of extends.signers).
+// against extends.signer (or any of extends.signers); the repository's own
+// (extends.path) is packed as profile push would publish it.
 func loadOrg(ctx context.Context, opts Options, startDir string, pin func(ref string) string) (*manifest.Org, error) {
 	return manifest.LoadOrgWith(opts.OrgPath, startDir, func(e manifest.Extends) (string, string, error) {
+		if e.Path != "" {
+			return localProfile(e.Path)
+		}
 		digest := ""
 		if pin != nil {
 			digest = pin(e.Ref)
@@ -152,6 +156,39 @@ func fetchProfile(ctx context.Context, e manifest.Extends, digest string) (path,
 	}); err != nil {
 		return "", "", fmt.Errorf("%s is not signed by %s: %w", pinned, e.SignerField(), err)
 	}
+	return unpackedProfile(digest, func() ([]registry.File, error) {
+		files, got, err := registry.FetchFiles(ctx, pinned, manifest.ProfileArtifactType)
+		if err == nil && got != digest {
+			err = fmt.Errorf("%s resolved to %s", pinned, got)
+		}
+		return files, err
+	})
+}
+
+// localProfile packs the repository's own shared profile at path (from
+// extends.path) as profile push would, and returns it unpacked and the
+// digest profile push would publish it at. It isn't signed: it is the
+// repository's own file.
+func localProfile(path string) (string, string, error) {
+	_, bundled, err := manifest.PackProfile(path)
+	if err != nil {
+		return "", "", err
+	}
+	files := make([]registry.File, len(bundled))
+	for i, f := range bundled {
+		files[i] = registry.File{Name: f.Name, MediaType: f.MediaType, Content: f.Content}
+	}
+	digest, err := registry.FilesDigest(manifest.ProfileArtifactType, files)
+	if err != nil {
+		return "", "", err
+	}
+	return unpackedProfile(digest, func() ([]registry.File, error) { return files, nil })
+}
+
+// unpackedProfile returns the factory.org.yaml of the shared profile at
+// digest, unpacked in the local cache with the files it names, getting
+// the files with get when it isn't cached.
+func unpackedProfile(digest string, get func() ([]registry.File, error)) (path, d string, err error) {
 	base, err := cacheDir("profiles")
 	if err != nil {
 		return "", "", err
@@ -161,12 +198,9 @@ func fetchProfile(ctx context.Context, e manifest.Extends, digest string) (path,
 	if _, err := os.Stat(path); err == nil {
 		return path, digest, nil
 	}
-	files, got, err := registry.FetchFiles(ctx, pinned, manifest.ProfileArtifactType)
+	files, err := get()
 	if err != nil {
 		return "", "", err
-	}
-	if got != digest {
-		return "", "", fmt.Errorf("%s resolved to %s", pinned, got)
 	}
 	// Unpack beside the cache entry, then move it in, so a cached profile
 	// is always complete.
@@ -179,7 +213,7 @@ func fetchProfile(ctx context.Context, e manifest.Extends, digest string) (path,
 	for _, f := range files {
 		if f.Name == manifest.OrgFileName {
 			if f.MediaType != manifest.ProfileMediaType {
-				return "", "", fmt.Errorf("%s: %s is a %s, not an org profile", pinned, f.Name, f.MediaType)
+				return "", "", fmt.Errorf("%s: %s is a %s, not an org profile", digest, f.Name, f.MediaType)
 			}
 			profile = true
 		}
@@ -192,7 +226,7 @@ func fetchProfile(ctx context.Context, e manifest.Extends, digest string) (path,
 		}
 	}
 	if !profile {
-		return "", "", fmt.Errorf("%s has no %s", pinned, manifest.OrgFileName)
+		return "", "", fmt.Errorf("%s has no %s", digest, manifest.OrgFileName)
 	}
 	if err := os.Rename(tmp, dir); err != nil {
 		if _, serr := os.Stat(path); serr != nil {

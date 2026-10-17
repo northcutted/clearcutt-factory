@@ -21,9 +21,10 @@ type Org struct {
 	APIVersion string `yaml:"apiVersion"`
 	Kind       string `yaml:"kind"`
 	// Extends is a shared org profile, published with clearcutt-factory
-	// profile push, that this one builds on: what it sets is fixed, this
-	// profile adds what it leaves to each repository, and may tighten (never
-	// loosen) its gate and policy. Each manifest's lock pins its digest.
+	// profile push (or this repository's own, by path), that this one
+	// builds on: what it sets is fixed, this profile adds what it leaves to
+	// each repository, and may tighten (never loosen) its gate and policy.
+	// Each manifest's lock pins its digest.
 	Extends         *Extends        `yaml:"extends,omitempty"`
 	Registry        string          `yaml:"registry,omitempty"`
 	Tags            []string        `yaml:"tags,omitempty"`

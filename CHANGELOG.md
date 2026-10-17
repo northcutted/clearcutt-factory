@@ -24,6 +24,19 @@ locks pin versions the new one signed; from then on a version only the old
 signer signed fails to load. Each signer is checked as `signer` is (no
 `sourceMatchesImage`).
 
+**The platform repository can extend the profile it publishes by path
+([#55](https://github.com/northcutted/clearcutt-factory/issues/55)).**
+`extends: {path: org/profile.yaml}` extends the repository's own shared
+profile, so the platform repository builds under what it publishes (even
+before the first publish) instead of a copy that can drift. The merge rules
+are the same. It names no signer and nothing is verified, since it is the
+repository's own file; `path` with `ref`, `signer`, or `signers` is an
+error, and the path and every file the profile names must be inside the
+repository. Each lock pins it as `profile: {path, digest}`, where the digest
+is the one `profile push` publishes it at (so it covers the trust policy,
+keys, and VEX it names, and matches the published digest); the lock is
+stale when any of them changes, until `lock` pins the new digest.
+
 ## v0.2.0
 
 **Rebased images get SLSA build provenance

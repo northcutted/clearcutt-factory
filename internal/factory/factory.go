@@ -90,10 +90,14 @@ func loadLocked(ctx context.Context, opts Options) (*manifest.Manifest, *manifes
 		return nil, nil, nil, fmt.Errorf("%s is stale (the manifest or org builder settings changed); run clearcutt-factory lock", filepath.Base(m.LockPath()))
 	}
 	switch sp := org.Shared; {
-	case sp != nil && (l.Profile == nil || l.Profile.Ref != sp.Ref):
-		return nil, nil, nil, fmt.Errorf("%s is stale (it doesn't pin the shared profile %s the org profile extends); run clearcutt-factory lock", filepath.Base(m.LockPath()), sp.Ref)
+	case sp != nil && (l.Profile == nil || l.Profile.Ref != sp.Ref || l.Profile.Path != sp.Path):
+		return nil, nil, nil, fmt.Errorf("%s is stale (it doesn't pin the shared profile %s the org profile extends); run clearcutt-factory lock", filepath.Base(m.LockPath()), sp.Name())
 	case sp == nil && l.Profile != nil:
-		return nil, nil, nil, fmt.Errorf("%s is stale (it pins the shared profile %s, which the org profile no longer extends); run clearcutt-factory lock", filepath.Base(m.LockPath()), l.Profile.Ref)
+		return nil, nil, nil, fmt.Errorf("%s is stale (it pins the shared profile %s, which the org profile no longer extends); run clearcutt-factory lock", filepath.Base(m.LockPath()), l.Profile.Name())
+	case sp != nil && l.Profile.Digest != sp.Digest:
+		// The repository's own shared profile (extends.path) changed since
+		// the lock pinned it. (A published one loads at the digest pinned.)
+		return nil, nil, nil, fmt.Errorf("%s is stale (the shared profile %s changed since it was pinned at %s); run clearcutt-factory lock", filepath.Base(m.LockPath()), sp.Name(), l.Profile.Digest)
 	}
 	return m, org, l, nil
 }

@@ -446,7 +446,10 @@ at that moment.
 [docs/adopting.md](docs/adopting.md#6-one-org-profile-for-every-repository)
 has the full rules and why the signer is stated in the app repository.
 `clearcutt-factory init --extends REF --extends-identity ID` sets a
-repository up this way.
+repository up this way. The platform repository extends the profile it
+publishes by path (`extends: {path: org/profile.yaml}`), under the same
+rules and with no signer, since it is its own file; its locks pin the digest
+`profile push` publishes it at.
 
 ## What makes it reproducible
 

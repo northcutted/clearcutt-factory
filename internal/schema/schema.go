@@ -140,12 +140,12 @@ func (g *gen) object(t reflect.Type) map[string]any {
 // constraints add what the fields alone don't say: which of a type's
 // optional fields go together.
 var constraints = map[reflect.Type]func(o map[string]any){
-	// extends: ref with signer or signers (not both).
+	// extends: ref with signer or signers (not both), or path alone.
 	reflect.TypeOf(manifest.Extends{}): func(o map[string]any) {
-		o["required"] = []string{"ref"}
 		o["oneOf"] = []any{
-			map[string]any{"required": []string{"signer"}, "properties": map[string]any{"signers": false}},
-			map[string]any{"required": []string{"signers"}, "properties": map[string]any{"signer": false}},
+			map[string]any{"required": []string{"ref", "signer"}, "properties": map[string]any{"path": false, "signers": false}},
+			map[string]any{"required": []string{"ref", "signers"}, "properties": map[string]any{"path": false, "signer": false}},
+			map[string]any{"required": []string{"path"}, "properties": map[string]any{"ref": false, "signer": false, "signers": false}},
 		}
 		o["properties"].(map[string]any)["signers"].(map[string]any)["minItems"] = 1
 	},

@@ -230,7 +230,7 @@ func TestSharedProfileEnforced(t *testing.T) {
 	lockPath := filepath.Join(w.dir, "team/img/image.lock.yaml")
 	pin := func(digest string) []byte {
 		t.Helper()
-		l := &lock.Lock{APIVersion: manifest.APIVersion, Kind: lock.Kind, Profile: &lock.Image{Ref: w.host + "/factory/org:1", Digest: digest}}
+		l := &lock.Lock{APIVersion: manifest.APIVersion, Kind: lock.Kind, Profile: &lock.Profile{Ref: w.host + "/factory/org:1", Digest: digest}}
 		if err := l.Write(lockPath); err != nil {
 			t.Fatal(err)
 		}
@@ -332,7 +332,7 @@ func TestSharedProfileSignerRotation(t *testing.T) {
 	opts.ManifestPath = filepath.Join(w.dir, "team/img/image.yaml")
 	pin := func(digest string) {
 		t.Helper()
-		l := &lock.Lock{APIVersion: manifest.APIVersion, Kind: lock.Kind, Profile: &lock.Image{Ref: w.host + "/factory/org:1", Digest: digest}}
+		l := &lock.Lock{APIVersion: manifest.APIVersion, Kind: lock.Kind, Profile: &lock.Profile{Ref: w.host + "/factory/org:1", Digest: digest}}
 		if err := l.Write(filepath.Join(w.dir, "team/img/image.lock.yaml")); err != nil {
 			t.Fatal(err)
 		}
@@ -462,6 +462,97 @@ func TestSharedProfileLock(t *testing.T) {
 	w.write("team/factory.org.yaml", "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nregistry: "+w.host+"/team\nbuilder: {buildkit: "+w.host+"/buildkit:1, frontend: "+w.host+"/frontend:1, toolbox: "+w.host+"/toolbox:1}\n")
 	if err := Render(w.ctx, opts, true, ""); err == nil || !strings.Contains(err.Error(), "no longer extends") {
 		t.Errorf("pin without extends: %v", err)
+	}
+}
+
+// TestSharedProfileByPath: the platform repository extends the profile it
+// publishes by path. Nothing is verified (it is the repository's own
+// file); the lock pins the digest profile push publishes it at, and goes
+// stale when the file, or a file it names, changes.
+func TestSharedProfileByPath(t *testing.T) {
+	w := newProfileWorld(t, map[string]string{
+		"platform/.git/HEAD": "ref: refs/heads/main\n",
+		"platform/org/profile.yaml": "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\n" +
+			"builder: {buildkit: HOST/buildkit:1, frontend: HOST/frontend:1, toolbox: HOST/toolbox:1}\n" +
+			"vulnerabilities: {failOn: high, vex: [../vex/triage.json]}\n",
+		"platform/vex/triage.json": `{"@context": "https://openvex.dev/ns/v0.2.0"}`,
+		"platform/factory.org.yaml": "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\n" +
+			"extends: {path: org/profile.yaml}\nregistry: HOST/platform\n",
+		"platform/img/image.yaml": "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Image\nmetadata: {name: img}\nspec:\n  base: HOST/base:1\n  platforms: [linux/amd64]\n",
+	})
+	for _, r := range []string{"base", "buildkit", "frontend", "toolbox"} {
+		w.image(r)
+	}
+	cosign := newFakeCosign(t, "nobody")
+	opts := w.opts()
+	opts.ManifestPath = filepath.Join(w.dir, "platform/img/image.yaml")
+	lockPath := filepath.Join(w.dir, "platform/img/image.lock.yaml")
+	read := func() *lock.Lock {
+		t.Helper()
+		l, err := lock.Read(lockPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+
+	if err := Lock(w.ctx, opts, LockOptions{}); err != nil {
+		t.Fatalf("lock: %v\n%s", err, w.out.String())
+	}
+	// The pin is the digest profile push publishes the profile at.
+	published := w.push("platform/org/profile.yaml")
+	if p := read().Profile; p == nil || p.Path != "org/profile.yaml" || p.Ref != "" || p.Digest != published {
+		t.Fatalf("lock pins %+v, want org/profile.yaml at %s", p, published)
+	}
+	if !strings.Contains(w.out.String(), "shared profile org/profile.yaml: pinned at") {
+		t.Errorf("lock output:\n%s", w.out.String())
+	}
+	_, org, err := load(w.ctx, opts, false)
+	if err != nil || org.Vulnerabilities.FailOn != "high" || len(org.Vulnerabilities.VEXFiles) != 1 || org.Registry != w.host+"/platform" || org.Builder.BuildKit != w.host+"/buildkit:1" {
+		t.Fatalf("load: %v", err)
+	}
+	if err := Render(w.ctx, opts, true, ""); err != nil {
+		t.Errorf("render --check: %v", err)
+	}
+	if c := cosign.calls(); len(c) != 0 {
+		t.Errorf("cosign ran on the repository's own profile: %q", c)
+	}
+
+	// The same merge rules.
+	w.write("platform/factory.org.yaml", "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nextends: {path: org/profile.yaml}\nregistry: "+w.host+"/platform\nvulnerabilities: {failOn: critical}\n")
+	if err := Render(w.ctx, opts, true, ""); err == nil || !strings.Contains(err.Error(), "vulnerabilities.failOn: critical is looser") {
+		t.Errorf("loosening: %v", err)
+	}
+	w.write("platform/factory.org.yaml", "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nextends: {path: org/profile.yaml}\nregistry: "+w.host+"/platform\n")
+
+	// A changed file it names makes the lock stale; lock pins the new
+	// digest.
+	w.write("platform/vex/triage.json", `{"@context": "https://openvex.dev/ns/v0.2.0", "statements": []}`)
+	if err := Render(w.ctx, opts, true, ""); err == nil || !strings.Contains(err.Error(), "is stale (the shared profile org/profile.yaml changed since it was pinned at "+published+")") {
+		t.Errorf("changed VEX: %v", err)
+	}
+	w.out.Reset()
+	if err := Lock(w.ctx, opts, LockOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	moved := read().Profile.Digest
+	if want := "shared profile org/profile.yaml: sha256:" + published[7:19] + " → sha256:" + moved[7:19]; moved == published || !strings.Contains(w.out.String(), want) {
+		t.Errorf("lock output lacks %q:\n%s", want, w.out.String())
+	}
+	if err := Render(w.ctx, opts, true, ""); err != nil {
+		t.Errorf("render --check after lock: %v", err)
+	}
+	if moved != w.push("platform/org/profile.yaml") {
+		t.Error("the pin isn't the digest profile push publishes")
+	}
+
+	// Moving to the published profile: the lock pins it by path, not
+	// by reference, so it is stale.
+	w.write("platform/factory.org.yaml", "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nextends: {ref: "+w.host+"/factory/org:1, signer: {certificateIdentity: "+profileIdentity+", certificateOIDCIssuer: "+ghIssuer+"}}\nregistry: "+w.host+"/platform\n")
+	_ = os.WriteFile(cosign.path+".identity", []byte("--certificate-identity "+profileIdentity), 0o644)
+	_ = os.WriteFile(cosign.path+".signed", []byte(w.host+"/factory/org@"+moved+"\n"), 0o644)
+	if err := Render(w.ctx, opts, true, ""); err == nil || !strings.Contains(err.Error(), "doesn't pin the shared profile "+w.host+"/factory/org:1") {
+		t.Errorf("path pin, ref extends: %v", err)
 	}
 }
 
