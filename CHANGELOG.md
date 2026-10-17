@@ -3,7 +3,7 @@
 ClearCutt Factory is pre-1.0; see [docs/stability.md](docs/stability.md) for
 what may change between releases.
 
-## Unreleased
+## v0.3.0
 
 **`lock --update-package` moves only the packages it names
 ([#59](https://github.com/northcutted/clearcutt-factory/issues/59)).**
