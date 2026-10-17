@@ -380,6 +380,141 @@ func TestExtendsNamesItsSigner(t *testing.T) {
 	}
 }
 
+// TestExtendsSigners: extends.signers names several signers, any one of
+// which may sign the shared profile (to rotate it); signer is the form with
+// one. Each is checked as signer is.
+func TestExtendsSigners(t *testing.T) {
+	sharedDir := writeFiles(t, map[string]string{OrgFileName: sharedProfile, "vex/platform.json": "{}"})
+	var got Extends
+	load := func(e Extends) (string, string, error) {
+		got = e
+		return filepath.Join(sharedDir, OrgFileName), testSharedDigest, nil
+	}
+	keyless := "{certificateIdentity: " + testProfileSigner + ", certificateOIDCIssuer: " + testIssuer + "}"
+	for _, c := range []struct{ name, body, want string }{
+		{"signers", "signers:\n    - {key: keys/old.pub}\n    - " + keyless + "\n", ""},
+		{"signer and signers", "signer: {key: keys/old.pub}\n  signers: [{key: keys/new.pub}]\n", "set signer or signers, not both"},
+		{"no signers", "signers: []\n", "signers is empty"},
+		{"an empty signer", "signers: [{key: keys/old.pub}, {}]\n", "signers[1] names no signer"},
+		{"sourceMatchesImage", "signers: [{key: k.pub}, {certificateIdentity: x, certificateOIDCIssuer: " + testIssuer + ", sourceMatchesImage: true}]\n", "signers[1]: sourceMatchesImage only applies to images"},
+		{"a keyless signer without issuer", "signers: [{certificateIdentity: x}]\n", "signers[0]: a certificate identity needs certificateOIDCIssuer"},
+		{"a signer with key and identity", "signers: [{key: k.pub, certificateIdentity: x, certificateOIDCIssuer: " + testIssuer + "}]\n", "signers[0]: set a key or a certificate identity, not both"},
+	} {
+		got = Extends{}
+		dir := writeFiles(t, map[string]string{OrgFileName: "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nextends:\n  ref: registry.example/factory/org:1\n  " + c.body})
+		o, err := LoadOrgWith(filepath.Join(dir, OrgFileName), "", load)
+		if c.want != "" {
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("%s: %v, want %q", c.name, err, c.want)
+			}
+			if got.Ref != "" {
+				t.Errorf("%s: the shared profile was loaded", c.name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		// Every signer reaches the loader, key files relative to the
+		// profile that names them.
+		all := got.AllSigners()
+		if len(all) != 2 || all[0].Key != filepath.Join(dir, "keys/old.pub") || all[1].CertificateIdentity != testProfileSigner || got.SignerField() != "any of extends.signers" {
+			t.Errorf("%s: signers %+v", c.name, all)
+		}
+		if o.Shared == nil || o.Vulnerabilities.FailOn != "high" {
+			t.Errorf("%s: shared profile not applied", c.name)
+		}
+	}
+
+	// signer is signers with one entry.
+	e := Extends{Ref: "r/org:1", Signer: VerifyIdentity{Key: "k.pub"}}
+	if all := e.AllSigners(); len(all) != 1 || all[0].Key != "k.pub" || e.SignerField() != "extends.signer" {
+		t.Errorf("signer: %+v", all)
+	}
+}
+
+// TestExtendsByPath: the repository that publishes a shared profile can
+// extend it by path, with the same merge rules and no signer; it and the
+// files it names must be inside the repository.
+func TestExtendsByPath(t *testing.T) {
+	const header = "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\n"
+	shared := strings.Replace(sharedProfile, "vex/platform.json", "../vex/platform.json", 1)
+	base := writeFiles(t, map[string]string{
+		"repo/.git/HEAD":             "ref: refs/heads/main\n",
+		"repo/org/profile.yaml":      shared,
+		"repo/vex/platform.json":     "{}",
+		"repo/factory.org.yaml":      header + "extends: {path: org/profile.yaml}\nregistry: ghcr.io/acme/platform\n",
+		"repo/apps/factory.org.yaml": header + "extends: {path: ../org/profile.yaml}\n",
+		"other/profile.yaml":         shared,
+		"repo/org/outside.yaml":      strings.Replace(shared, "../vex/platform.json", "../../other/platform.json", 1),
+		"other/platform.json":        "{}",
+		"norepo/factory.org.yaml":    header + "extends: {path: ../other/profile.yaml}\n",
+	})
+	repo := filepath.Join(base, "repo")
+	var got Extends
+	// As the factory's loader would, unpacked elsewhere; here, read in
+	// place (its files are inside its directory once packed).
+	load := func(e Extends) (string, string, error) {
+		got = e
+		files := map[string]string{OrgFileName: strings.Replace(shared, "../vex/platform.json", "vex/platform.json", 1), "vex/platform.json": "{}"}
+		return filepath.Join(writeFiles(t, files), OrgFileName), testSharedDigest, nil
+	}
+	o, err := LoadOrgWith(filepath.Join(repo, OrgFileName), "", load)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != filepath.Join(repo, "org/profile.yaml") || got.Ref != "" {
+		t.Errorf("loader got %+v", got)
+	}
+	if sp := o.Shared; sp == nil || sp.Path != "org/profile.yaml" || sp.Ref != "" || sp.Name() != "org/profile.yaml" || sp.Digest != testSharedDigest {
+		t.Errorf("shared profile recorded as %+v", o.Shared)
+	}
+	if o.Registry != "ghcr.io/acme/platform" || o.Vulnerabilities.FailOn != "high" || !o.Policy.RequireSignedStacks {
+		t.Errorf("not merged: %+v", o)
+	}
+	// From a directory below it, up and back into the repository.
+	if _, err := LoadOrgWith(filepath.Join(repo, "apps", OrgFileName), "", load); err != nil {
+		t.Errorf("from apps/: %v", err)
+	}
+
+	// The same merge rules.
+	write := func(dir, body string) string {
+		t.Helper()
+		p := filepath.Join(dir, OrgFileName)
+		if err := os.WriteFile(p, []byte(header+body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	if _, err := LoadOrgWith(write(repo, "extends: {path: org/profile.yaml}\nvulnerabilities: {failOn: critical}\n"), "", load); err == nil || !strings.Contains(err.Error(), "extends org/profile.yaml, which this profile may only add to and tighten") || !strings.Contains(err.Error(), "looser") {
+		t.Errorf("loosening by path: %v", err)
+	}
+
+	if err := os.Symlink(filepath.Join(base, "other/profile.yaml"), filepath.Join(repo, "org/link.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ name, dir, body, want string }{
+		{"path and ref", repo, "extends: {path: org/profile.yaml, ref: r/org:1}\n", "set ref (a published shared profile) or path (this repository's own), not both"},
+		{"path and signer", repo, "extends: {path: org/profile.yaml, signer: {key: k.pub}}\n", "remove signer and signers"},
+		{"path and signers", repo, "extends: {path: org/profile.yaml, signers: [{key: k.pub}]}\n", "remove signer and signers"},
+		{"an absolute path", repo, "extends: {path: " + filepath.Join(repo, "org/profile.yaml") + "}\n", "must be relative to this profile"},
+		{"outside the repository", repo, "extends: {path: ../other/profile.yaml}\n", "is outside the repository"},
+		{"a symlink out of the repository", repo, "extends: {path: org/link.yaml}\n", "is outside the repository"},
+		{"a file it names outside the repository", repo, "extends: {path: org/outside.yaml}\n", "vulnerabilities.vex[0]: " + filepath.Join(base, "other/platform.json") + " is outside the repository"},
+		{"no repository: outside the profile's directory", filepath.Join(base, "norepo"), "extends: {path: ../other/profile.yaml}\n", "is outside the repository"},
+		{"missing", repo, "extends: {path: org/missing.yaml}\n", "missing.yaml"},
+	} {
+		got = Extends{}
+		_, err := LoadOrgWith(write(c.dir, c.body), "", load)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", c.name, err, c.want)
+		}
+		if got.Path != "" {
+			t.Errorf("%s: loaded", c.name)
+		}
+	}
+}
+
 // TestPackProfile: the published profile carries the files it names,
 // renamed inside the artifact, and depends only on content.
 func TestPackProfile(t *testing.T) {

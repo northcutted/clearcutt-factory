@@ -273,7 +273,8 @@ and app repositories extend it.
 
 **Publish it** from the platform repository. Keep the shared profile in a
 file of its own: it leaves out what differs per repository, which the
-platform repository's own `factory.org.yaml` sets.
+platform repository's own `factory.org.yaml` sets (it extends the shared
+profile by path; [below](#the-platform-repository-extends-it-by-path)).
 
 ```yaml
 # org/profile.yaml: what every repository shares
@@ -352,20 +353,77 @@ CODEOWNERS. It isn't a role in a local trust policy: the trust policy is
 part of what the shared profile provides, and its roles (`image`, `stack`)
 are shared with clearcutt-verify.
 
+**Rotating the shared profile's signer.** `extends.signers` lists several
+signers, any one of which may sign the shared profile (`signer` is the
+same with one entry; set one or the other). To move to a new key, or to a
+workflow that was moved or renamed, without changing every repository at
+the moment of the switch:
+
+1. Each repository lists the new signer beside the old one:
+
+   ```yaml
+   extends:
+     ref: ghcr.io/acme/factory/org:1
+     signers:
+       - certificateIdentity: https://github.com/acme/platform/.github/workflows/profile.yml@refs/heads/main
+         certificateOIDCIssuer: https://token.actions.githubusercontent.com
+       - certificateIdentity: https://github.com/acme/platform/.github/workflows/publish-profile.yml@refs/heads/main
+         certificateOIDCIssuer: https://token.actions.githubusercontent.com
+   ```
+
+2. The platform publishes with the new signer (and changes `signing.profile`
+   to it). Locks pinning an older version still load, since the old signer
+   signed it; `lock --update` moves them to a version the new one signed.
+3. Once every lock pins a version the new signer signed, each repository
+   drops the old signer. A version only the old signer signed then fails to
+   load, so a leaked old key stops counting.
+
 **Pinned, and checked on every load.** Each manifest's lock records the
 digest the shared profile resolved to (`profile: {ref, digest}`), as it
 does for a registry stack. Every command that loads the manifest (`lock`,
 `render`, `build`, `verify`, `rebase`) uses that digest and checks its
-signature against `extends.signer` each time, so an unsigned or tampered
-profile, or one signed by someone else, fails closed, including in a pull
-request that edits the lock. `lock` keeps the pin; `lock --update` (the
-weekly job, or a `clearcutt.profile-published` notice) moves it, in a pull
-request whose description names the new digest. Moving the pin alone
+signature against `extends.signer` (or `signers`), so an unsigned or
+tampered profile, or one signed by someone else, fails closed, including in
+a pull request that edits the lock. `lock` keeps the pin; `lock --update`
+(the weekly job, or a `clearcutt.profile-published` notice) moves it, in a
+pull request whose description names the new digest. Moving the pin alone
 doesn't change the build timestamp, so images change only if what the
 profile sets shapes them (the builder, labels). A lock that doesn't pin the
 profile its org profile extends is stale. Commands without a manifest
 (`verify --image`, `rebase --image`, `stack push`) follow the tag, checked
-the same way. Loading needs the registry and `cosign`.
+the same way.
+
+**On your machine, a check counts for a day.** Outside CI, a successful
+signature check is remembered for 24 hours in the user cache directory
+(`clearcutt-factory/verified/`), per pinned digest and signer, so commands
+don't run `cosign` (and reach the registry and the transparency log) on
+every load, and a pinned profile loads offline. CI always checks: with
+`CI=true` or `GITHUB_ACTIONS=true`, every load runs `cosign`, as do
+`--reverify` and `CLEARCUTT_FACTORY_REVERIFY=1` anywhere
+(`CLEARCUTT_FACTORY_REVERIFY=0` lets a CI job reuse checks). `init
+--extends` always checks. Failures are never remembered. What is skipped
+is only `cosign`:
+
+* The profile itself is still read at the pinned digest, from the
+  registry or from the cache (`clearcutt-factory/profiles/`), which keeps
+  the artifact's manifest beside its files. A cached copy is used only
+  after its manifest is checked against the digest and every file against
+  the manifest; one that doesn't match is fetched again. A record can't
+  make other content load: the digest names the content, and the record
+  only says that a signer's signature was found on that digest.
+* A record is the signer's, as written in `extends`, with a key file
+  identified by its content. Changing or removing a signer, or replacing
+  a key file in place, means checking again; a version only a removed
+  signer signed fails at once.
+* What a record can't notice for up to a day: a signature deleted from the
+  registry, a KMS alias moved to another key, or a Sigstore trust root
+  update. That is why CI, where images are published, checks every time.
+* Someone who can write your cache directory can forge a record, but not
+  change what loads at a pinned digest; and they can usually also change
+  the programs you run.
+
+Loading needs the registry and `cosign`, except for a pinned profile this
+machine has cached and checked within the day.
 
 **What a repository can and can't change.** A repository's profile may add
 what the shared profile leaves unset and tighten its gate and policy.
@@ -388,6 +446,39 @@ the field, not a silent override, so what the file says is what applies:
 | `policy.requiredLabels` | Union |
 | `policy.allowedHosts`, `policy.allowedRegistries` | The repository's list, when it sets one, must lie within the shared one (a host or `.suffix` the shared list allows; a registry prefix under a shared one) |
 | `vulnerabilities.vex` | The shared profile's statements apply to every scan. The repository's (its profile's `vex` and its manifests' `spec.vex`) are refused unless the shared profile sets `vulnerabilities.allowLocalVEX: true`: a statement that a vulnerability doesn't apply lets an image past the gate |
+
+### The platform repository extends it by path
+
+The platform repository builds images too (its stacks, its tools), under
+the profile it publishes. Its own `factory.org.yaml` extends that file by
+path, so it can't drift from what it publishes and works before the first
+publish:
+
+```yaml
+# factory.org.yaml in the platform repository
+apiVersion: factory.clearcutt.dev/v1alpha1
+kind: OrgProfile
+extends:
+  path: org/profile.yaml             # relative to this file
+registry: ghcr.io/acme/platform
+```
+
+The same merge rules apply as for a published profile. There is no signer
+(`signer` or `signers` with `path` is an error, as is `path` with `ref`):
+it is the repository's own file, reviewed with the rest of the
+repository, so nothing is verified. The path, and every file the shared
+profile names (trust policy, keys, VEX), must be inside the repository: the
+directory holding `.git` above `factory.org.yaml`, or `factory.org.yaml`'s
+own directory outside a git checkout.
+
+Each manifest's lock pins it as `profile: {path, digest}`. The digest is
+the one `profile push` publishes the profile at, computed the same way
+(the profile and the files it names, packed as one artifact), so it covers
+the files the profile names as well as the profile, and once published it
+equals the published digest. When the profile or one of its files changes,
+the lock is stale until `lock` pins the new digest; `lock` (unlike for a
+published profile, whose pin only `lock --update` moves) always pins the
+file as it is.
 
 ## Who signs, and binding signatures to your repository
 

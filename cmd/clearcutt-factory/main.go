@@ -65,6 +65,9 @@ Common flags:
   -f FILE     manifest, kind Image or App (default image.yaml, else app.yaml)
   --org FILE  org profile (default: nearest factory.org.yaml above the manifest,
               or above the current directory for rebase and verify --image)
+  --reverify  check the signature of a shared profile the org profile extends,
+              even if this machine checked it in the last 24 hours (always
+              checked in CI, and with CLEARCUTT_FACTORY_REVERIFY=1)
   -v          stream BuildKit output
 `
 
@@ -97,6 +100,7 @@ func run(ctx context.Context, args []string) error {
 	fs.StringVar(&opts.ManifestPath, "f", "image.yaml", "")
 	fs.StringVar(&opts.OrgPath, "org", "", "")
 	fs.BoolVar(&opts.Verbose, "v", false, "")
+	fs.BoolVar(&opts.Reverify, "reverify", false, "")
 
 	switch cmd {
 	case "lock":

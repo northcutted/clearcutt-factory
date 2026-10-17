@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -20,9 +21,10 @@ type Org struct {
 	APIVersion string `yaml:"apiVersion"`
 	Kind       string `yaml:"kind"`
 	// Extends is a shared org profile, published with clearcutt-factory
-	// profile push, that this one builds on: what it sets is fixed, this
-	// profile adds what it leaves to each repository, and may tighten (never
-	// loosen) its gate and policy. Each manifest's lock pins its digest.
+	// profile push (or this repository's own, by path), that this one
+	// builds on: what it sets is fixed, this profile adds what it leaves to
+	// each repository, and may tighten (never loosen) its gate and policy.
+	// Each manifest's lock pins its digest.
 	Extends         *Extends        `yaml:"extends,omitempty"`
 	Registry        string          `yaml:"registry,omitempty"`
 	Tags            []string        `yaml:"tags,omitempty"`
@@ -122,7 +124,7 @@ type Signing struct {
 	TrustPolicy string `yaml:"trustPolicy,omitempty"`
 	// Profile is who signs this profile when profile push publishes it, so
 	// that pushing it unchanged only moves its tag. Repositories that
-	// extend it trust the signer they name in extends.signer, not this.
+	// extend it trust the signers they name in extends, not this.
 	Profile VerifyIdentity `yaml:"profile,omitempty"`
 }
 
@@ -400,8 +402,12 @@ func (o *Org) resolve() error {
 	o.Signing.Verify.Key = keyPath(dir, o.Signing.Verify.Key)
 	o.Signing.Stacks.Key = keyPath(dir, o.Signing.Stacks.Key)
 	o.Signing.Profile.Key = keyPath(dir, o.Signing.Profile.Key)
-	if o.Extends != nil {
-		o.Extends.Signer.Key = keyPath(dir, o.Extends.Signer.Key)
+	if e := o.Extends; e != nil {
+		e.Signer.Key = keyPath(dir, e.Signer.Key)
+		e.Signers = slices.Clone(e.Signers)
+		for i := range e.Signers {
+			e.Signers[i].Key = keyPath(dir, e.Signers[i].Key)
+		}
 	}
 	if c := o.Builder.Config; c != "" {
 		o.Builder.Config = filePath(dir, c)
