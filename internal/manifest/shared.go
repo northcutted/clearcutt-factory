@@ -33,12 +33,17 @@ type Extends struct {
 	// Ref is the shared profile, e.g. ghcr.io/acme/factory/org:1. Each
 	// manifest's lock pins the digest it resolved to, and lock --update
 	// moves it.
-	Ref string `yaml:"ref"`
+	Ref string `yaml:"ref,omitempty"`
 	// Signer is who may sign the shared profile: a key, or a keyless
 	// certificate identity and issuer. It is stated here because the shared
 	// profile names every other signer; the profile is verified against it
-	// whenever it is loaded.
-	Signer VerifyIdentity `yaml:"signer"`
+	// whenever it is loaded. Signers names several instead.
+	Signer VerifyIdentity `yaml:"signer,omitempty"`
+	// Signers are who may sign the shared profile, any one of them, so that
+	// its signer can be rotated: list the new signer beside the old, then
+	// drop the old once every version still in use is signed by the new.
+	// Set signer or signers, not both.
+	Signers []VerifyIdentity `yaml:"signers,omitempty"`
 }
 
 // UnmarshalYAML explains a bare reference, and refuses unknown fields as
@@ -60,19 +65,57 @@ func (e *Extends) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
+// AllSigners returns who may sign the shared profile: signers, or signer
+// as a list of one.
+func (e Extends) AllSigners() []VerifyIdentity {
+	if len(e.Signers) > 0 {
+		return e.Signers
+	}
+	if !e.Signer.IsZero() {
+		return []VerifyIdentity{e.Signer}
+	}
+	return nil
+}
+
+// SignerField names the field the signers come from, for messages.
+func (e Extends) SignerField() string {
+	if len(e.Signers) > 0 {
+		return "any of extends.signers"
+	}
+	return "extends.signer"
+}
+
 func (e Extends) validate() error {
 	var errs []error
 	if e.Ref == "" {
 		errs = append(errs, errors.New("ref is required: the shared profile's reference, e.g. ghcr.io/acme/factory/org:1"))
 	}
-	switch {
-	case e.Signer.IsZero():
-		errs = append(errs, errors.New("signer is required: who may sign the shared profile (a key, or certificateIdentity and certificateOIDCIssuer); the shared profile can't say who signs it"))
-	case e.Signer.SourceMatchesImage:
-		errs = append(errs, errors.New("signer: sourceMatchesImage only applies to images (a profile names no source repository); use sourceRepository"))
+	check := func(name string, v VerifyIdentity) {
+		switch {
+		case v.IsZero():
+			errs = append(errs, fmt.Errorf("%s names no signer (a key, or certificateIdentity and certificateOIDCIssuer)", name))
+			return
+		case v.SourceMatchesImage:
+			errs = append(errs, fmt.Errorf("%s: sourceMatchesImage only applies to images (a profile names no source repository); use sourceRepository", name))
+		}
+		if err := v.validate(); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", name, err))
+		}
 	}
-	if err := e.Signer.validate(); err != nil && !e.Signer.IsZero() {
-		errs = append(errs, fmt.Errorf("signer: %w", err))
+	switch {
+	case !e.Signer.IsZero() && e.Signers != nil:
+		errs = append(errs, errors.New("set signer or signers, not both (signer is signers with one entry)"))
+	case e.Signers != nil:
+		if len(e.Signers) == 0 {
+			errs = append(errs, errors.New("signers is empty: name who may sign the shared profile"))
+		}
+		for i, v := range e.Signers {
+			check(fmt.Sprintf("signers[%d]", i), v)
+		}
+	case e.Signer.IsZero():
+		errs = append(errs, errors.New("signer is required: who may sign the shared profile (a key, or certificateIdentity and certificateOIDCIssuer; signers for several); the shared profile can't say who signs it"))
+	default:
+		check("signer", e.Signer)
 	}
 	return errors.Join(errs...)
 }
@@ -84,8 +127,8 @@ type SharedProfile struct {
 	Path   string // its factory.org.yaml, unpacked with the files it names
 }
 
-// ProfileLoader fetches the shared profile e names, checks its signature
-// against e.Signer, unpacks it, and returns the path of its
+// ProfileLoader fetches the shared profile e names, checks that one of
+// e.AllSigners signed it, unpacks it, and returns the path of its
 // factory.org.yaml and the artifact's digest.
 type ProfileLoader func(e Extends) (path, digest string, err error)
 
@@ -302,7 +345,7 @@ func extendWith(s, l *Org, set keySet) (*Org, error) {
 		refuse("signing.trustPolicy: whom to trust comes from the shared profile; remove it here")
 	}
 	if !lg.Profile.IsZero() {
-		refuse("signing.profile is who signs a profile you publish; this one extends another, whose signer is extends.signer")
+		refuse("signing.profile is who signs a profile you publish; this one extends another, whose signers are in extends")
 	}
 	switch {
 	case s.Trust != nil:

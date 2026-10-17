@@ -440,6 +440,9 @@ the field. VEX statements from the repository are refused unless the shared
 profile allows them. The shared profile is checked against
 `extends.signer` whenever it is loaded, at the digest the lock pins, so an
 unsigned, tampered, or otherwise signed version never applies.
+`extends.signers` lists several signers instead, any one of which may sign
+it, so the platform can rotate its signer without every repository changing
+at that moment.
 [docs/adopting.md](docs/adopting.md#6-one-org-profile-for-every-repository)
 has the full rules and why the signer is stated in the app repository.
 `clearcutt-factory init --extends REF --extends-identity ID` sets a

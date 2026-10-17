@@ -131,7 +131,24 @@ func (g *gen) object(t reflect.Type) map[string]any {
 		sort.Strings(required)
 		o["required"] = required
 	}
+	if c := constraints[t]; c != nil {
+		c(o)
+	}
 	return o
+}
+
+// constraints add what the fields alone don't say: which of a type's
+// optional fields go together.
+var constraints = map[reflect.Type]func(o map[string]any){
+	// extends: ref with signer or signers (not both).
+	reflect.TypeOf(manifest.Extends{}): func(o map[string]any) {
+		o["required"] = []string{"ref"}
+		o["oneOf"] = []any{
+			map[string]any{"required": []string{"signer"}, "properties": map[string]any{"signers": false}},
+			map[string]any{"required": []string{"signers"}, "properties": map[string]any{"signer": false}},
+		}
+		o["properties"].(map[string]any)["signers"].(map[string]any)["minItems"] = 1
+	},
 }
 
 func mergeRequired(cur any, names ...string) []string {

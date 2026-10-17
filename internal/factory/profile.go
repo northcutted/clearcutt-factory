@@ -103,7 +103,7 @@ func signedBy(ctx context.Context, v manifest.VerifyIdentity, ref string) bool {
 // loadOrg loads the org profile for startDir (or --org). A shared profile
 // it extends is fetched at the digest pin returns for its reference (where
 // the reference points now when pin is nil or returns "") and verified
-// against extends.signer.
+// against extends.signer (or any of extends.signers).
 func loadOrg(ctx context.Context, opts Options, startDir string, pin func(ref string) string) (*manifest.Org, error) {
 	return manifest.LoadOrgWith(opts.OrgPath, startDir, func(e manifest.Extends) (string, string, error) {
 		digest := ""
@@ -126,8 +126,9 @@ func lockedProfile(m *manifest.Manifest) func(ref string) string {
 }
 
 // fetchProfile checks that the shared profile e names, at digest (or
-// where its reference points now), is signed by e.Signer, then returns its
-// unpacked factory.org.yaml from the local cache, fetching it if needed.
+// where its reference points now), is signed by one of e.AllSigners, then
+// returns its unpacked factory.org.yaml from the local cache, fetching it
+// if needed.
 // It runs on every load: a profile that isn't signed, or is signed by
 // someone else, never loads.
 func fetchProfile(ctx context.Context, e manifest.Extends, digest string) (path, d string, err error) {
@@ -138,12 +139,18 @@ func fetchProfile(ctx context.Context, e manifest.Extends, digest string) (path,
 		}
 	}
 	pinned := repo + "@" + digest
-	args, err := identityArgs(e.Signer, "")
-	if err != nil {
-		return "", "", fmt.Errorf("extends.signer: %w", err)
+	var signers [][]string
+	for _, v := range e.AllSigners() {
+		args, err := identityArgs(v, "")
+		if err != nil {
+			return "", "", fmt.Errorf("extends: %w", err)
+		}
+		signers = append(signers, args)
 	}
-	if err := attest.VerifySignature(ctx, pinned, args); err != nil {
-		return "", "", fmt.Errorf("%s is not signed by extends.signer: %w", pinned, err)
+	if _, err := firstVerified(signers, func(args []string) (struct{}, error) {
+		return struct{}{}, attest.VerifySignature(ctx, pinned, args)
+	}); err != nil {
+		return "", "", fmt.Errorf("%s is not signed by %s: %w", pinned, e.SignerField(), err)
 	}
 	base, err := cacheDir("profiles")
 	if err != nil {

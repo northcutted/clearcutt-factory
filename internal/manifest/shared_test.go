@@ -380,6 +380,59 @@ func TestExtendsNamesItsSigner(t *testing.T) {
 	}
 }
 
+// TestExtendsSigners: extends.signers names several signers, any one of
+// which may sign the shared profile (to rotate it); signer is the form with
+// one. Each is checked as signer is.
+func TestExtendsSigners(t *testing.T) {
+	sharedDir := writeFiles(t, map[string]string{OrgFileName: sharedProfile, "vex/platform.json": "{}"})
+	var got Extends
+	load := func(e Extends) (string, string, error) {
+		got = e
+		return filepath.Join(sharedDir, OrgFileName), testSharedDigest, nil
+	}
+	keyless := "{certificateIdentity: " + testProfileSigner + ", certificateOIDCIssuer: " + testIssuer + "}"
+	for _, c := range []struct{ name, body, want string }{
+		{"signers", "signers:\n    - {key: keys/old.pub}\n    - " + keyless + "\n", ""},
+		{"signer and signers", "signer: {key: keys/old.pub}\n  signers: [{key: keys/new.pub}]\n", "set signer or signers, not both"},
+		{"no signers", "signers: []\n", "signers is empty"},
+		{"an empty signer", "signers: [{key: keys/old.pub}, {}]\n", "signers[1] names no signer"},
+		{"sourceMatchesImage", "signers: [{key: k.pub}, {certificateIdentity: x, certificateOIDCIssuer: " + testIssuer + ", sourceMatchesImage: true}]\n", "signers[1]: sourceMatchesImage only applies to images"},
+		{"a keyless signer without issuer", "signers: [{certificateIdentity: x}]\n", "signers[0]: a certificate identity needs certificateOIDCIssuer"},
+		{"a signer with key and identity", "signers: [{key: k.pub, certificateIdentity: x, certificateOIDCIssuer: " + testIssuer + "}]\n", "signers[0]: set a key or a certificate identity, not both"},
+	} {
+		got = Extends{}
+		dir := writeFiles(t, map[string]string{OrgFileName: "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nextends:\n  ref: registry.example/factory/org:1\n  " + c.body})
+		o, err := LoadOrgWith(filepath.Join(dir, OrgFileName), "", load)
+		if c.want != "" {
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("%s: %v, want %q", c.name, err, c.want)
+			}
+			if got.Ref != "" {
+				t.Errorf("%s: the shared profile was loaded", c.name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		// Every signer reaches the loader, key files relative to the
+		// profile that names them.
+		all := got.AllSigners()
+		if len(all) != 2 || all[0].Key != filepath.Join(dir, "keys/old.pub") || all[1].CertificateIdentity != testProfileSigner || got.SignerField() != "any of extends.signers" {
+			t.Errorf("%s: signers %+v", c.name, all)
+		}
+		if o.Shared == nil || o.Vulnerabilities.FailOn != "high" {
+			t.Errorf("%s: shared profile not applied", c.name)
+		}
+	}
+
+	// signer is signers with one entry.
+	e := Extends{Ref: "r/org:1", Signer: VerifyIdentity{Key: "k.pub"}}
+	if all := e.AllSigners(); len(all) != 1 || all[0].Key != "k.pub" || e.SignerField() != "extends.signer" {
+		t.Errorf("signer: %+v", all)
+	}
+}
+
 // TestPackProfile: the published profile carries the files it names,
 // renamed inside the artifact, and depends only on content.
 func TestPackProfile(t *testing.T) {

@@ -311,6 +311,31 @@ CODEOWNERS. It isn't a role in a local trust policy: the trust policy is
 part of what the shared profile provides, and its roles (`image`, `stack`)
 are shared with clearcutt-verify.
 
+**Rotating the shared profile's signer.** `extends.signers` lists several
+signers, any one of which may sign the shared profile (`signer` is the
+same with one entry; set one or the other). To move to a new key, or to a
+workflow that was moved or renamed, without changing every repository at
+the moment of the switch:
+
+1. Each repository lists the new signer beside the old one:
+
+   ```yaml
+   extends:
+     ref: ghcr.io/acme/factory/org:1
+     signers:
+       - certificateIdentity: https://github.com/acme/platform/.github/workflows/profile.yml@refs/heads/main
+         certificateOIDCIssuer: https://token.actions.githubusercontent.com
+       - certificateIdentity: https://github.com/acme/platform/.github/workflows/publish-profile.yml@refs/heads/main
+         certificateOIDCIssuer: https://token.actions.githubusercontent.com
+   ```
+
+2. The platform publishes with the new signer (and changes `signing.profile`
+   to it). Locks pinning an older version still load, since the old signer
+   signed it; `lock --update` moves them to a version the new one signed.
+3. Once every lock pins a version the new signer signed, each repository
+   drops the old signer. A version only the old signer signed then fails to
+   load, so a leaked old key stops counting.
+
 **Pinned, and checked on every load.** Each manifest's lock records the
 digest the shared profile resolved to (`profile: {ref, digest}`), as it
 does for a registry stack. Every command that loads the manifest (`lock`,

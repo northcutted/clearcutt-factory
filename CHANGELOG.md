@@ -14,6 +14,16 @@ to the newest run image"); it is now "Rebuild catalog on the newest run and
 build images". The branch is the same, so a later safe rebase takes it over
 and retitles it as a pin.
 
+**A shared profile's signer can be rotated
+([#54](https://github.com/northcutted/clearcutt-factory/issues/54)).**
+`extends.signers` lists several signers, any one of which may sign the
+shared profile; `extends.signer` is the same with one entry, and setting
+both is an error. A repository lists the new signer beside the old one,
+the platform switches, and the repository drops the old signer once its
+locks pin versions the new one signed; from then on a version only the old
+signer signed fails to load. Each signer is checked as `signer` is (no
+`sourceMatchesImage`).
+
 ## v0.2.0
 
 **Rebased images get SLSA build provenance

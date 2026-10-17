@@ -302,6 +302,81 @@ func TestSharedProfileEnforced(t *testing.T) {
 	}
 }
 
+// TestSharedProfileSignerRotation: under extends.signers, a version signed
+// by any one of them loads, so the platform can move to a new signer
+// without every repository changing at that moment; once a repository
+// drops the old signer, versions only it signed no longer load.
+func TestSharedProfileSignerRotation(t *testing.T) {
+	files := sharedFiles("")
+	files["team/factory.org.yaml"] = "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\n" +
+		"extends:\n  ref: HOST/factory/org:1\n  signers:\n    - {key: keys/old.pub}\n    - {key: keys/new.pub}\nregistry: HOST/team\n"
+	files["team/keys/old.pub"] = "-----BEGIN PUBLIC KEY-----\nold\n-----END PUBLIC KEY-----\n"
+	files["team/keys/new.pub"] = "-----BEGIN PUBLIC KEY-----\nnew\n-----END PUBLIC KEY-----\n"
+	w := newProfileWorld(t, files)
+	before := w.push("platform/factory.org.yaml")
+	w.write("platform/factory.org.yaml", strings.ReplaceAll(strings.Replace(files["platform/factory.org.yaml"], "failOn: high", "failOn: medium", 1), "HOST", w.host))
+	after := w.push("platform/factory.org.yaml")
+	repo := w.host + "/factory/org"
+	oldKey, newKey := "--key "+filepath.Join(w.dir, "team/keys/old.pub"), "--key "+filepath.Join(w.dir, "team/keys/new.pub")
+	cosign := newFakeCosign(t, oldKey, repo+"@"+before)
+	signedBy := func(identity, digest string) {
+		t.Helper()
+		if err := os.WriteFile(cosign.path+".identity", []byte(identity), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(cosign.path+".signed", []byte(repo+"@"+digest+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opts := w.opts()
+	opts.ManifestPath = filepath.Join(w.dir, "team/img/image.yaml")
+	pin := func(digest string) {
+		t.Helper()
+		l := &lock.Lock{APIVersion: manifest.APIVersion, Kind: lock.Kind, Profile: &lock.Image{Ref: w.host + "/factory/org:1", Digest: digest}}
+		if err := l.Write(filepath.Join(w.dir, "team/img/image.lock.yaml")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A version the old key signed: the first signer verifies it.
+	pin(before)
+	_, org, err := load(w.ctx, opts, false)
+	if err != nil || org.Shared.Digest != before || org.Vulnerabilities.FailOn != "high" {
+		t.Fatalf("signed by the old key: %v", err)
+	}
+	if c := cosign.calls(); len(c) != 1 || !strings.Contains(c[0], oldKey+" ") {
+		t.Errorf("old key: cosign calls %q", c)
+	}
+
+	// The platform rotated: the next version is signed by the new key
+	// only. The old key doesn't verify it, the new one does.
+	signedBy(newKey, after)
+	pin(after)
+	if _, org, err = load(w.ctx, opts, false); err != nil || org.Vulnerabilities.FailOn != "medium" {
+		t.Fatalf("signed by the new key: %v", err)
+	}
+	if c := cosign.calls(); len(c) != 2 || !strings.Contains(c[0], oldKey+" ") || !strings.Contains(c[1], newKey+" ") {
+		t.Errorf("new key: cosign calls %q", c)
+	}
+
+	// The repository dropped the old key: a version only it signed no
+	// longer loads, as signers or as signer.
+	signedBy(oldKey, before)
+	pin(before)
+	for _, c := range []struct{ extends, want string }{
+		{"  signers: [{key: keys/new.pub}]\n", "is not signed by any of extends.signers"},
+		{"  signer: {key: keys/new.pub}\n", "is not signed by extends.signer"},
+	} {
+		w.write("team/factory.org.yaml", "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nextends:\n  ref: "+w.host+"/factory/org:1\n"+c.extends+"registry: "+w.host+"/team\n")
+		if _, _, err := load(w.ctx, opts, false); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: a version only the dropped signer signed: %v", strings.TrimSpace(c.extends), err)
+		}
+		if calls := cosign.calls(); len(calls) != 1 || !strings.Contains(calls[0], newKey+" ") {
+			t.Errorf("%s: cosign calls %q", strings.TrimSpace(c.extends), calls)
+		}
+	}
+}
+
 // TestSharedProfileLock: each manifest's lock pins the shared profile;
 // lock keeps the pin, lock --update moves it (without moving the build
 // timestamp), and a lock that doesn't pin it is stale.
