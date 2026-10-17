@@ -37,6 +37,22 @@ is the one `profile push` publishes it at (so it covers the trust policy,
 keys, and VEX it names, and matches the published digest); the lock is
 stale when any of them changes, until `lock` pins the new digest.
 
+**Loading a shared profile no longer runs cosign every time, outside CI
+([#56](https://github.com/northcutted/clearcutt-factory/issues/56)).**
+A successful signature check of a shared profile is remembered on the
+machine for 24 hours, per pinned digest and signer (a key file by its
+content), so commands skip `cosign` and a pinned profile loads offline. CI
+(`CI=true` or `GITHUB_ACTIONS=true`) still checks on every load, as do the
+new `--reverify` flag and `CLEARCUTT_FACTORY_REVERIFY=1`
+(`CLEARCUTT_FACTORY_REVERIFY=0` lets CI reuse checks); `init --extends`
+always checks, and failures are never remembered. Only `cosign` is
+skipped: the profile is still read at the pinned digest, and the profile
+cache now keeps each artifact's manifest beside its files and checks both
+against the digest before use, so a cached copy that was changed is
+fetched again instead of loading (before, a cached copy was trusted once
+its digest's signature checked out). Profiles cached by v0.2.0 are fetched
+again once.
+
 ## v0.2.0
 
 **Rebased images get SLSA build provenance

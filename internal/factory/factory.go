@@ -29,8 +29,12 @@ type Options struct {
 	OrgPath      string
 	Version      string
 	Verbose      bool
-	Stdout       io.Writer
-	Stderr       io.Writer
+	// Reverify checks a shared profile's signature with cosign on every
+	// load, instead of reusing a check this machine made in the last
+	// profileVerifiedFor (see reverify).
+	Reverify bool
+	Stdout   io.Writer
+	Stderr   io.Writer
 }
 
 func (o Options) printf(format string, a ...any) { _, _ = fmt.Fprintf(o.Stdout, format+"\n", a...) }

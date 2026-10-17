@@ -439,7 +439,9 @@ required labels, narrower allow lists, `requireX` on, `allowTOFU` and
 the field. VEX statements from the repository are refused unless the shared
 profile allows them. The shared profile is checked against
 `extends.signer` whenever it is loaded, at the digest the lock pins, so an
-unsigned, tampered, or otherwise signed version never applies.
+unsigned, tampered, or otherwise signed version never applies. (Outside
+CI, a check counts on that machine for a day, per digest and signer;
+`--reverify` checks again.)
 `extends.signers` lists several signers instead, any one of which may sign
 it, so the platform can rotate its signer without every repository changing
 at that moment.

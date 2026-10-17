@@ -146,7 +146,11 @@ func extendingOrg(ctx context.Context, opts Options, dir string, io InitOptions)
 		e.Signer.CertificateOIDCIssuer = firstNonEmpty(io.ExtendsIssuer, "https://token.actions.githubusercontent.com")
 		signer = "    certificateIdentity: " + e.Signer.CertificateIdentity + "\n    certificateOIDCIssuer: " + e.Signer.CertificateOIDCIssuer + "\n"
 	}
-	path, digest, err := fetchProfile(ctx, e, "")
+	// Check the signature now, whatever this machine checked before: this
+	// is where the repository starts trusting the profile.
+	vopts := opts
+	vopts.Reverify = true
+	path, digest, err := fetchProfile(ctx, vopts, e, "")
 	if err != nil {
 		return "", fmt.Errorf("--extends %s: %w", io.Extends, err)
 	}

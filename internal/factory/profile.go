@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
 
@@ -114,7 +112,7 @@ func loadOrg(ctx context.Context, opts Options, startDir string, pin func(ref st
 		if pin != nil {
 			digest = pin(e.Ref)
 		}
-		return fetchProfile(ctx, e, digest)
+		return fetchProfile(ctx, opts, e, digest)
 	})
 }
 
@@ -130,12 +128,12 @@ func lockedProfile(m *manifest.Manifest) func(ref string) string {
 }
 
 // fetchProfile checks that the shared profile e names, at digest (or
-// where its reference points now), is signed by one of e.AllSigners, then
-// returns its unpacked factory.org.yaml from the local cache, fetching it
-// if needed.
-// It runs on every load: a profile that isn't signed, or is signed by
-// someone else, never loads.
-func fetchProfile(ctx context.Context, e manifest.Extends, digest string) (path, d string, err error) {
+// where its reference points now), is signed by one of e.AllSigners
+// (verifyProfile), then returns its factory.org.yaml, unpacked with the
+// files it names, read at that digest from the local cache or the
+// registry. A profile that isn't signed, or is signed by someone else,
+// never loads.
+func fetchProfile(ctx context.Context, opts Options, e manifest.Extends, digest string) (path, d string, err error) {
 	repo := lock.RepoOf(e.Ref)
 	if digest == "" {
 		if digest, err = registry.Digest(ctx, e.Ref); err != nil {
@@ -143,26 +141,55 @@ func fetchProfile(ctx context.Context, e manifest.Extends, digest string) (path,
 		}
 	}
 	pinned := repo + "@" + digest
-	var signers [][]string
-	for _, v := range e.AllSigners() {
-		args, err := identityArgs(v, "")
-		if err != nil {
-			return "", "", fmt.Errorf("extends: %w", err)
-		}
-		signers = append(signers, args)
+	if err := verifyProfile(ctx, opts, e, pinned); err != nil {
+		return "", "", err
 	}
-	if _, err := firstVerified(signers, func(args []string) (struct{}, error) {
-		return struct{}{}, attest.VerifySignature(ctx, pinned, args)
-	}); err != nil {
-		return "", "", fmt.Errorf("%s is not signed by %s: %w", pinned, e.SignerField(), err)
-	}
-	return unpackedProfile(digest, func() ([]registry.File, error) {
-		files, got, err := registry.FetchFiles(ctx, pinned, manifest.ProfileArtifactType)
-		if err == nil && got != digest {
-			err = fmt.Errorf("%s resolved to %s", pinned, got)
-		}
-		return files, err
+	path, err = cachedProfile(digest, func() (*registry.Bundle, error) {
+		return registry.FetchBundle(ctx, pinned, manifest.ProfileArtifactType)
 	})
+	return path, digest, err
+}
+
+// verifyProfile checks with cosign that one of e.AllSigners signed pinned.
+// Unless reverify says to check again, a check this machine made within
+// profileVerifiedFor counts instead: pinned names the content by digest,
+// so a digest that was signed stays signed, and the content is still read
+// by that digest. Only successes are recorded, so a failure is checked
+// again every time.
+func verifyProfile(ctx context.Context, opts Options, e manifest.Extends, pinned string) error {
+	signers := e.AllSigners()
+	args := make([][]string, len(signers))
+	ids := make([]string, len(signers))
+	for i, v := range signers {
+		var err error
+		if args[i], err = identityArgs(v, ""); err != nil {
+			return fmt.Errorf("extends: %w", err)
+		}
+		ids[i] = signerID(v)
+	}
+	if !reverify(opts) {
+		for _, id := range ids {
+			if at, ok := verifiedAt(pinned, id); ok {
+				if opts.Verbose {
+					opts.logf("%s: signature checked on this machine at %s; --reverify checks it again", pinned, at.Format(time.RFC3339))
+				}
+				return nil
+			}
+		}
+	}
+	var errs []error
+	for i := range signers {
+		err := attest.VerifySignature(ctx, pinned, args[i])
+		if err == nil {
+			recordVerified(pinned, ids[i])
+			return nil
+		}
+		errs = append(errs, err)
+	}
+	if len(errs) == 0 {
+		errs = append(errs, errors.New("no signer to verify against"))
+	}
+	return fmt.Errorf("%s is not signed by %s: %w", pinned, e.SignerField(), errors.Join(errs...))
 }
 
 // localProfile packs the repository's own shared profile at path (from
@@ -178,60 +205,10 @@ func localProfile(path string) (string, string, error) {
 	for i, f := range bundled {
 		files[i] = registry.File{Name: f.Name, MediaType: f.MediaType, Content: f.Content}
 	}
-	digest, err := registry.FilesDigest(manifest.ProfileArtifactType, files)
+	b, err := registry.PackFiles(manifest.ProfileArtifactType, files)
 	if err != nil {
 		return "", "", err
 	}
-	return unpackedProfile(digest, func() ([]registry.File, error) { return files, nil })
-}
-
-// unpackedProfile returns the factory.org.yaml of the shared profile at
-// digest, unpacked in the local cache with the files it names, getting
-// the files with get when it isn't cached.
-func unpackedProfile(digest string, get func() ([]registry.File, error)) (path, d string, err error) {
-	base, err := cacheDir("profiles")
-	if err != nil {
-		return "", "", err
-	}
-	dir := filepath.Join(base, strings.ReplaceAll(digest, ":", "-"))
-	path = filepath.Join(dir, manifest.OrgFileName)
-	if _, err := os.Stat(path); err == nil {
-		return path, digest, nil
-	}
-	files, err := get()
-	if err != nil {
-		return "", "", err
-	}
-	// Unpack beside the cache entry, then move it in, so a cached profile
-	// is always complete.
-	tmp, err := os.MkdirTemp(base, ".unpack-")
-	if err != nil {
-		return "", "", err
-	}
-	defer func() { _ = os.RemoveAll(tmp) }()
-	profile := false
-	for _, f := range files {
-		if f.Name == manifest.OrgFileName {
-			if f.MediaType != manifest.ProfileMediaType {
-				return "", "", fmt.Errorf("%s: %s is a %s, not an org profile", digest, f.Name, f.MediaType)
-			}
-			profile = true
-		}
-		p := filepath.Join(tmp, filepath.FromSlash(f.Name))
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			return "", "", err
-		}
-		if err := os.WriteFile(p, f.Content, 0o644); err != nil {
-			return "", "", err
-		}
-	}
-	if !profile {
-		return "", "", fmt.Errorf("%s has no %s", digest, manifest.OrgFileName)
-	}
-	if err := os.Rename(tmp, dir); err != nil {
-		if _, serr := os.Stat(path); serr != nil {
-			return "", "", err
-		}
-	}
-	return path, digest, nil
+	p, err := cachedProfile(b.Digest, func() (*registry.Bundle, error) { return b, nil })
+	return p, b.Digest, err
 }

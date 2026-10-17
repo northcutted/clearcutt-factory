@@ -71,15 +71,36 @@ func FileDigest(artifactType, fileName string, content []byte) (string, error) {
 
 // FilesDigest is the digest PushFiles gives the artifact, without pushing it.
 func FilesDigest(artifactType string, files []File) (string, error) {
-	img, err := filesArtifact(artifactType, files)
+	b, err := PackFiles(artifactType, files)
 	if err != nil {
 		return "", err
+	}
+	return b.Digest, nil
+}
+
+// Bundle is an artifact of files: its manifest as stored, the manifest's
+// digest (the artifact's), and its files.
+type Bundle struct {
+	Manifest []byte
+	Digest   string
+	Files    []File
+}
+
+// PackFiles is the artifact PushFiles pushes, without pushing it.
+func PackFiles(artifactType string, files []File) (*Bundle, error) {
+	img, err := filesArtifact(artifactType, files)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := img.RawManifest()
+	if err != nil {
+		return nil, err
 	}
 	d, err := img.Digest()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return d.String(), nil
+	return &Bundle{Manifest: raw, Digest: d.String(), Files: files}, nil
 }
 
 // filesArtifact assembles the artifact; its digest depends only on its
@@ -116,7 +137,7 @@ func filesArtifact(artifactType string, files []File) (v1.Image, error) {
 // FetchFile reads a single-file artifact of artifactType at ref and returns
 // its content and the artifact's digest.
 func FetchFile(ctx context.Context, ref, artifactType string) ([]byte, string, error) {
-	files, d, err := fetchFiles(ctx, ref, artifactType, false)
+	files, d, _, err := fetchFiles(ctx, ref, artifactType, false)
 	if err != nil {
 		return nil, "", err
 	}
@@ -130,26 +151,70 @@ func FetchFile(ctx context.Context, ref, artifactType string) ([]byte, string, e
 // checked against its digest, and returns them with the artifact's digest.
 // Files must have distinct titles that are local relative paths.
 func FetchFiles(ctx context.Context, ref, artifactType string) ([]File, string, error) {
-	return fetchFiles(ctx, ref, artifactType, true)
-}
-
-// fetchFiles is FetchFiles; named false accepts a single file without a
-// title.
-func fetchFiles(ctx context.Context, ref, artifactType string, named bool) ([]File, string, error) {
-	r, err := name.ParseReference(ref)
+	b, err := FetchBundle(ctx, ref, artifactType)
 	if err != nil {
 		return nil, "", err
 	}
+	return b.Files, b.Digest, nil
+}
+
+// FetchBundle is FetchFiles, keeping the artifact's manifest as the
+// registry served it, so that a copy kept elsewhere can be checked against
+// the digest with ReadBundle.
+func FetchBundle(ctx context.Context, ref, artifactType string) (*Bundle, error) {
+	files, d, raw, err := fetchFiles(ctx, ref, artifactType, true)
+	if err != nil {
+		return nil, err
+	}
+	return &Bundle{Manifest: raw, Digest: d, Files: files}, nil
+}
+
+// ReadBundle reads back an artifact of artifactType kept outside a
+// registry, e.g. in a local cache: manifest must be the manifest digest
+// names, and read returns each file it lists by name, which must match the
+// digest the manifest gives it. What it returns is the artifact digest
+// names, or an error.
+func ReadBundle(manifest []byte, digest, artifactType string, read func(name string, size int64) ([]byte, error)) ([]File, error) {
+	h, err := v1.NewHash(digest)
+	if err != nil {
+		return nil, err
+	}
+	return checkFiles(digest, manifest, h, artifactType, true, func(n string, l v1.Descriptor) ([]byte, error) { return read(n, l.Size) })
+}
+
+// fetchFiles is FetchBundle; named false accepts a single file without
+// a title.
+func fetchFiles(ctx context.Context, ref, artifactType string, named bool) ([]File, string, []byte, error) {
+	r, err := name.ParseReference(ref)
+	if err != nil {
+		return nil, "", nil, err
+	}
 	desc, err := remote.Get(r, opts(ctx)...)
 	if err != nil {
-		return nil, "", fmt.Errorf("fetching %s: %w", ref, err)
+		return nil, "", nil, fmt.Errorf("fetching %s: %w", ref, err)
+	}
+	files, err := checkFiles(ref, desc.Manifest, desc.Digest, artifactType, named, func(_ string, l v1.Descriptor) ([]byte, error) {
+		return readBlob(ctx, r.Context().Digest(l.Digest.String()))
+	})
+	if err != nil {
+		return nil, "", nil, err
+	}
+	return files, desc.Digest.String(), desc.Manifest, nil
+}
+
+// checkFiles checks that raw, the manifest of what (a reference, for
+// messages), has digest and is an artifact of artifactType, and reads its
+// files with read, checking each against its digest.
+func checkFiles(what string, raw []byte, digest v1.Hash, artifactType string, named bool, read func(name string, l v1.Descriptor) ([]byte, error)) ([]File, error) {
+	if got, _, err := v1.SHA256(bytes.NewReader(raw)); err != nil || got != digest {
+		return nil, fmt.Errorf("%s: the manifest does not match its digest %s", what, digest)
 	}
 	var m v1.Manifest
-	if err := json.Unmarshal(desc.Manifest, &m); err != nil {
-		return nil, "", fmt.Errorf("%s: %w", ref, err)
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fmt.Errorf("%s: %w", what, err)
 	}
 	if m.ArtifactType != artifactType || len(m.Layers) == 0 || len(m.Layers) > maxFiles {
-		return nil, "", fmt.Errorf("%s is not a %s artifact", ref, artifactType)
+		return nil, fmt.Errorf("%s is not a %s artifact", what, artifactType)
 	}
 	var files []File
 	seen := map[string]bool{}
@@ -160,22 +225,22 @@ func fetchFiles(ctx context.Context, ref, artifactType string, named bool) ([]Fi
 			n = "file"
 		}
 		if n == "" || !filepath.IsLocal(filepath.FromSlash(n)) || seen[n] {
-			return nil, "", fmt.Errorf("%s: file name %q is missing, repeated, or not a relative path", ref, n)
+			return nil, fmt.Errorf("%s: file name %q is missing, repeated, or not a relative path", what, n)
 		}
 		seen[n] = true
-		if total += l.Size; l.Size > maxFileSize || total > maxTotalSize {
-			return nil, "", fmt.Errorf("%s: %s is too large", ref, n)
+		if total += l.Size; l.Size < 0 || l.Size > maxFileSize || total > maxTotalSize {
+			return nil, fmt.Errorf("%s: %s is too large", what, n)
 		}
-		content, err := readBlob(ctx, r.Context().Digest(l.Digest.String()))
+		content, err := read(n, l)
 		if err != nil {
-			return nil, "", fmt.Errorf("%s: %s: %w", ref, n, err)
+			return nil, fmt.Errorf("%s: %s: %w", what, n, err)
 		}
 		if got, _, _ := v1.SHA256(bytes.NewReader(content)); got != l.Digest {
-			return nil, "", fmt.Errorf("%s: %s does not match its digest", ref, n)
+			return nil, fmt.Errorf("%s: %s does not match its digest", what, n)
 		}
 		files = append(files, File{Name: n, MediaType: string(l.MediaType), Content: content})
 	}
-	return files, desc.Digest.String(), nil
+	return files, nil
 }
 
 func readBlob(ctx context.Context, d name.Digest) ([]byte, error) {

@@ -341,16 +341,48 @@ the moment of the switch:
 digest the shared profile resolved to (`profile: {ref, digest}`), as it
 does for a registry stack. Every command that loads the manifest (`lock`,
 `render`, `build`, `verify`, `rebase`) uses that digest and checks its
-signature against `extends.signer` each time, so an unsigned or tampered
-profile, or one signed by someone else, fails closed, including in a pull
-request that edits the lock. `lock` keeps the pin; `lock --update` (the
-weekly job, or a `clearcutt.profile-published` notice) moves it, in a pull
-request whose description names the new digest. Moving the pin alone
+signature against `extends.signer` (or `signers`), so an unsigned or
+tampered profile, or one signed by someone else, fails closed, including in
+a pull request that edits the lock. `lock` keeps the pin; `lock --update`
+(the weekly job, or a `clearcutt.profile-published` notice) moves it, in a
+pull request whose description names the new digest. Moving the pin alone
 doesn't change the build timestamp, so images change only if what the
 profile sets shapes them (the builder, labels). A lock that doesn't pin the
 profile its org profile extends is stale. Commands without a manifest
 (`verify --image`, `rebase --image`, `stack push`) follow the tag, checked
-the same way. Loading needs the registry and `cosign`.
+the same way.
+
+**On your machine, a check counts for a day.** Outside CI, a successful
+signature check is remembered for 24 hours in the user cache directory
+(`clearcutt-factory/verified/`), per pinned digest and signer, so commands
+don't run `cosign` (and reach the registry and the transparency log) on
+every load, and a pinned profile loads offline. CI always checks: with
+`CI=true` or `GITHUB_ACTIONS=true`, every load runs `cosign`, as do
+`--reverify` and `CLEARCUTT_FACTORY_REVERIFY=1` anywhere
+(`CLEARCUTT_FACTORY_REVERIFY=0` lets a CI job reuse checks). `init
+--extends` always checks. Failures are never remembered. What is skipped
+is only `cosign`:
+
+* The profile itself is still read at the pinned digest, from the
+  registry or from the cache (`clearcutt-factory/profiles/`), which keeps
+  the artifact's manifest beside its files. A cached copy is used only
+  after its manifest is checked against the digest and every file against
+  the manifest; one that doesn't match is fetched again. A record can't
+  make other content load: the digest names the content, and the record
+  only says that a signer's signature was found on that digest.
+* A record is the signer's, as written in `extends`, with a key file
+  identified by its content. Changing or removing a signer, or replacing
+  a key file in place, means checking again; a version only a removed
+  signer signed fails at once.
+* What a record can't notice for up to a day: a signature deleted from the
+  registry, a KMS alias moved to another key, or a Sigstore trust root
+  update. That is why CI, where images are published, checks every time.
+* Someone who can write your cache directory can forge a record, but not
+  change what loads at a pinned digest; and they can usually also change
+  the programs you run.
+
+Loading needs the registry and `cosign`, except for a pinned profile this
+machine has cached and checked within the day.
 
 **What a repository can and can't change.** A repository's profile may add
 what the shared profile leaves unset and tighten its gate and policy.
