@@ -322,8 +322,24 @@ jobs:
     if: github.event_name != 'schedule' && github.event_name != 'repository_dispatch'
     uses: northcutted/clearcutt-factory/.github/workflows/images.yml@{{ref}}
     permissions: {contents: read, packages: write, id-token: write, attestations: write}
+    with:
+      reproduce: false # the reproduce job does it, so fleet and notify start without waiting
     secrets:
       REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }} # only for a registry other than ghcr.io
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+
+  # images.yml again, given what images published: it rebuilds each image on
+  # a second runner from its signed recipe alone and attests the match. A
+  # failed reproduction fails the run.
+  reproduce:
+    needs: images
+    if: ${{ !cancelled() && needs.images.outputs.published != '[]' && needs.images.outputs.published != '' }}
+    uses: northcutted/clearcutt-factory/.github/workflows/images.yml@{{ref}}
+    permissions: {contents: read, packages: write, id-token: write, attestations: write}
+    with:
+      published: ${{ needs.images.outputs.published }}
+    secrets:
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
       REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
 
   update-locks:
@@ -346,8 +362,9 @@ jobs:
       REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
 
   # Wakes the repositories with the topic clearcutt-app when this one
-  # publishes images (run images, typically). Needs a GitHub App installed on
-  # them, or a CLEARCUTT_BOT_TOKEN that can write to them.
+  # publishes images (run images, typically), as soon as they are published:
+  # it needs images, not reproduce. Needs a GitHub App installed on them, or
+  # a CLEARCUTT_BOT_TOKEN that can write to them.
   notify:
     needs: images
     if: ${{ !cancelled() && github.event_name == 'push' && needs.images.outputs.published != '[]' && needs.images.outputs.published != '' }}

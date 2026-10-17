@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -166,6 +167,160 @@ func TestResolveMissing(t *testing.T) {
 	idx := parseTest(t)
 	if _, err := idx.Resolve([]string{"nope"}); err == nil || !strings.Contains(err.Error(), "nothing provides nope") {
 		t.Fatalf("expected missing package error, got %v", err)
+	}
+}
+
+// A CVE fix in libcrypto3 3.6.5 that needs a newer config package, beside
+// unrelated packages that also have updates.
+const pinIndex = `P:libcrypto3
+V:3.6.3-r4
+A:aarch64
+D:openssl-config>=3.6 oldlib
+
+P:libcrypto3
+V:3.6.5-r2
+A:aarch64
+D:openssl-config>=3.6.5 so:libz.so.1
+
+P:openssl-config
+V:3.6.3-r4
+A:aarch64
+
+P:openssl-config
+V:3.6.5-r2
+A:aarch64
+
+P:oldlib
+V:1-r0
+A:aarch64
+
+P:zlib
+V:1.3-r0
+A:aarch64
+p:so:libz.so.1=1
+
+P:openssl-4.0-libcrypto
+V:4.0.3-r6
+A:aarch64
+D:so:libbar.so.1
+
+P:openssl-4.0-libcrypto
+V:4.0.3-r7
+A:aarch64
+D:so:libbar.so.1>=2
+
+P:bar
+V:1-r0
+A:aarch64
+p:so:libbar.so.1=1
+
+P:bar
+V:2-r0
+A:aarch64
+p:so:libbar.so.1=2
+
+P:openssl-doc
+V:4.0.3-r6
+A:aarch64
+i:openssl-4.0-libcrypto
+
+P:openssl-doc
+V:4.0.3-r7
+A:aarch64
+i:openssl-4.0-libcrypto
+`
+
+func pinTest(t *testing.T) *Index {
+	t.Helper()
+	pkgs, err := ParseIndex(strings.NewReader(pinIndex))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewIndex("aarch64", pkgs)
+}
+
+func pinned(pkgs []*Package) string {
+	var s []string
+	for _, p := range pkgs {
+		s = append(s, p.Name+"="+p.Version)
+	}
+	return strings.Join(s, " ")
+}
+
+// The lock before the CVE fix: everything at its old version.
+var oldPins = map[string]string{
+	"libcrypto3": "3.6.3-r4", "openssl-config": "3.6.3-r4", "oldlib": "1-r0",
+	"openssl-4.0-libcrypto": "4.0.3-r6", "bar": "1-r0", "openssl-doc": "4.0.3-r6",
+}
+
+func without(pins map[string]string, names ...string) map[string]string {
+	out := map[string]string{}
+	for k, v := range pins {
+		out[k] = v
+	}
+	for _, n := range names {
+		delete(out, n)
+	}
+	return out
+}
+
+func TestResolveKeeping(t *testing.T) {
+	idx := pinTest(t)
+	roots := []string{"libcrypto3", "openssl-4.0-libcrypto"}
+
+	// Keeping every pin reproduces the old set.
+	got, err := idx.ResolveKeeping(roots, oldPins)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "bar=1-r0 libcrypto3=3.6.3-r4 oldlib=1-r0 openssl-4.0-libcrypto=4.0.3-r6 openssl-config=3.6.3-r4 openssl-doc=4.0.3-r6"; pinned(got) != want {
+		t.Errorf("all pinned:\n got %s\nwant %s", pinned(got), want)
+	}
+
+	// Updating libcrypto3 alone can't keep openssl-config.
+	_, err = idx.ResolveKeeping(roots, without(oldPins, "libcrypto3"))
+	var pe *PinError
+	if !errors.As(err, &pe) || strings.Join(pe.Names, ",") != "openssl-config" ||
+		!strings.Contains(err.Error(), "libcrypto3-3.6.5-r2 needs openssl-config>=3.6.5, but openssl-config is pinned at 3.6.3-r4") {
+		t.Fatalf("expected openssl-config to block, got %v", err)
+	}
+
+	// With both named: the fix and its new dependency move; the unrelated
+	// openssl-4.0 and its documentation stay, and oldlib, which nothing
+	// needs any more, goes.
+	got, err = idx.ResolveKeeping(roots, without(oldPins, "libcrypto3", "openssl-config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "bar=1-r0 libcrypto3=3.6.5-r2 openssl-4.0-libcrypto=4.0.3-r6 openssl-config=3.6.5-r2 openssl-doc=4.0.3-r6 zlib=1.3-r0"; pinned(got) != want {
+		t.Errorf("update libcrypto3 and openssl-config:\n got %s\nwant %s", pinned(got), want)
+	}
+
+	// A provider pinned at a version that no longer satisfies a dependency
+	// blocks, rather than another provider taking its place.
+	_, err = idx.ResolveKeeping(roots, without(oldPins, "openssl-4.0-libcrypto"))
+	if !errors.As(err, &pe) || strings.Join(pe.Names, ",") != "bar" || !strings.Contains(err.Error(), "which bar doesn't provide at its pinned 1-r0") {
+		t.Fatalf("expected bar to block, got %v", err)
+	}
+
+	// A pinned version gone from the repositories can't be kept.
+	gone := without(oldPins)
+	gone["oldlib"] = "0.9-r0"
+	gone["openssl-doc"] = "4.0.3-r5"
+	_, err = idx.ResolveKeeping(roots, gone)
+	if !errors.As(err, &pe) || strings.Join(pe.Names, ",") != "oldlib,openssl-doc" ||
+		!strings.Contains(err.Error(), "oldlib 0.9-r0 is no longer in the repositories") ||
+		!strings.Contains(err.Error(), "openssl-doc would be installed (install_if), but openssl-doc 4.0.3-r5 is no longer in the repositories") {
+		t.Fatalf("expected missing pins to block, got %v", err)
+	}
+
+	// Without pins it is Resolve: the newest of everything.
+	got, err = idx.ResolveKeeping(roots, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "bar=2-r0 libcrypto3=3.6.5-r2 openssl-4.0-libcrypto=4.0.3-r7 openssl-config=3.6.5-r2 openssl-doc=4.0.3-r7 zlib=1.3-r0"; pinned(got) != want {
+		t.Errorf("unpinned:\n got %s\nwant %s", pinned(got), want)
 	}
 }
 

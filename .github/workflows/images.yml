@@ -19,6 +19,31 @@
 #
 # Output: published, what the run newly published (see the published job).
 # notify.yml takes it to wake the repositories that build on those images.
+#
+# A job that calls this workflow ends, and its outputs arrive, only when
+# every job here has, the second-runner reproduction included. To start
+# jobs that need only published (notify.yml, fleet.yml) as soon as the
+# images are published, call it twice: once with reproduce: false, and once
+# more with that call's published output, which only reproduces it. The
+# reproduction is then signed by this workflow as before, and a failed one
+# still fails the run:
+#
+#   jobs:
+#     images:
+#       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.2.0
+#       permissions: {contents: read, packages: write, id-token: write, attestations: write}
+#       with:
+#         reproduce: false
+#     reproduce:
+#       needs: images
+#       if: ${{ !cancelled() && needs.images.outputs.published != '[]' && needs.images.outputs.published != '' }}
+#       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.2.0
+#       permissions: {contents: read, packages: write, id-token: write, attestations: write}
+#       with:
+#         published: ${{ needs.images.outputs.published }}
+#     notify:
+#       needs: images # not reproduce
+#       …
 name: images
 on:
   push:
@@ -39,6 +64,14 @@ on:
         description: Add SLSA build provenance (GitHub artifact attestations)
         type: boolean
         default: true
+      reproduce:
+        description: Rebuild each newly published image on a second runner and attest the match; false to do that in a second call (see published), so jobs that need only the published output don't wait for it
+        type: boolean
+        default: true
+      published:
+        description: 'Build nothing; reproduce what an earlier call in this run published (its published output) on a second runner and attest the match'
+        type: string
+        default: ""
       factory-version:
         description: clearcutt-factory release to use
         type: string
@@ -60,9 +93,10 @@ permissions:
 # tags. Publishing runs wait rather than cancel; a newer one replaces any run
 # still waiting, which is fine because each run builds every manifest at its
 # own commit. A pull request's newer run cancels the older one. The prefix
-# keeps the group apart from a caller's own.
+# keeps the group apart from a caller's own. A call that only reproduces
+# moves no tags, so it has a group of its own and no other run replaces it.
 concurrency:
-  group: clearcutt-factory-images-${{ github.ref }}-${{ inputs.manifests }}
+  group: ${{ inputs.published && format('clearcutt-factory-reproduce-{0}-{1}', github.run_id, github.run_attempt) || format('clearcutt-factory-images-{0}-{1}', github.ref, inputs.manifests) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   # Callers use a release; this repository's own events build from source.
@@ -79,7 +113,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: find
         shell: bash
+        env:
+          PUBLISHED: ${{ inputs.published }}
         run: |
+          if [ -n "$PUBLISHED" ]; then
+            # Only reproducing: the manifests the earlier call published.
+            echo "manifests=$(jq -c '[.[] | .manifest // empty] | unique' <<<"$PUBLISHED")" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           shopt -s globstar nullglob
           found=()
           for pattern in $MANIFESTS; do for f in $pattern; do found+=("$f"); done; done
@@ -87,7 +128,7 @@ jobs:
 
   build:
     needs: manifests
-    if: needs.manifests.outputs.manifests != '[]'
+    if: needs.manifests.outputs.manifests != '[]' && !inputs.published
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -272,9 +313,11 @@ jobs:
   # build's failure still fails the run). When the digest matches, it signs
   # a reproduction attestation (…/reproduction/v1) onto the image, so
   # verifiers can see it was independently reproduced, where, and when.
+  # With reproduce: false a second call does it, given published. format()
+  # because inputs is empty outside workflow_call.
   reproduce:
     needs: [manifests, build]
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.manifests.result == 'success' && needs.manifests.outputs.manifests != '[]' }}
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && format('{0}', inputs.reproduce) != 'false' && needs.manifests.result == 'success' && needs.manifests.outputs.manifests != '[]' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -321,15 +364,20 @@ jobs:
           path: build-result
       # An app build whose tag held an image on a newer base was also rebased
       # onto it (a second result.json); that rebase is repeated from its
-      # signed record.
+      # signed record. A call given published reads the build results of the
+      # call that built (the same run), else what published names.
       - name: Rebuild from the recipe attestation, compare digests, and attest a match
         env:
           MANIFEST: ${{ matrix.manifest }}
+          PUBLISHED: ${{ inputs.published }}
         run: |
           images=()
           while IFS= read -r result; do
             if [ "$(jq -r .published "$result")" = true ]; then images+=("$(jq -r .image "$result")"); fi
           done < <(find build-result -name result.json 2>/dev/null | sort)
+          if [ "${#images[@]}" = 0 ] && [ -n "$PUBLISHED" ]; then
+            while IFS= read -r image; do images+=("$image"); done < <(jq -r --arg manifest "$MANIFEST" '.[] | select(.manifest == $manifest) | .image // empty' <<<"$PUBLISHED")
+          fi
           if [ "${#images[@]}" = 0 ]; then
             echo "not newly published in this run; nothing to reproduce"
             exit 0

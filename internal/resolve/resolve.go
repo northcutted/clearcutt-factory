@@ -40,6 +40,10 @@ type Resolver struct {
 	NixKeys  []string
 	Now      func() time.Time
 	Log      io.Writer
+	// UpdatePackages names distro packages to re-resolve (lock
+	// --update-package): every other package keeps its pin, and a pin that
+	// would have to move fails the resolution, naming it.
+	UpdatePackages []string
 
 	digests  map[string]string
 	releases map[string]map[string]string

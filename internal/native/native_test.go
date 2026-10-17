@@ -54,7 +54,7 @@ func TestParseAPT(t *testing.T) {
 		gotArgs = args
 		return []byte(aptOut), nil
 	}
-	res, err := ResolveAPT(context.Background(), run, "debian@sha256:x", "linux/arm64", "20261003T000000Z", []string{"jq"})
+	res, err := ResolveAPT(context.Background(), run, "debian@sha256:x", "linux/arm64", "20261003T000000Z", []string{"jq"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +83,27 @@ func TestParseAPT(t *testing.T) {
 		if !strings.HasPrefix(p.URL, "https://snapshot.debian.org/") {
 			t.Errorf("%s should download from the snapshot over https: %s", p.Name, p.URL)
 		}
+	}
+}
+
+// lock --update-package keeps the other packages: apt gets each as a pin
+// and the Debian snapshots they came from as sources besides today's.
+func TestAPTArgsKeep(t *testing.T) {
+	keep := []lock.Package{
+		{Name: "git-man", Version: "1:2.47.3-0+deb13u1", URL: "https://snapshot.debian.org/archive/debian-security/20261003T000000Z/pool/updates/main/g/git/git-man_2.47.3-0%2bdeb13u1_all.deb"},
+		{Name: "libc6", Version: "2.41-12", URL: "https://snapshot.debian.org/archive/debian/20260901T000000Z/pool/main/g/glibc/libc6_2.41-12_arm64.deb"},
+		{Name: "libonig5", Version: "6.9.9-1+b1", URL: "https://snapshot.debian.org/archive/debian/20261003T000000Z/pool/main/libo/libonig/libonig5_6.9.9-1%2bb1_arm64.deb"},
+	}
+	got := strings.Join(aptArgs("20261017T000000Z", []string{"jq", "curl"}, keep), " ")
+	want := "20261017T000000Z --keep-snapshot=20260901T000000Z --keep-snapshot=20261003T000000Z " +
+		"--pin=git-man=1:2.47.3-0+deb13u1 --pin=libc6=2.41-12 --pin=libonig5=6.9.9-1+b1 jq curl"
+	if got != want {
+		t.Errorf("args:\n got %s\nwant %s", got, want)
+	}
+	// Ubuntu's Launchpad URLs name no snapshot.
+	ubuntu := []lock.Package{{Name: "libc6", Version: "2.39-0ubuntu8", URL: "https://launchpad.net/ubuntu/+archive/primary/+files/libc6_2.39-0ubuntu8_arm64.deb"}}
+	if got := strings.Join(aptArgs("20261017T000000Z", []string{"jq"}, ubuntu), " "); got != "20261017T000000Z --pin=libc6=2.39-0ubuntu8 jq" {
+		t.Errorf("ubuntu args: %s", got)
 	}
 }
 
@@ -151,6 +172,30 @@ func TestParseDNFFedoraUsesKoji(t *testing.T) {
 	}
 	if jq := byName["jq"]; jq.SHA256 != "1111" || jq.License != "MIT AND ICU AND CC-BY-3.0" || jq.Filename != "jq-1.8.1-3.fc44.aarch64.rpm" {
 		t.Errorf("jq: %+v", jq)
+	}
+}
+
+// lock --update-package keeps the other packages: dnf gets each as a NEVRA,
+// with the epoch spelled out.
+func TestDNFArgsKeep(t *testing.T) {
+	var gotArgs []string
+	run := func(_ context.Context, image, platform, script string, args ...string) ([]byte, error) {
+		gotArgs = args
+		return []byte(dnfOut), nil
+	}
+	keep := []lock.Package{
+		{Name: "oniguruma", Version: "6.9.10-4.fc44", Arch: "aarch64"},
+		{Name: "python3-libs", Version: "1:3.14.1-2.fc44", Arch: "aarch64"},
+	}
+	if _, err := ResolveDNF(context.Background(), run, "fedora@sha256:x", "linux/arm64", []string{"jq", "python3-libs"}, keep); err != nil {
+		t.Fatal(err)
+	}
+	want := "--pin=oniguruma=oniguruma-0:6.9.10-4.fc44.aarch64 --pin=python3-libs=python3-libs-1:3.14.1-2.fc44.aarch64 jq python3-libs"
+	if got := strings.Join(gotArgs, " "); got != want {
+		t.Errorf("args:\n got %s\nwant %s", got, want)
+	}
+	if got := strings.Join(dnfArgs([]string{"jq"}, nil), " "); got != "jq" {
+		t.Errorf("a plain resolution passes only the packages: %s", got)
 	}
 }
 

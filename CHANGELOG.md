@@ -5,6 +5,35 @@ what may change between releases.
 
 ## Unreleased
 
+**`lock --update-package` moves only the packages it names
+([#59](https://github.com/northcutted/clearcutt-factory/issues/59)).**
+Releasing a hold or taking a CVE fix re-resolved every package of the image,
+so the pull request also carried unrelated updates (openssl-4.0 r6 → r7 in
+the showcase's CVE drill). `clearcutt-factory lock --update-package
+NAME[,NAME…]` (repeatable) re-resolves the named apk, apt, or dnf packages
+and whatever their new versions need, and keeps every other package at its
+pin. When that isn't possible (the new versions need a kept package at
+another version, or a kept version is gone from the repositories), it fails
+and names the packages that would have to move. For apt, kept packages come
+from the Debian snapshots they were locked from. `lock --update` and
+`update-locks.yml` still update everything.
+
+**Apps hear about a publish before its reproduction finishes
+([#60](https://github.com/northcutted/clearcutt-factory/issues/60)).** A job
+that calls `images.yml` ends only when every job in it has, so `notify` waited
+for the second-runner reproduction: about 2m20s on the critical path of the
+showcase's CVE drill. `images.yml` takes two new inputs: `reproduce: false`
+publishes without reproducing, and `published` (the first call's output)
+builds nothing and only reproduces what it lists. `init`'s workflow now calls
+it both ways, so `notify` and `fleet` start as soon as the images are
+published while the reproduction runs beside them. The reproduction is still
+signed by `images.yml`, so trust policies need no change, and a failed one
+still fails the run. Existing callers are unchanged (`reproduce` defaults to
+`true`); to notify early, follow `init`'s workflow or
+[docs/adopting.md](docs/adopting.md#waking-the-apps-when-the-platform-publishes).
+Jobs that read reproduction attestations (an estate report) should need the
+`reproduce` job too.
+
 **A refused rebase's pull request is titled as a rebuild
 ([#57](https://github.com/northcutted/clearcutt-factory/issues/57)).** When
 `fleet.yml` can't rebase an app, its pull request moves the lock to the

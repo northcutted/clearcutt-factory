@@ -118,6 +118,10 @@ type LockOptions struct {
 	UpdateStack bool
 	// BaseDigest pins the base to this digest instead of resolving its tag.
 	BaseDigest string
+	// UpdatePackages re-resolves only these distro packages (and what
+	// their new versions need), keeping every other pin, e.g. to take a
+	// CVE fix or release a hold without unrelated updates.
+	UpdatePackages []string
 }
 
 // Lock resolves the manifest and writes the lockfile and Containerfile,
@@ -134,6 +138,14 @@ func lockManifest(ctx context.Context, opts Options, m *manifest.Manifest, org *
 	prev, err := lock.Read(m.LockPath())
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
+	}
+	if len(lo.UpdatePackages) > 0 {
+		switch {
+		case lo.Update || lo.UpdateBase || lo.UpdateStack:
+			return errors.New("--update-package moves only the packages it names; it doesn't go with --update or --update-base")
+		case prev == nil:
+			return fmt.Errorf("--update-package: %s does not exist; run clearcutt-factory lock", rel(m.LockPath()))
+		}
 	}
 	base := prev
 	if (lo.UpdateBase || lo.UpdateStack) && prev != nil {
@@ -152,6 +164,7 @@ func lockManifest(ctx context.Context, opts Options, m *manifest.Manifest, org *
 	r := resolve.New()
 	r.Log = opts.Stderr
 	r.Run = container.Runner{Runtime: org.Builder.Runtime}.Run
+	r.UpdatePackages = lo.UpdatePackages
 	l, err := r.LockFrom(ctx, m, org, base, prev, lo.Update)
 	if err != nil {
 		return err

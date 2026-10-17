@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -15,42 +17,100 @@ import (
 // aptScript runs in a Debian or Ubuntu base. Debian sources are pointed at
 // snapshot.debian.org so the resolution is repeatable and every URL is
 // permanent; apt still verifies the signed indexes. $1 is the snapshot
-// timestamp, the rest are the requested packages.
+// timestamp, then come the options aptArgs writes, then the requested
+// packages.
+//
+// To keep packages at their locked versions (lock --update-package), each
+// --pin=NAME=VERSION becomes an apt preference that apt takes wherever it
+// needs NAME: a dependency that needs another version is an unmet one
+// rather than a quiet upgrade, and a pinned package nothing needs isn't
+// installed. Each --keep-snapshot=TS adds the Debian snapshot a pinned
+// version came from, since a newer snapshot lists only the archive's
+// versions of its day.
 const aptScript = `set -eu
 export DEBIAN_FRONTEND=noninteractive
 TS="$1"; shift
 command -v apt-get >/dev/null 2>&1 || { echo "clearcutt-factory: apt-get is not available in the base image" >&2; exit 3; }
+KEEP_TS=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --keep-snapshot=*) KEEP_TS="$KEEP_TS ${1#*=}" ;;
+    --pin=*)
+      pin="${1#--pin=}"
+      printf 'Package: %s\nPin: version %s\nPin-Priority: 1001\n\n' "${pin%%=*}" "${pin#*=}" >> /etc/apt/preferences.d/clearcutt-factory
+      ;;
+    *) break ;;
+  esac
+  shift
+done
 . /etc/os-release
 echo "### os"
 echo "${ID:-} ${VERSION_ID:-}"
+snapshot() {
+  ts="$1"; shift
+  sed -E \
+    -e "s#https?://(deb|security|ftp)\.debian\.org/debian-security/?#http://snapshot.debian.org/archive/debian-security/$ts/#g" \
+    -e "s#https?://(deb|ftp)\.debian\.org/debian/?#http://snapshot.debian.org/archive/debian/$ts/#g" \
+    "$@"
+}
 if [ "${ID:-}" = debian ]; then
+  n=0
   for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
     [ -f "$f" ] || continue
-    sed -i -E \
-      -e "s#https?://(deb|security|ftp)\.debian\.org/debian-security/?#http://snapshot.debian.org/archive/debian-security/$TS/#g" \
-      -e "s#https?://(deb|ftp)\.debian\.org/debian/?#http://snapshot.debian.org/archive/debian/$TS/#g" \
-      "$f"
+    for ts in $KEEP_TS; do
+      [ "$ts" != "$TS" ] || continue
+      n=$((n + 1))
+      snapshot "$ts" "$f" > "/etc/apt/sources.list.d/clearcutt-factory-kept-$n.${f##*.}"
+    done
+    snapshot "$TS" -i "$f"
   done
 fi
 apt-get -qq -o Acquire::Check-Valid-Until=false update >&2
 echo "### sources"
 apt-get indextargets --format '$(REPO_URI)' | sort -u
 echo "### simulate"
-apt-get install -s -y --no-install-recommends "$@"
+# apt lists unmet dependencies on stdout; show them when it fails.
+apt-get install -s -y --no-install-recommends "$@" > /tmp/simulate || { cat /tmp/simulate >&2; exit 1; }
+cat /tmp/simulate
 echo "### uris"
 apt-get install --print-uris -qq -y --no-install-recommends "$@"
 echo "### records"
-pins=$(apt-get install -s -y --no-install-recommends "$@" | awk '$1=="Inst" { for (i = 3; i <= NF; i++) if ($i ~ /^\(/) { print $2 "=" substr($i, 2); break } }')
+pins=$(awk '$1=="Inst" { for (i = 3; i <= NF; i++) if ($i ~ /^\(/) { print $2 "=" substr($i, 2); break } }' /tmp/simulate)
 [ -z "$pins" ] || apt-cache show $pins
 `
 
-// ResolveAPT resolves packages for one platform in image.
-func ResolveAPT(ctx context.Context, run container.RunFunc, image, platform, snapshot string, packages []string) (*Result, error) {
-	out, err := run(ctx, image, platform, aptScript, append([]string{snapshot}, packages...)...)
+// ResolveAPT resolves packages for one platform in image. keep lists
+// packages to keep at their versions wherever apt needs them (from
+// lock --update-package); it is empty for a plain resolution.
+func ResolveAPT(ctx context.Context, run container.RunFunc, image, platform, snapshot string, packages []string, keep []lock.Package) (*Result, error) {
+	out, err := run(ctx, image, platform, aptScript, aptArgs(snapshot, packages, keep)...)
 	if err != nil {
 		return nil, err
 	}
 	return parseAPT(out, snapshot)
+}
+
+var debianSnapshot = regexp.MustCompile(`^https?://snapshot\.debian\.org/archive/[^/]+/(\d{8}T\d{6}Z)/`)
+
+// aptArgs are aptScript's arguments: the snapshot, a --pin for each kept
+// package and a --keep-snapshot for each Debian snapshot they came from,
+// then the packages.
+func aptArgs(snapshot string, packages []string, keep []lock.Package) []string {
+	args := []string{snapshot}
+	var snapshots []string
+	for _, p := range keep {
+		if m := debianSnapshot.FindStringSubmatch(p.URL); m != nil && !slices.Contains(snapshots, m[1]) {
+			snapshots = append(snapshots, m[1])
+		}
+	}
+	slices.Sort(snapshots)
+	for _, ts := range snapshots {
+		args = append(args, "--keep-snapshot="+ts)
+	}
+	for _, p := range keep {
+		args = append(args, "--pin="+p.Name+"="+p.Version)
+	}
+	return append(args, packages...)
 }
 
 type aptInst struct{ version, arch string }

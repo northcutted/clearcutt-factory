@@ -58,6 +58,9 @@ func TestInit(t *testing.T) {
 	for _, want := range []string{
 		"northcutted/clearcutt-factory/.github/workflows/images.yml@v1.2.3",
 		"northcutted/clearcutt-factory/.github/workflows/notify.yml@v1.2.3",
+		// Reproduction runs beside notify, not inside images (#60).
+		"reproduce: false",
+		"published: ${{ needs.images.outputs.published }}",
 		// Dependents of a platform repository are woken by its notify job.
 		"types: [clearcutt.run-image-published, clearcutt.stack-published, clearcutt.profile-published]",
 		"github.event.action == 'clearcutt.profile-published'",
@@ -171,5 +174,42 @@ func TestInitWorkflowMatchesReusableWorkflows(t *testing.T) {
 	}
 	if called == 0 {
 		t.Errorf("no job calls factory's reusable workflows:\n%s", b)
+	}
+}
+
+// notify and fleet start once images.yml has published, without waiting for
+// the second-runner reproduction, which runs beside them (#60).
+func TestInitNotifiesBeforeReproducing(t *testing.T) {
+	dir := t.TempDir()
+	var out bytes.Buffer
+	if err := Init(context.Background(), Options{Version: "v1.2.3", Stdout: &out, Stderr: &out}, InitOptions{Dir: dir, Repo: "acme/platform"}); err != nil {
+		t.Fatal(err)
+	}
+	var wf struct {
+		Jobs map[string]struct {
+			Needs any            `yaml:"needs"`
+			Uses  string         `yaml:"uses"`
+			With  map[string]any `yaml:"with"`
+		} `yaml:"jobs"`
+	}
+	b, err := os.ReadFile(filepath.Join(dir, ".github/workflows/clearcutt-factory.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(b, &wf); err != nil {
+		t.Fatal(err)
+	}
+	if r := wf.Jobs["images"].With["reproduce"]; r != false {
+		t.Errorf("images reproduces itself (reproduce: %v), so its dependents wait for it", r)
+	}
+	// images.yml reproduces, so the reproduction attestation is signed by
+	// the identity org profiles and trust policies accept for images.
+	if r := wf.Jobs["reproduce"]; r.Uses != wf.Jobs["images"].Uses || r.With["published"] != "${{ needs.images.outputs.published }}" {
+		t.Errorf("reproduce: uses %s with %v", r.Uses, r.With)
+	}
+	for _, job := range []string{"reproduce", "notify", "fleet"} {
+		if needs := wf.Jobs[job].Needs; needs != "images" {
+			t.Errorf("%s needs %v, want images alone", job, needs)
+		}
 	}
 }
