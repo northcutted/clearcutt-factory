@@ -27,10 +27,24 @@
 #      another, with contents write on only those repositories, dispatches.
 #   2. A CLEARCUTT_BOT_TOKEN secret with Contents: read and write on them.
 #
+# Call it as soon as images.yml has published: with reproduce: false there,
+# and a second call of images.yml that only reproduces, beside this one, the
+# apps don't wait for the second-runner reproduction (a failed one still
+# fails the run).
+#
 #   jobs:
 #     images:
 #       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.2.0
 #       permissions: {contents: read, packages: write, id-token: write, attestations: write}
+#       with:
+#         reproduce: false
+#     reproduce:
+#       needs: images
+#       if: ${{ !cancelled() && needs.images.outputs.published != '[]' && needs.images.outputs.published != '' }}
+#       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.2.0
+#       permissions: {contents: read, packages: write, id-token: write, attestations: write}
+#       with:
+#         published: ${{ needs.images.outputs.published }}
 #     notify:
 #       needs: images
 #       if: ${{ !cancelled() && github.event_name == 'push' && needs.images.outputs.published != '[]' }}

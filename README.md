@@ -353,7 +353,8 @@ The intended split, and the automation that keeps it current:
   (`lock --update-package` the fixed packages, so the pull request moves only
   them; merge), and the fleet job moves every app onto it in minutes.
 * **Apps in other repositories hear about it** ([`notify.yml`](.github/workflows/notify.yml)).
-  After the platform repository publishes, its `notify` job sends
+  As soon as the platform repository publishes (before the second-runner
+  reproduction finishes), its `notify` job sends
   `repository_dispatch` to the owner's repositories with the topic
   `clearcutt-app`: `clearcutt.run-image-published` for each new image,
   `clearcutt.stack-published` for each new stack, and
@@ -549,7 +550,12 @@ pipeline. On pull requests it builds, scans, and gates. On `main` it also pushes
 signs keylessly, adds SLSA provenance, and then rebuilds on a second runner from
 the signed recipe alone and attests the match. Its `published` output lists
 what the run newly published (a JSON array of `{manifest, kind, image,
-repository, digest, tags}`). `clearcutt-factory build`, `rebase`,
+repository, digest, tags}`). A calling job gets it only when the whole
+workflow is done, reproduction included, so `init`'s workflow calls it with
+`reproduce: false`, then again with that call's `published` output, which
+only reproduces (signed by `images.yml`, as before). `notify` and `fleet`
+start as soon as the images are published, beside the reproduction, and a
+failed reproduction still fails the run. `clearcutt-factory build`, `rebase`,
 `stack push`, and `profile push` emit `image`, `repository`, and `digest` to
 `$GITHUB_OUTPUT`.
 [`update-locks.yml`](.github/workflows/update-locks.yml),

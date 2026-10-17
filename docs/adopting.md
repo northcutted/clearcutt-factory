@@ -89,7 +89,10 @@ Push, then in the repository (or organization) settings:
 On `main`, each changed image is pushed, signed keylessly, attested (SBOM,
 vulnerabilities, recipe, SLSA provenance), and rebuilt on a second runner from
 its signed recipe, which attests the match (a reproduction attestation).
-Unchanged images aren't republished.
+Unchanged images aren't republished. The rebuild is the workflow's `reproduce`
+job (`images.yml` again, given what `images` published), beside `fleet` and
+`notify` rather than before them, so they start as soon as the images are
+published; a failed reproduction still fails the run.
 
 ### A GitHub App for the automation
 
@@ -164,7 +167,8 @@ Each app repository's daily fleet job picks up a new run image on its own.
 To have it happen minutes after the platform publishes:
 
 ```
-platform: images.yml ─▶ notify.yml ─repository_dispatch─▶ each repository with the topic clearcutt-app
+platform: images.yml ─┬▶ notify.yml ─repository_dispatch─▶ each repository with the topic clearcutt-app
+                      └▶ images.yml with published: reproduce on a second runner, meanwhile
   clearcutt.run-image-published ─▶ fleet.yml: rebase onto the new run image, then the pin pull request
   clearcutt.stack-published     ─▶ update-locks.yml: a pull request moving the lock to the new stack
 ```
@@ -183,7 +187,41 @@ platform: images.yml ─▶ notify.yml ─repository_dispatch─▶ each reposit
    `{image, repository, digest, tags, source}`, is advisory: the jobs it
    starts re-resolve tags from the registry and verify signatures as they do
    on their schedules, so a stale or forged dispatch starts a run that
-   changes nothing.
+   changes nothing. That is also why `notify` needn't wait for the
+   second-runner reproduction. A job that uses `images.yml` ends only when
+   every job in it has, so a workflow of your own calls it with
+   `reproduce: false`, and again, beside `notify`, with the first call's
+   `published` output, which only reproduces, as `init`'s does. Jobs that
+   read the reproduction attestations (an estate report, say) need
+   `reproduce` too:
+
+```yaml
+  images:
+    uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.2.0
+    permissions: {contents: read, packages: write, id-token: write, attestations: write}
+    with:
+      reproduce: false
+
+  reproduce:
+    needs: images
+    if: ${{ !cancelled() && needs.images.outputs.published != '[]' && needs.images.outputs.published != '' }}
+    uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.2.0
+    permissions: {contents: read, packages: write, id-token: write, attestations: write}
+    with:
+      published: ${{ needs.images.outputs.published }} # only reproduce what images published
+
+  notify-images:
+    needs: images # not reproduce: the apps verify what they are sent
+    if: ${{ !cancelled() && github.event_name == 'push' && needs.images.outputs.published != '[]' && needs.images.outputs.published != '' }}
+    uses: northcutted/clearcutt-factory/.github/workflows/notify.yml@v0.2.0
+    permissions: {contents: read}
+    with:
+      published: ${{ needs.images.outputs.published }}
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+```
+
 4. **Stacks** are pushed by a job of your own, so hand `notify.yml` what it
    pushed (`stack push` writes `image`, `repository`, `digest`, and
    `published` to `$GITHUB_OUTPUT`; `published` is `false` when the stack was
@@ -458,10 +496,15 @@ organization or enterprise. Variables (`CLEARCUTT_APP_ID`) are read from the
 calling repository. `images.yml`'s output `published` is what the run newly
 published: a JSON array of `{manifest, kind (image or app), image
 (repository@digest), repository, digest, tags}`, `[]` on pull requests.
+It arrives when the whole workflow is done. With `reproduce: false` the run
+publishes without reproducing, and a second call given its `published` builds
+nothing and only reproduces what that lists, so jobs that need only the
+output start right after the images are published
+([above](#waking-the-apps-when-the-platform-publishes)).
 
 | Workflow | Inputs | Secrets | Caller permissions |
 |---|---|---|---|
-| `images.yml` | `manifests` (globs, default `**/image.yaml **/app.yaml`), `registry`, `provenance` | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write`, `attestations: write` |
+| `images.yml` | `manifests` (globs, default `**/image.yaml **/app.yaml`), `registry`, `provenance`, `reproduce` (default `true`), `published` (only reproduce this) | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write`, `attestations: write` |
 | `update-locks.yml` | `manifests`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: write`, `pull-requests: write` |
 | `fleet.yml` | `apps` (default `**/app.yaml`), `registry`, `provenance`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: write`, `pull-requests: write`, `packages: write`, `id-token: write`, `attestations: write` |
 | `notify.yml` | `published` (required), `topic` (default `clearcutt-app`), `owner`, `repositories`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: read` |
