@@ -59,6 +59,16 @@ func Check(m *manifest.Manifest, o *manifest.Org, l *lock.Lock) error {
 		}
 	}
 	reported := map[string]bool{}
+	// apk installs from the repositories (the packages have no URL of
+	// their own); apt and dnf lock each file's URL, below.
+	for _, repo := range l.Packages.Repositories {
+		if !hostAllowed(repo, p.AllowedHosts) {
+			if u, err := url.Parse(repo); err == nil && !reported[u.Host] {
+				reported[u.Host] = true
+				add("packages download from a repository not in allowedHosts: %s", repo)
+			}
+		}
+	}
 	for _, pkgs := range l.Packages.Platforms {
 		for _, pk := range pkgs {
 			if pk.URL == "" || hostAllowed(pk.URL, p.AllowedHosts) {
@@ -120,7 +130,7 @@ func registryAllowed(ref string, allowed []string) bool {
 		}
 	}
 	for _, a := range allowed {
-		if strings.HasPrefix(full, a) {
+		if manifest.RegistryCovers(a, full) {
 			return true
 		}
 	}

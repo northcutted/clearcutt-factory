@@ -195,9 +195,14 @@ func (r *renderer) tool(t manifest.Tool, lt *lock.Tool) (string, error) {
 
 	case manifest.FromBuild:
 		r.f("# runs on the target platform; everything written to /out is copied into the image\n")
+		network := ""
+		if r.m.Spec.OfflineBuildTools {
+			r.f("# with no network (policy.requireOfflineBuildTools)\n")
+			network = "--network=none "
+		}
 		r.f("FROM %s AS %s\n", lt.Image.Pinned(), stage)
 		r.f("%s\n", epochArg)
-		r.f("RUN %s", heredoc("set -eu\nmkdir -p /out\n"+strings.TrimRight(t.Run, "\n")))
+		r.f("RUN %s%s", network, heredoc("set -eu\nmkdir -p /out\n"+strings.TrimRight(t.Run, "\n")))
 		return fmt.Sprintf("COPY --link --from=%s /out/ /", stage), nil
 	}
 	return "", fmt.Errorf("unknown source %q", t.From)
@@ -297,7 +302,7 @@ func (r *renderer) packages() error {
 	if pk.EffectiveManager() != lock.ManagerAPK {
 		return r.nativePackages()
 	}
-	sets := map[string][]string{}
+	sets := map[string][]lock.Package{}
 	var arches []string
 	for _, p := range r.m.Spec.Platforms {
 		pkgs, ok := pk.Platforms[p]
@@ -306,15 +311,11 @@ func (r *renderer) packages() error {
 		}
 		_, arch, _ := manifest.SplitPlatform(p)
 		arches = append(arches, arch)
-		for _, x := range pkgs {
-			sets[arch] = append(sets[arch], x.Name+"="+x.Version)
-		}
+		sets[arch] = pkgs
 	}
-	same := true
-	for _, a := range arches[1:] {
-		same = same && slices.Equal(sets[a], sets[arches[0]])
-	}
-	if same {
+	// Each architecture's packages are other builds, with other checksums,
+	// so one install serves every platform only when there is one.
+	if len(arches) == 1 {
 		r.f("FROM %s\n", base)
 		r.apkAdd(sets[arches[0]])
 		return nil
@@ -333,19 +334,52 @@ func (r *renderer) packages() error {
 // below the new one, which rewrite-timestamp does not clamp.
 const epochArg = "ARG SOURCE_DATE_EPOCH"
 
-// apkAdd installs exactly the locked set. glibc's ldconfig aux-cache records
-// inode numbers and timestamps, so it is removed to keep the layer reproducible.
-func (r *renderer) apkAdd(pins []string) {
+// apkAdd installs exactly the locked set, then checks it: apk fetches the
+// pinned versions from the repositories' signed APKINDEX, which a rebuilt
+// package with the same version would change, so every package must also
+// have the checksum the lock pins. apk records each installed package's
+// APKINDEX checksum (C:, a hash over the package's signed control section,
+// which holds the sha256 of its files) in its database. glibc's ldconfig
+// aux-cache records inode numbers and timestamps, so it is removed to keep
+// the layer reproducible.
+func (r *renderer) apkAdd(pkgs []lock.Package) {
 	r.f("%s\n", epochArg)
-	r.f("RUN apk add --no-cache --repositories-file /dev/null \\\n")
+	var b strings.Builder
+	b.WriteString("set -eu\napk add --no-cache --repositories-file /dev/null")
 	for _, repo := range r.l.Packages.Repositories {
-		r.f("      --repository %s \\\n", r.url(repo))
+		fmt.Fprintf(&b, " \\\n  --repository %s", r.url(repo))
 	}
-	for _, p := range pins {
-		r.f("      %s \\\n", p)
+	for _, p := range pkgs {
+		fmt.Fprintf(&b, " \\\n  %s=%s", p.Name, p.Version)
 	}
-	r.f(" && rm -f /var/cache/ldconfig/aux-cache\n")
+	b.WriteString("\nrm -f /var/cache/ldconfig/aux-cache\n")
+	b.WriteString(apkCheckScript)
+	for _, p := range pkgs {
+		fmt.Fprintf(&b, "%s %s %s\n", p.Name, p.Version, p.Checksum)
+	}
+	b.WriteString("LOCKED")
+	r.f("RUN %s", heredoc(b.String()))
 }
+
+// apkCheckScript compares apk's database with the lock's packages, which
+// follow it one per line (name version checksum) and then LOCKED.
+const apkCheckScript = `# every package must be the build the lock pins (apk's database records
+# each one's APKINDEX checksum)
+awk '
+  NR == FNR { want[$1] = $2 " " $3; next }
+  /^P:/ { p = substr($0, 3) }
+  /^V:/ { v = substr($0, 3) }
+  /^C:/ { c = substr($0, 3) }
+  /^$/ { if (p != "") have[p] = v " " c; p = ""; v = ""; c = "" }
+  END {
+    if (p != "") have[p] = v " " c
+    for (n in want) if (have[n] != want[n]) {
+      printf "clearcutt-factory: %s is %s, but the lock pins %s\n", n, ((n in have) ? have[n] : "not installed"), want[n] > "/dev/stderr"
+      bad = 1
+    }
+    exit bad
+  }' - /lib/apk/db/installed <<'LOCKED'
+`
 
 func (r *renderer) config() {
 	s := r.m.Spec

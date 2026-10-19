@@ -96,7 +96,7 @@ func checkInputs(m *manifest.Manifest, l *lock.Lock) error {
 				if !apkNameRE.MatchString(x.Name) || !apkVersionRE.MatchString(x.Version) {
 					check(where, fmt.Errorf("%q %q is not an apk package name and version", x.Name, x.Version))
 				}
-				if x.Checksum != "" && !apkChecksumRE.MatchString(x.Checksum) {
+				if !apkChecksumRE.MatchString(x.Checksum) {
 					check(where, fmt.Errorf("checksum %q is not an APKINDEX checksum (Q1…); run clearcutt-factory lock --update", x.Checksum))
 				}
 				continue

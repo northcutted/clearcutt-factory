@@ -183,8 +183,9 @@ func checkRendered(t *testing.T, in fuzzInput, image, app *Output) {
 			oci = x.args[1] == dest
 		case x.name == "run" && len(x.heredocs) == 1 && strings.HasPrefix(x.heredocs[0], "set -eu\nmkdir -p /out\n"):
 			build = x.heredocs[0] == "set -eu\nmkdir -p /out\n"+strings.TrimRight(in.buildRun, "\n")+"\n"
-		case x.name == "run" && strings.HasPrefix(strings.Join(x.args, " "), "apk add "):
-			apk = apk || hasWord(strings.Fields(strings.Join(x.args, " ")), "jq="+in.pkgVersion)
+		case x.name == "run" && len(x.heredocs) == 1 && strings.HasPrefix(x.heredocs[0], "set -eu\napk add "):
+			install, locked, _ := strings.Cut(x.heredocs[0], "<<'LOCKED'\n")
+			apk = apk || hasWord(strings.Fields(install), "jq="+in.pkgVersion) && strings.HasPrefix(locked, "jq "+in.pkgVersion+" Q1")
 		}
 	}
 	if !oci || !build || !apk {

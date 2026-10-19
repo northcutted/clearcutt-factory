@@ -135,7 +135,7 @@ spec:
 | `oci` | image digest | content addressing |
 | `go` | module version + toolchain image digest | the Go checksum database |
 | `nix` | nixpkgs commit + store path and closure per platform | cache.nixos.org's ed25519 signature on every store path, checked at lock and again by `nix copy` at build |
-| `build` | builder image digest | nothing — the lock marks it `unverified` |
+| `build` | builder image digest | nothing — the lock marks it `unverified`; with `policy.requireOfflineBuildTools` the script runs with no network |
 
 Placeholders: `{{version}}`, `{{os}}`, `{{arch}}` (renamed per tool with
 `archMap: {amd64: x86_64}`), `{{name}}`, plus `{{tag}}` and `{{asset}}` for
@@ -151,13 +151,18 @@ Tools install to `/usr/local/bin/<name>` with mode `0755` unless `dest:` and
 `clearcutt-factory lock` resolves packages with the distribution's own solver, run inside
 the digest-pinned base image (apt and dnf run in a container; apk is resolved
 in Go from the signed APKINDEX). The lock records every package that will be
-installed — for apt and dnf, each file's URL and sha256 — and the build
-downloads exactly those files with `ADD --checksum` and installs them offline.
-The build never asks a repository what is current.
+installed. For apt and dnf it records each file's URL and sha256, and the
+build downloads exactly those files with `ADD --checksum` and installs them
+offline, never asking a repository what is current. For apk it records each
+package's APKINDEX checksum (apk's `Q1…`: a SHA-1 over the package's signed
+control section, which holds the SHA-256 of its files); the build has apk
+install the pinned versions from the locked repositories, then checks every
+one against apk's database, which records the checksum of each installed
+package, so a package rebuilt under the same version fails the build.
 
 | Manager | Detected from | Resolution | Pinned download URL | Signatures checked at lock |
 |---|---|---|---|---|
-| apk | `/lib/apk/db/installed` | Go solver over the base's repositories; base packages are pinned too | apk fetches by exact version | APKINDEX signed by a key in the base's `/etc/apk/keys` |
+| apk | `/lib/apk/db/installed` | Go solver over the base's repositories; base packages are pinned too | apk fetches by exact version from the locked repositories; the build then checks each installed package's APKINDEX checksum against the lock | APKINDEX signed by a key in the base's `/etc/apk/keys` |
 | apt | os-release `debian`/`ubuntu` | `apt-get` in the base; Debian sources point at snapshot.debian.org | Debian: snapshot.debian.org. Ubuntu: Launchpad, which keeps every published file | apt verifies the signed indexes |
 | dnf | os-release `fedora`/`rhel`/`amzn`/… | `dnf --downloadonly` in the base | Fedora: Koji's signed copy of the build (byte-identical to the repository's). Amazon Linux: its content-addressed CDN. Others: the repository (mirror it) | `rpm -K` against the distribution's keys |
 
@@ -423,7 +428,7 @@ found by walking up from the manifest (or `--org`). See
 | `sbom` | Whether to add a syft scan to the declared SBOM |
 | `extends` | A shared org profile to build on, and who may sign it ([below](#one-profile-for-every-repository)) |
 | `vulnerabilities` | Scanner and the `failOn` severity gate, optionally `onlyFixed`; `vex` documents applied to every scan |
-| `policy` | Non-root, required labels, TOFU, allowed download hosts (tools and packages) and registries |
+| `policy` | Non-root, required labels, TOFU, allowed download hosts (tools, package files, and apk repositories) and registries (each entry covers itself and the paths below it, by whole segment: `ghcr.io/acme` covers `ghcr.io/acme/app`, not `ghcr.io/acme-evil/app`), signed stacks, and `requireOfflineBuildTools` (`from: build` scripts run with no network) |
 | `mirrors` | URL prefix rewrites for every download (`from: https://snapshot.debian.org/`, `to: https://artifactory.acme/debian-snapshot/`); checksums still pin the content |
 
 ### One profile for every repository
@@ -473,7 +478,9 @@ rules and with no signer, since it is its own file; its locks pin the digest
 
 * **Every input is content-addressed in the lock**: base, BuildKit, frontend,
   and helper images by digest; every package *including transitive
-  dependencies* by exact version, and for apt/dnf by file sha256; every download
+  dependencies* by exact version and checksum (apk: the APKINDEX checksum,
+  checked against apk's database after install; apt/dnf: the file's sha256,
+  checked before); every download
   by sha256; Go modules by version (sumdb-checked); Nix store paths by their
   signed hashes.
 * **Pinned BuildKit**: builds run `moby/buildkit@sha256:…` in a container, so

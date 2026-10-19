@@ -442,10 +442,14 @@ the field, not a silent override, so what the file says is what applies:
 | `signing.profile` | Only in a profile you publish |
 | `vulnerabilities.failOn` | The repository may set a stricter (lower) severity, not a looser one |
 | `vulnerabilities.onlyFixed`, `vulnerabilities.allowLocalVEX`, `policy.allowTOFU` | Can only turn off |
-| `policy.requireNonRoot`, `policy.requireSignedStacks`, `sbom.scan` | Can only turn on |
+| `policy.requireNonRoot`, `policy.requireSignedStacks`, `policy.requireOfflineBuildTools`, `sbom.scan` | Can only turn on |
 | `policy.requiredLabels` | Union |
-| `policy.allowedHosts`, `policy.allowedRegistries` | The repository's list, when it sets one, must lie within the shared one (a host or `.suffix` the shared list allows; a registry prefix under a shared one) |
+| `policy.allowedHosts`, `policy.allowedRegistries` | The repository's list, when it sets one, must lie within the shared one (a host or `.suffix` the shared list allows; a registry or repository path at or below a shared one, by whole path segments) |
 | `vulnerabilities.vex` | The shared profile's statements apply to every scan. The repository's (its profile's `vex` and its manifests' `spec.vex`) are refused unless the shared profile sets `vulnerabilities.allowLocalVEX: true`: a statement that a vulnerability doesn't apply lets an image past the gate |
+
+Under a shared profile, `build --push` and `rebase --push` refuse
+`--no-scan`, which would publish past its vulnerability gate; `--no-scan`
+still works for builds that aren't pushed.
 
 ### The platform repository extends it by path
 

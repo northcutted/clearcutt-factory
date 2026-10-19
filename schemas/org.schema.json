@@ -257,13 +257,17 @@
           "type": "array"
         },
         "allowedRegistries": {
-          "description": "AllowedRegistries restricts image references by prefix, e.g. cgr.dev/chainguard/.",
+          "description": "AllowedRegistries restricts image references to registries or repository paths, e.g. cgr.dev/chainguard: an entry covers itself and what is below it, whole path segments only (ghcr.io/acme covers ghcr.io/acme/app, not ghcr.io/acme-evil/app).",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "requireNonRoot": {
+          "type": "boolean"
+        },
+        "requireOfflineBuildTools": {
+          "description": "RequireOfflineBuildTools runs the scripts of from: build tools with no network (RUN --network=none), so they can only use what their builder image holds.",
           "type": "boolean"
         },
         "requireSignedStacks": {

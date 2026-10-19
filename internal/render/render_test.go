@@ -52,8 +52,8 @@ func fixture(t *testing.T) (*manifest.Manifest, *lock.Lock) {
 		Packages: lock.Packages{
 			Repositories: []string{"https://apk.cgr.dev/chainguard"},
 			Platforms: map[string][]lock.Package{
-				"linux/amd64": {{Name: "jq", Version: "1.8.2-r2"}, {Name: "oniguruma", Version: "6.9.10-r5"}},
-				"linux/arm64": {{Name: "jq", Version: "1.8.2-r1"}, {Name: "oniguruma", Version: "6.9.10-r5"}},
+				"linux/amd64": {{Name: "jq", Version: "1.8.2-r2", Checksum: "Q1cIjjnzqrowWo6jY/D8dmbkQ8mdk="}, {Name: "oniguruma", Version: "6.9.10-r5", Checksum: "Q1aaaaaaaaaaaaaaaaaaaaaaaaaaa="}},
+				"linux/arm64": {{Name: "jq", Version: "1.8.2-r1", Checksum: "Q1UVd+QYZzLs19UhTnUAfchEVOH8Q="}, {Name: "oniguruma", Version: "6.9.10-r5", Checksum: "Q1bbbbbbbbbbbbbbbbbbbbbbbbbbb="}},
 			},
 		},
 	}
@@ -318,4 +318,77 @@ func TestRenderApp(t *testing.T) {
 	if _, err := Render(m, l); err == nil || !strings.Contains(err.Error(), "run clearcutt-factory lock") {
 		t.Errorf("expected stale stack error, got %v", err)
 	}
+}
+
+// TestRenderAPKChecksums: each platform's install checks every package's
+// checksum against the lock, so a lock without them can't be rendered
+// (#10).
+func TestRenderAPKChecksums(t *testing.T) {
+	m, l := fixture(t)
+	out, err := Render(m, l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ins := parse(t, out.Containerfile)
+	var checked []string
+	for _, in := range ins {
+		if in.name == "run" && len(in.heredocs) == 1 && strings.Contains(in.heredocs[0], "apk add ") {
+			_, locked, ok := strings.Cut(in.heredocs[0], "/lib/apk/db/installed <<'LOCKED'\n")
+			if !ok || !strings.HasSuffix(locked, "\nLOCKED\n") {
+				t.Fatalf("no check after the install:\n%s", in.heredocs[0])
+			}
+			checked = append(checked, strings.TrimSuffix(locked, "LOCKED\n"))
+		}
+	}
+	want := []string{
+		"jq 1.8.2-r2 Q1cIjjnzqrowWo6jY/D8dmbkQ8mdk=\noniguruma 6.9.10-r5 Q1aaaaaaaaaaaaaaaaaaaaaaaaaaa=\n",
+		"jq 1.8.2-r1 Q1UVd+QYZzLs19UhTnUAfchEVOH8Q=\noniguruma 6.9.10-r5 Q1bbbbbbbbbbbbbbbbbbbbbbbbbbb=\n",
+	}
+	if strings.Join(checked, "|") != strings.Join(want, "|") {
+		t.Errorf("checked %q, want %q", checked, want)
+	}
+
+	l.Packages.Platforms["linux/arm64"][1].Checksum = ""
+	if _, err := Render(m, l); err == nil || !strings.Contains(err.Error(), "lock packages linux/arm64 (oniguruma): checksum \"\" is not an APKINDEX checksum") {
+		t.Errorf("no checksum: %v", err)
+	}
+}
+
+// TestRenderOfflineBuildTools: under policy.requireOfflineBuildTools, a
+// from: build script runs with no network; other stages are unchanged.
+func TestRenderOfflineBuildTools(t *testing.T) {
+	m, l := fixture(t)
+	online, err := Render(m, l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Spec.OfflineBuildTools = true
+	offline, err := Render(m, l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runs []string
+	for _, in := range parse(t, offline.Containerfile) {
+		if in.name == "run" && slicesContain(in.flags, "--network=none") {
+			runs = append(runs, in.heredocs...)
+		}
+	}
+	if len(runs) != 1 || !strings.Contains(runs[0], "pip install --prefix=/out/usr/local awscli") {
+		t.Errorf("offline RUNs: %q\n%s", runs, offline.Containerfile)
+	}
+	if strings.Contains(string(online.Containerfile), "--network") {
+		t.Error("without the policy, the build tool's network changed")
+	}
+	if a, b := parse(t, online.Containerfile), parse(t, offline.Containerfile); len(a) != len(b) {
+		t.Errorf("%d instructions online, %d offline", len(a), len(b))
+	}
+}
+
+func slicesContain(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }

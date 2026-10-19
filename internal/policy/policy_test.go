@@ -89,3 +89,52 @@ func TestRequireNonRoot(t *testing.T) {
 		}
 	}
 }
+
+// TestAllowedHostsCoverAPKRepositories: apk packages have no URL of their
+// own, so the repositories they install from are what allowedHosts checks.
+func TestAllowedHostsCoverAPKRepositories(t *testing.T) {
+	o := manifest.DefaultOrg()
+	o.Policy.AllowedHosts = []string{"apk.cgr.dev"}
+	m := &manifest.Manifest{}
+	l := &lock.Lock{Packages: lock.Packages{
+		Manager:      lock.ManagerAPK,
+		Repositories: []string{"https://apk.cgr.dev/chainguard", "https://packages.evil.example/wolfi"},
+		Platforms:    map[string][]lock.Package{"linux/amd64": {{Name: "jq", Version: "1.8.2-r3", Checksum: "Q1x="}}},
+	}}
+	err := Check(m, o, l)
+	if err == nil || !strings.Contains(err.Error(), "repository not in allowedHosts: https://packages.evil.example/wolfi") || strings.Contains(err.Error(), "apk.cgr.dev") {
+		t.Errorf("got %v", err)
+	}
+	l.Packages.Repositories = l.Packages.Repositories[:1]
+	if err := Check(m, o, l); err != nil {
+		t.Errorf("allowed repository: %v", err)
+	}
+}
+
+// TestAllowedRegistriesWholeSegments: an entry covers itself and what is
+// below it, never a longer name that starts the same way.
+func TestAllowedRegistriesWholeSegments(t *testing.T) {
+	for _, c := range []struct {
+		entry, ref string
+		ok         bool
+	}{
+		{"ghcr.io/acme", "ghcr.io/acme/app:1", true},
+		{"ghcr.io/acme", "ghcr.io/acme/team/app@sha256:" + strings.Repeat("a", 64), true},
+		{"ghcr.io/acme/", "ghcr.io/acme/app", true},
+		{"ghcr.io/acme/app", "ghcr.io/acme/app:1", true},
+		{"ghcr.io/acme/app", "ghcr.io/acme/app@sha256:" + strings.Repeat("a", 64), true},
+		{"ghcr.io", "ghcr.io/acme/app", true},
+		{"ghcr.io/acme", "ghcr.io/acme-evil/app:1", false},
+		{"ghcr.io/acme/app", "ghcr.io/acme/app-evil:1", false},
+		{"ghcr.io", "ghcr.io.evil.example/app", false},
+		{"cgr.dev/chainguard/", "cgr.dev/chainguard-evil/x", false},
+		{"docker.io/library/golang", "golang:1", true},
+		{"docker.io/library/golang", "golangci/golangci-lint:1", false},
+	} {
+		o := manifest.DefaultOrg()
+		o.Policy.AllowedRegistries = []string{c.entry}
+		if err := CheckImages(o, c.ref); (err == nil) != c.ok {
+			t.Errorf("%s under %s: %v, want ok=%v", c.ref, c.entry, err, c.ok)
+		}
+	}
+}

@@ -7,6 +7,33 @@ what may change between releases.
 
 ### Breaking
 
+**apk packages are checked against the lock's checksums at build.** The
+lock recorded each apk package's APKINDEX checksum, but the build only
+asked apk for the pinned versions, so a repository that rebuilt a package
+under the same version changed the image without failing it, although
+the README said packages were pinned by version and hash. Each platform's
+install now ends by checking every package apk installed against apk's
+database, which records the APKINDEX checksum (`Q1…`, a SHA-1 over the
+package's signed control section, which holds the SHA-256 of its files),
+and fails naming the package that differs. The checksums differ per
+architecture, so a multi-platform image now installs in one stage per
+architecture. A lock without checksums can't be rendered; `lock --update`
+writes them. Every apk image's Containerfile changes, so it builds a new
+digest once: re-render (`clearcutt-factory render`) and commit.
+
+**`policy.allowedHosts` covers apk repositories, and `allowedRegistries`
+matches whole path segments.** apk packages have no URL of their own, so
+the repositories they come from went unchecked; they are checked now, so
+a profile with `allowedHosts` must list its apk repositories' hosts
+(`apk.cgr.dev` for Wolfi and Chainguard). An `allowedRegistries` entry was a
+string prefix, so `ghcr.io/acme` allowed `ghcr.io/acme-evil/app`; an entry
+now covers itself and the paths below it (with a tag or digest), and a
+repository's list must lie within the shared profile's the same way.
+Entries ending in `/` mean what they did.
+
+**`build --push` and `rebase --push` refuse `--no-scan` under a shared
+profile**, which would publish past the platform's vulnerability gate.
+
 **Values the Containerfile can't hold are refused.** `spec.user`,
 `spec.workdir`, environment variable names, the paths of `oci` tools, and
 other values were printed into the Containerfile as they were, and
@@ -28,6 +55,13 @@ its sha256, so it can't end its heredoc and add instructions; other
 Containerfiles are unchanged. `FuzzRender` renders arbitrary values and
 checks with BuildKit's own parser that the Containerfile has exactly the
 instructions a plain input gives, with each value unchanged.
+
+### Added
+
+**`policy.requireOfflineBuildTools`** runs the scripts of `from: build`
+tools with no network (`RUN --network=none`), so they can use only what
+their builder image holds. Off by default; a repository can't turn it off
+when its shared profile turns it on.
 
 ## v0.3.0
 

@@ -86,6 +86,9 @@ type Spec struct {
 	VEXFiles []string `yaml:"-" json:"-"`
 	// Mirrors are the org's download URL rewrites, applied when rendering.
 	Mirrors []Mirror `yaml:"-" json:"-"`
+	// OfflineBuildTools is the org's policy.requireOfflineBuildTools:
+	// from: build scripts run with no network.
+	OfflineBuildTools bool `yaml:"-" json:"-"`
 	// OrgFile is the org profile's path (empty for the defaults); an app
 	// leaves it out of its source.
 	OrgFile string `yaml:"-" json:"-"`
@@ -346,6 +349,7 @@ func (m *Manifest) ApplyOrg(o *Org) error {
 		m.Spec.Base = o.Defaults.Base
 	}
 	m.Spec.Mirrors = o.Mirrors
+	m.Spec.OfflineBuildTools = o.Policy.RequireOfflineBuildTools
 	m.Spec.OrgFile = o.Path
 	if len(m.Spec.Platforms) == 0 {
 		m.Spec.Platforms = o.Defaults.Platforms

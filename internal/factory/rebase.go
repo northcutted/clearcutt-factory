@@ -152,6 +152,9 @@ func lockForRebuild(ctx context.Context, opts Options, pinned *manifest.Manifest
 // by digest only and the tag stays, so the next rebase picks up the new
 // image.
 func rebaseImage(ctx context.Context, opts Options, org *manifest.Org, ro RebaseOptions, test *manifest.Test, label string) (onto, image string, err error) {
+	if err := checkNoScan(org, ro.Push, ro.NoScan); err != nil {
+		return "", "", err
+	}
 	plan, err := planRebase(ctx, rebaseInputs{image: ro.Image, from: ro.From, onto: ro.Onto})
 	if err != nil {
 		return "", "", err

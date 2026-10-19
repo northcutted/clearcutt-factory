@@ -243,3 +243,23 @@ spec:
 		}
 	}
 }
+
+// TestOfflineBuildToolsFromPolicy: the org's policy decides whether
+// from: build scripts get a network, for the renderer.
+func TestOfflineBuildToolsFromPolicy(t *testing.T) {
+	for _, offline := range []bool{false, true} {
+		p := write(t, "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Image\nmetadata: {name: x, ref: registry.example/x}\nspec:\n  base: wolfi\n  tools: [{name: b, from: build, image: python:3, run: \"true\"}]\n")
+		m, err := Load(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o := DefaultOrg()
+		o.Policy.RequireOfflineBuildTools = offline
+		if err := m.ApplyOrg(o); err != nil {
+			t.Fatal(err)
+		}
+		if m.Spec.OfflineBuildTools != offline {
+			t.Errorf("policy %v: spec says %v", offline, m.Spec.OfflineBuildTools)
+		}
+	}
+}

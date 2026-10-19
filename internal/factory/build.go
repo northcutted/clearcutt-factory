@@ -75,6 +75,9 @@ func Build(ctx context.Context, opts Options, bo BuildOptions) error {
 	if err != nil {
 		return err
 	}
+	if err := checkNoScan(org, bo.Push, bo.NoScan); err != nil {
+		return err
+	}
 	if err := policy.Check(m, org, l); err != nil {
 		return err
 	}
@@ -196,6 +199,15 @@ func Build(ctx context.Context, opts Options, bo BuildOptions) error {
 		return err
 	}
 	opts.printf("wrote %s", rel(resultPath))
+	return nil
+}
+
+// checkNoScan refuses to publish without a scan under a shared profile:
+// its vulnerability gate is the platform's, and --no-scan would skip it.
+func checkNoScan(org *manifest.Org, push, noScan bool) error {
+	if push && noScan && org.Shared != nil {
+		return fmt.Errorf("--push with --no-scan: the shared profile %s sets the vulnerability gate every published image passes, and --no-scan skips it; drop --no-scan (it stays for builds that aren't pushed)", org.Shared.Name())
+	}
 	return nil
 }
 
