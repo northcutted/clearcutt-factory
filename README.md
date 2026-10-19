@@ -19,7 +19,7 @@ that report as a website.
 Distro packages come from the base image's own package manager — **apk**
 (Wolfi, Chainguard, Alpine), **apt** (Debian, Ubuntu), or **dnf** (Fedora,
 RHEL/UBI, Amazon Linux, Rocky, Alma) — with every package pinned by version and
-hash. Everything else — release binaries, **Nix** packages, tools inside other
+hash, and the hash checked when the image is built. Everything else — release binaries, **Nix** packages, tools inside other
 images, Go programs, arbitrary build steps — is declared inline as a *tool*, so
 there is no package recipe to write for each third-party binary.
 
