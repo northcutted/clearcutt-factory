@@ -18,7 +18,9 @@ SBOM and vulnerability report; a run adds whatever is missing and signs
 nothing twice, so the next run completes one that failed partway. A
 rebase that finds the image already on the newest base does the same,
 and refuses an image with neither a recipe nor a rebase record from the
-org's signer (rebuild it). The check for a newer image under the tag now
+org's signer (rebuild it), or one it has no signer to check against
+(`signing.verify` or a trust policy): `rebase --push` used to say "nothing
+to do" without looking. The check for a newer image under the tag now
 applies to new images too, so a re-run of an older job no longer moves
 `latest` back (`--force-tags` still does, for a rollback). `result.json`
 is written before the push and again once the image is published, before

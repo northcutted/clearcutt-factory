@@ -44,6 +44,13 @@ func healCurrent(ctx context.Context, opts Options, org *manifest.Org, ro Rebase
 		checks = append(checks, platformCheck{p.Digest, scans})
 	}
 	source := art.Source()
+	if signers, err := signerArgs(org, manifest.RoleImage, source); err != nil || len(signers) == 0 {
+		why := "the org profile names none"
+		if err != nil {
+			why = err.Error()
+		}
+		return "", fmt.Errorf("%s is on the newest base, and there is no image signer to check that it is signed and attested (%s): name one in signing.verify or signing.trustPolicy", plan.appRef, why)
+	}
 	have := inspectPublication(ctx, org, plan.appRef, plan.repo, attest.RebasePredicateType, source, checks)
 	if have.complete(checks) {
 		opts.printf("already on the newest base, signed, and attested; nothing to do")

@@ -472,6 +472,19 @@ func TestRebaseHealsCurrentImage(t *testing.T) {
 		t.Errorf("cosign signed or attested again: %q", got)
 	}
 
+	// Without a signer to check against, a current image isn't taken as
+	// complete.
+	noSigner := strings.Replace(string(must(os.ReadFile(orgPath))), "  verify: {certificateIdentity: x, certificateOIDCIssuer: "+ghIssuer+"}\n", "", 1)
+	if err := os.WriteFile(orgPath, []byte(noSigner), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := rebaseNow(); err == nil || !strings.Contains(err.Error(), "no image signer to check that it is signed and attested (the org profile names none)") {
+		t.Errorf("no signer: %v\n%s", err, w.out.String())
+	}
+	if err := os.WriteFile(orgPath, []byte(strings.Replace(noSigner, "signing:\n", "signing:\n  verify: {certificateIdentity: x, certificateOIDCIssuer: "+ghIssuer+"}\n", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	// An image on the newest base that no signer vouched for (pushed by
 	// hand, say) is refused, not signed.
 	stray := testIndex(t, nil, func(arch string) []v1.Layer {
@@ -532,4 +545,11 @@ func slicesContains(s []string, v string) bool {
 		}
 	}
 	return false
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
 }
