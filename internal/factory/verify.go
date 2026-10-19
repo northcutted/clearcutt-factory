@@ -84,7 +84,7 @@ func Verify(ctx context.Context, opts Options, vo VerifyOptions) error {
 		if err != nil {
 			return err
 		}
-		if err := stage(out, filepath.Join(workDir, "context")); err != nil {
+		if err := stage(out, filepath.Join(workDir, "context"), opts.logf); err != nil {
 			return err
 		}
 		req = builder.Request{

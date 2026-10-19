@@ -29,6 +29,16 @@ published image now takes a cosign call per signature and attestation
 instead of one. `stack push` and `profile push` likewise push by digest,
 sign, and only then move the tag.
 
+**Only the source reaches the build context and the signed recipe.**
+Copying an app's source (and directories in `files:`) left out `.git`,
+`/out`, and factory's own files, and nothing else, so a local
+`build --push` could embed a stray `.env` in the recipe, which holds the
+context's contents up to 2 MiB. In a git work tree only the files git
+tracks are copied now (`build` names what it left out: commit what the
+build needs); elsewhere, what `.gitignore` files ignore is left out; and in
+both, what a `.dockerignore` at the directory's root excludes, as Docker
+reads it. A source in a git work tree needs `git` on `PATH`.
+
 **apk packages are checked against the lock's checksums at build.** The
 lock recorded each apk package's APKINDEX checksum, but the build only
 asked apk for the pinned versions, so a repository that rebuilt a package

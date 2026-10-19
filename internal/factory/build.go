@@ -96,7 +96,7 @@ func Build(ctx context.Context, opts Options, bo BuildOptions) error {
 		return err
 	}
 	ctxDir := filepath.Join(work, "context")
-	if err := stage(out, ctxDir); err != nil {
+	if err := stage(out, ctxDir, opts.logf); err != nil {
 		return err
 	}
 
