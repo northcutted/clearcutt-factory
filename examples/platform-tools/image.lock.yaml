@@ -2,7 +2,7 @@
 apiVersion: factory.clearcutt.dev/v1alpha1
 kind: Lock
 inputsDigest: sha256:311d499688dd175491579a25208029a04c8e35d8de14485779439f56cb32f8cc
-sourceDateEpoch: 1791849600
+sourceDateEpoch: 1792281600
 builder:
   buildkit:
     ref: moby/buildkit:v0.33.1
@@ -12,13 +12,13 @@ builder:
     digest: sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
   toolbox:
     ref: cgr.dev/chainguard/wolfi-base:latest
-    digest: sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43
+    digest: sha256:c2a4815b6ca49b9bbafd451b4bde690d567a86b2b6b54877faac8082a7bc4296
 base:
   ref: cgr.dev/chainguard/wolfi-base:latest
-  digest: sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43
+  digest: sha256:c2a4815b6ca49b9bbafd451b4bde690d567a86b2b6b54877faac8082a7bc4296
 packages:
   manager: apk
-  inputsDigest: sha256:40bfddfae42955b8be89b7c4abe3660897f4e85501f7dbbd2efcdab22af7d538
+  inputsDigest: sha256:85d7fada2df72fd403dfa177e9aaddaf4a6997da1d719e60ba8c06643715ed60
   repositories:
     - https://apk.cgr.dev/chainguard
   platforms:
@@ -52,9 +52,9 @@ packages:
         license: MPL-2.0 AND MIT
         repo: https://apk.cgr.dev/chainguard
       - name: curl
-        version: 8.22.0-r4
+        version: 8.23.0-r0
         arch: x86_64
-        checksum: Q1aQJ3dlzjLjSkDTTA/4vv2WSn/s0=
+        checksum: Q1yMwkhouhkvfq0mJtwLOYCnYBe3Q=
         origin: curl
         license: MIT
         repo: https://apk.cgr.dev/chainguard
@@ -73,9 +73,9 @@ packages:
         license: GPL-3.0-or-later
         repo: https://apk.cgr.dev/chainguard
       - name: git
-        version: 2.56.0-r0
+        version: 2.56.0-r2
         arch: x86_64
-        checksum: Q1c/gXw3ZlWqlTTOszeBVlwRVA+Tw=
+        checksum: Q1HZXnt3LHYkRsJbCJXcP8NQ3ZIsg=
         origin: git
         license: GPL-2.0-or-later AND ( Artistic-1.0-Perl OR GPL-1.0-or-later )
         repo: https://apk.cgr.dev/chainguard
@@ -94,9 +94,9 @@ packages:
         license: LGPL-2.1-or-later
         repo: https://apk.cgr.dev/chainguard
       - name: heimdal-libs
-        version: 7.8.0-r53
+        version: 7.8.0-r54
         arch: x86_64
-        checksum: Q1M+pGZHrwGgdSfxGX4HUcKQ+CDGk=
+        checksum: Q1buPSVRlgpy8OHAi008QQ5VhNNcI=
         origin: heimdal
         license: BSD-3-Clause
         repo: https://apk.cgr.dev/chainguard
@@ -178,9 +178,9 @@ packages:
         license: Apache-2.0
         repo: https://apk.cgr.dev/chainguard
       - name: libcurl-openssl4
-        version: 8.22.0-r4
+        version: 8.23.0-r0
         arch: x86_64
-        checksum: Q1wzjLvFA57OiEjEOZEEkyNz2SDsA=
+        checksum: Q1W5nQYZCCRqSLoqH3jubXORxum2g=
         origin: curl
         license: MIT
         repo: https://apk.cgr.dev/chainguard
@@ -241,9 +241,9 @@ packages:
         license: Apache-2.0
         repo: https://apk.cgr.dev/chainguard
       - name: libunistring
-        version: 1.4.2-r4
+        version: 1.5-r0
         arch: x86_64
-        checksum: Q1yApg46kY03wUYnuZkOTykCHs7d0=
+        checksum: Q1JOYISGQ5t+ClT8ylDxfGDMZqpuw=
         origin: libunistring
         license: GPL-2.0-or-later OR LGPL-3.0-or-later
         repo: https://apk.cgr.dev/chainguard
@@ -297,16 +297,16 @@ packages:
         license: BSD-2-Clause
         repo: https://apk.cgr.dev/chainguard
       - name: openssl-4.0-libcrypto
-        version: 4.0.3-r6
+        version: 4.0.3-r7
         arch: x86_64
-        checksum: Q1Gd2v1sjT5RedxpCLY/wn72oGNtg=
+        checksum: Q1lAFM+if79Dzv5UCyLJf7ZrqbzYs=
         origin: openssl-4.0
         license: Apache-2.0
         repo: https://apk.cgr.dev/chainguard
       - name: openssl-4.0-libssl
-        version: 4.0.3-r6
+        version: 4.0.3-r7
         arch: x86_64
-        checksum: Q1SdxZYSluzOL+Dl8TUmg6qgJOFlg=
+        checksum: Q1MNPrDTNHUagmqWgVL+NJT9OsMg0=
         origin: openssl-4.0
         license: Apache-2.0
         repo: https://apk.cgr.dev/chainguard
@@ -325,9 +325,9 @@ packages:
         license: GPL-3.0-or-later
         repo: https://apk.cgr.dev/chainguard
       - name: sqlite-libs
-        version: 3.54.0-r0
+        version: 3.54.1-r0
         arch: x86_64
-        checksum: Q1ohm0OAaigF9vv2uU3P72hSlXg9g=
+        checksum: Q1VRLw0RR5HoAu1uTfKALfMDoAMco=
         origin: sqlite
         license: blessing
         repo: https://apk.cgr.dev/chainguard
@@ -389,9 +389,9 @@ packages:
         license: MPL-2.0 AND MIT
         repo: https://apk.cgr.dev/chainguard
       - name: curl
-        version: 8.22.0-r4
+        version: 8.23.0-r0
         arch: aarch64
-        checksum: Q1RNVF949bhI4kHashQ3RpsvBT4kk=
+        checksum: Q1EWFDwpKxAiF9bU5bja5imuzAHHs=
         origin: curl
         license: MIT
         repo: https://apk.cgr.dev/chainguard
@@ -410,9 +410,9 @@ packages:
         license: GPL-3.0-or-later
         repo: https://apk.cgr.dev/chainguard
       - name: git
-        version: 2.56.0-r0
+        version: 2.56.0-r2
         arch: aarch64
-        checksum: Q1lV/sPjnmRs20W+9YUQGcn8ibY2g=
+        checksum: Q1+PBt39ipZnaGTLyIkS8dGoht/Rk=
         origin: git
         license: GPL-2.0-or-later AND ( Artistic-1.0-Perl OR GPL-1.0-or-later )
         repo: https://apk.cgr.dev/chainguard
@@ -431,9 +431,9 @@ packages:
         license: LGPL-2.1-or-later
         repo: https://apk.cgr.dev/chainguard
       - name: heimdal-libs
-        version: 7.8.0-r53
+        version: 7.8.0-r54
         arch: aarch64
-        checksum: Q1tTTsxW+BBcyGV16QLl1lpF2jJO0=
+        checksum: Q1rJaS9PU2Jstowd6CHNbaZrU2Z4c=
         origin: heimdal
         license: BSD-3-Clause
         repo: https://apk.cgr.dev/chainguard
@@ -515,9 +515,9 @@ packages:
         license: Apache-2.0
         repo: https://apk.cgr.dev/chainguard
       - name: libcurl-openssl4
-        version: 8.22.0-r4
+        version: 8.23.0-r0
         arch: aarch64
-        checksum: Q155Re6v1aXK3i4tqR8EMQbjvrfs8=
+        checksum: Q1V/mGJ5UF65T6HECavkg2ngfEuv0=
         origin: curl
         license: MIT
         repo: https://apk.cgr.dev/chainguard
@@ -578,9 +578,9 @@ packages:
         license: Apache-2.0
         repo: https://apk.cgr.dev/chainguard
       - name: libunistring
-        version: 1.4.2-r4
+        version: 1.5-r0
         arch: aarch64
-        checksum: Q1vxztVwua2GLpyAb+qOQycXtptk8=
+        checksum: Q188KDmDxM1e/69KrsG8L3SufpPxg=
         origin: libunistring
         license: GPL-2.0-or-later OR LGPL-3.0-or-later
         repo: https://apk.cgr.dev/chainguard
@@ -634,16 +634,16 @@ packages:
         license: BSD-2-Clause
         repo: https://apk.cgr.dev/chainguard
       - name: openssl-4.0-libcrypto
-        version: 4.0.3-r6
+        version: 4.0.3-r7
         arch: aarch64
-        checksum: Q1Ntez0qoDIBGHBD6moOZ2iPegnuU=
+        checksum: Q1C16kIwI0/388M6ubABRSay6mVME=
         origin: openssl-4.0
         license: Apache-2.0
         repo: https://apk.cgr.dev/chainguard
       - name: openssl-4.0-libssl
-        version: 4.0.3-r6
+        version: 4.0.3-r7
         arch: aarch64
-        checksum: Q1rQfJCW/px/LCCDsdGRdgc8c/2LI=
+        checksum: Q1OKoJSTzktSN6VyKPMMjrAI559kc=
         origin: openssl-4.0
         license: Apache-2.0
         repo: https://apk.cgr.dev/chainguard
@@ -662,9 +662,9 @@ packages:
         license: GPL-3.0-or-later
         repo: https://apk.cgr.dev/chainguard
       - name: sqlite-libs
-        version: 3.54.0-r0
+        version: 3.54.1-r0
         arch: aarch64
-        checksum: Q1w9ZNQ8d0SiglNkv8hpJ++wwiyz0=
+        checksum: Q1Nf7tuYzhYoQQzeIfbctX7oi/la8=
         origin: sqlite
         license: blessing
         repo: https://apk.cgr.dev/chainguard
@@ -757,7 +757,7 @@ tools:
     specDigest: sha256:234ec637111776cd7015616646e3c78eae2ceb88db1a27e2faccc6fdc90f2208
     image:
       ref: gcr.io/go-containerregistry/crane:latest
-      digest: sha256:9162effd4c674ad2fa4e7170a894503ffff9114f15a57e75a0a32e111ad32d85
+      digest: sha256:5ccb3ca884e3890d820fbf5ce4071fa3bb89469a72cc3f0ac7404a99c2a68788
   - name: yq
     from: go
     version: v4.54.1
