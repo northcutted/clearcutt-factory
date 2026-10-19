@@ -655,7 +655,10 @@ go test ./...
 go test ./internal/render -update   # refresh the golden Containerfiles
 go test ./internal/schema -update   # regenerate schemas/ after changing manifest types
 CLEARCUTT_FACTORY_E2E=1 go test ./internal/factory   # real lock + build + no-cache rebuild per package manager,
-                                                     # and an app built on a stack, then rebased (needs docker or podman)
+                                                     # an app built on a stack, then rebased, and an image pushed
+                                                     # and signed with cosign (needs docker or podman, and cosign)
+CLEARCUTT_FACTORY_COSIGN_E2E=1 go test ./internal/factory -run TestEndToEndCosign   # publish with the real cosign
+                                                     # and check every signature and attestation with it
 scripts/release.sh v0.2.0           # after adding a CHANGELOG section: re-pin refs, commit, tag
 ```
 

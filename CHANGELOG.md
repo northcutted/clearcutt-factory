@@ -110,6 +110,18 @@ instructions a plain input gives, with each value unchanged.
 
 ### Added
 
+**CI publishes with the real cosign.** Every cosign interaction in the
+tests was a fake. A `cosign` job now publishes a two-platform image to a
+`registry:3` service through factory's publish path, signed with a key and
+no transparency log, and checks with `cosign verify` and
+`cosign verify-attestation` that the index and each platform image are
+signed, that the recipe and each platform's SBOM and vulnerability report
+are attached, and that `latest` names the signed digest; then a publish
+that cosign fails partway leaves `latest` alone, and the next run attaches
+only what is missing (`TestEndToEndCosign`). The end-to-end job also builds
+an image, pushes it to a local registry with `build --push`, and checks its
+signature and attestations with cosign.
+
 **The reusable workflows are linted and hardened.** CI runs actionlint and
 zizmor (online audits) on every workflow and the action, with the findings
 this repository keeps justified inline or in `.github/zizmor.yml`. Every job
