@@ -82,7 +82,9 @@ func StackPushWith(ctx context.Context, opts Options, file string, so StackPushO
 		}
 		return githubOutput(Result{Image: pushed, Repository: lock.RepoOf(so.Ref), Digest: d, Signed: signer != nil, Published: false})
 	}
-	if _, err := registry.PushFile(ctx, so.Ref, manifest.StackArtifactType, "stack.yaml", content); err != nil {
+	// By digest, then signed, then tagged: the tag never names an
+	// unsigned stack, even when signing fails.
+	if _, err := registry.PushFile(ctx, pushed, manifest.StackArtifactType, "stack.yaml", content); err != nil {
 		return err
 	}
 	opts.printf("pushed stack %s to %s", st.Metadata.Name, pushed)
@@ -92,9 +94,24 @@ func StackPushWith(ctx context.Context, opts Options, file string, so StackPushO
 		}
 		opts.printf("signed %s", pushed)
 	}
+	if err := tagAs(ctx, so.Ref, pushed); err != nil {
+		return err
+	}
 	// image, repository, and digest for later workflow steps (notify.yml's
 	// clearcutt.stack-published), as build and rebase write them.
 	return githubOutput(Result{Image: pushed, Repository: lock.RepoOf(so.Ref), Digest: d, Signed: signer != nil, Published: true})
+}
+
+// tagAs points the tag ref names (if it names one) at pushed.
+func tagAs(ctx context.Context, ref, pushed string) error {
+	r, err := name.ParseReference(ref)
+	if err != nil {
+		return err
+	}
+	if t, ok := r.(name.Tag); ok {
+		return registry.Tag(ctx, pushed, []string{t.TagStr()})
+	}
+	return nil
 }
 
 // stackSigner is how stack push signs, or nil when it doesn't: with --key,

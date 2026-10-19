@@ -185,8 +185,15 @@ func rebaseImage(ctx context.Context, opts Options, org *manifest.Org, ro Rebase
 		current = current && digestOf(p.oldRef) == p.newDigest
 	}
 	if current {
-		opts.printf("already on the newest base; nothing to do")
-		return onto, "", nil
+		if !ro.Push || ro.Check {
+			opts.printf("already on the newest base; nothing to do")
+			return onto, "", nil
+		}
+		healed, err := healCurrent(ctx, opts, org, ro, plan)
+		if err != nil {
+			return "", "", err
+		}
+		return onto, healed, nil
 	}
 
 	reports, err := plan.analyze()
@@ -333,7 +340,23 @@ func rebaseImage(ctx context.Context, opts Options, org *manifest.Org, ro Rebase
 	}
 
 	if ro.Push {
-		result.Image, result.Published, result.Signed, err = publish(ctx, opts, org, art, plan.repo, tags, attest.RebasePredicateType, recordPath, outputs, ro.NoSign, ro.ForceTags, held)
+		// As for builds (see publishBuild): on record before the push,
+		// and again once the image is published, before its tags move.
+		if err := attest.WriteJSON(resultPath, result); err != nil {
+			return "", "", err
+		}
+		if result.Image, result.Published, result.Signed, err = publishImage(ctx, opts, org, art, plan.repo, attest.RebasePredicateType, recordPath, outputs, ro.NoSign); err != nil {
+			return "", "", err
+		}
+		if err := attest.WriteJSON(resultPath, result); err != nil {
+			return "", "", err
+		}
+		if ro.held == nil {
+			if err := githubOutput(result); err != nil {
+				return "", "", err
+			}
+		}
+		err = tagPublished(ctx, opts, art, plan.repo, tags, ro.ForceTags, held)
 		var moved movedTags
 		if errors.As(err, &moved) && ro.held == nil {
 			for _, m := range moved {
@@ -343,11 +366,6 @@ func rebaseImage(ctx context.Context, opts Options, org *manifest.Org, ro Rebase
 		}
 		if err != nil {
 			return "", result.Image, err
-		}
-		if ro.held == nil {
-			if err := githubOutput(result); err != nil {
-				return "", "", err
-			}
 		}
 	} else {
 		opts.printf("not pushed (use --push); unsigned attestations are in %s", rel(attDir))

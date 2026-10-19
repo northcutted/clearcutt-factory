@@ -392,13 +392,14 @@ rebase needs the old base's manifest) and old app digests (rollback).
 
 **Tags only move forward.** Until an app's pin pull request merges, a build
 from unchanged source uses the old lock and reproduces the image the fleet
-rebased. Publishing an image the registry already has moves its tags to it,
-except a tag that holds a newer image: this image rebased onto a newer build
+rebased. Publishing moves the tags to the image, new or one the registry
+already has, except a tag that holds a newer image: this image rebased onto a newer build
 of its base (its own layers on another base, while its base's tag has moved
 on), or an image created later (built from a newer lock: a build's created
 time is its lock's `SOURCE_DATE_EPOCH`). That tag stays, with a warning.
 `--force-tags` (on `build` and `rebase`) moves it anyway, for a deliberate
-rollback.
+rollback. So a run of an older job (re-run after a newer one published)
+publishes its image without taking a tag back to it.
 
 A build from changed source before the pin pull request merges is a new
 image, on the old base. When a tag of an app holds an image on a newer build
@@ -514,6 +515,22 @@ it names the first differing layer and the files that differ.
 
 Unsigned copies of all of these are written to `out/<name>/attestations/`, and
 `out/<name>/result.json` summarizes the build for CI.
+
+**Tags move last.** `build --push` and `rebase --push` push the image by
+digest, sign it, and attach every attestation above before any tag moves, so
+a tag only ever names a signed, attested image. An image the registry
+already has counts as published only when the org's image signers verify
+its signature (on the index and every platform image), its recipe or
+rebase record, and each platform's SBOM and vulnerability report; whatever
+is missing is added, and nothing else is signed again. So a run that failed
+partway (cosign or the transparency log down) is completed by the next one,
+and `rebase --push` does the same for an image it finds already on the
+newest base (one with neither a recipe nor a rebase record from the org's
+signer is refused: rebuild it). Without a signer to check against
+(`signing.verify` or a trust policy), every publish signs and attests
+again. `result.json` is written before the push and again once the image
+is published, before its tags move; its `published` is true when the run
+pushed the image or added anything to it.
 
 **Reproductions.** `clearcutt-factory verify --image IMAGE --attest` rebuilds
 the image from its signed recipe without cache (or repeats its signed rebase

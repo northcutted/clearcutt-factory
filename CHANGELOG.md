@@ -7,6 +7,28 @@ what may change between releases.
 
 ### Breaking
 
+**Tags move only to a signed, fully attested image, and never back.**
+`build --push` and `rebase --push` pushed with the tags, then signed, so a
+cosign or Rekor failure left `latest` on an unsigned image; a rebase re-run
+then saw the image "already on the newest base" and left it so. Images are
+now pushed by digest, signed, and attested, and only then tagged. "Already
+published" means the org's image signers verify the signature (index and
+every platform image), the recipe or rebase record, and each platform's
+SBOM and vulnerability report; a run adds whatever is missing and signs
+nothing twice, so the next run completes one that failed partway. A
+rebase that finds the image already on the newest base does the same,
+and refuses an image with neither a recipe nor a rebase record from the
+org's signer (rebuild it). The check for a newer image under the tag now
+applies to new images too, so a re-run of an older job no longer moves
+`latest` back (`--force-tags` still does, for a rollback). `result.json`
+is written before the push and again once the image is published, before
+its tags move (with the `$GITHUB_OUTPUT` values), so a failure after that
+still leaves the record the reproduce and notify steps read; `published`
+is true when the run pushed the image or added anything to it. Checking a
+published image now takes a cosign call per signature and attestation
+instead of one. `stack push` and `profile push` likewise push by digest,
+sign, and only then move the tag.
+
 **apk packages are checked against the lock's checksums at build.** The
 lock recorded each apk package's APKINDEX checksum, but the build only
 asked apk for the pinned versions, so a repository that rebuilt a package
