@@ -46,6 +46,9 @@ type ContextFile struct {
 
 // Render produces the Containerfile for m pinned by l.
 func Render(m *manifest.Manifest, l *lock.Lock) (*Output, error) {
+	if err := checkInputs(m, l); err != nil {
+		return nil, fmt.Errorf("can't render %s:\n%w", filepath.Base(m.Path), err)
+	}
 	r := &renderer{m: m, l: l}
 	if m.Kind == manifest.KindApp {
 		return r.renderApp()
@@ -58,6 +61,8 @@ type renderer struct {
 	l   *lock.Lock
 	b   bytes.Buffer
 	out Output
+	// err is the first value rendering found it can't print (see url).
+	err error
 }
 
 func (r *renderer) f(format string, a ...any) { fmt.Fprintf(&r.b, format, a...) }
@@ -123,6 +128,9 @@ func (r *renderer) render() (*Output, error) {
 		r.f("%s\n", c)
 	}
 	r.config()
+	if r.err != nil {
+		return nil, r.err
+	}
 	r.out.Containerfile = r.b.Bytes()
 	return &r.out, nil
 }
@@ -181,7 +189,7 @@ func (r *renderer) tool(t manifest.Tool, lt *lock.Tool) (string, error) {
 		r.f("ARG TARGETOS TARGETARCH %s\n", strings.TrimPrefix(epochArg, "ARG "))
 		r.f("RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \\\n")
 		r.f("    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOFLAGS=-trimpath \\\n")
-		r.f("    go install -ldflags='-s -w -buildid=' %s@%s \\\n", t.Package, lt.Version)
+		r.f("    go install -ldflags='-s -w -buildid=' %s \\\n", shq(t.Package+"@"+lt.Version))
 		r.f(" && install -D -m %s \"$(find /go/bin -type f | head -n 1)\" %s\n", mode, shq("/out"+dest))
 		return fmt.Sprintf("COPY --link --from=%s /out/ /", stage), nil
 
@@ -189,7 +197,7 @@ func (r *renderer) tool(t manifest.Tool, lt *lock.Tool) (string, error) {
 		r.f("# runs on the target platform; everything written to /out is copied into the image\n")
 		r.f("FROM %s AS %s\n", lt.Image.Pinned(), stage)
 		r.f("%s\n", epochArg)
-		r.f("RUN <<'FACTORY_EOF'\nset -eu\nmkdir -p /out\n%s\nFACTORY_EOF\n", strings.TrimRight(t.Run, "\n"))
+		r.f("RUN %s", heredoc("set -eu\nmkdir -p /out\n"+strings.TrimRight(t.Run, "\n")))
 		return fmt.Sprintf("COPY --link --from=%s /out/ /", stage), nil
 	}
 	return "", fmt.Errorf("unknown source %q", t.From)
@@ -449,7 +457,7 @@ func (r *renderer) nativePackages() error {
 		r.f("%s\n", epochArg)
 		mount := fmt.Sprintf("--mount=type=bind,from=pkgs-%s,source=/pkgs,target=/tmp/factory-pkgs", arch)
 		if pk.Manager == lock.ManagerDNF {
-			r.f("RUN %s <<'FACTORY_EOF'\n%s\nFACTORY_EOF\n\n", mount, rpmInstallScript)
+			r.f("RUN %s %s\n", mount, heredoc(rpmInstallScript))
 			continue
 		}
 		r.f("RUN %s \\\n", mount)
@@ -610,20 +618,27 @@ func (r *renderer) renderApp() (*Output, error) {
 		if i == 0 {
 			prep = "mkdir -p /out\n"
 		}
-		r.f("RUN %s<<'FACTORY_EOF'\nset -eu\n%s%s\nFACTORY_EOF\n", mount, prep, strings.TrimRight(m.StepScript(i), "\n"))
+		r.f("RUN %s%s", mount, heredoc("set -eu\n"+prep+strings.TrimRight(m.StepScript(i), "\n")))
 	}
 
 	r.f("\n# ---- app ----\n")
 	r.f("FROM %s\n", l.Base.Pinned())
 	r.f("COPY --link --from=build /out/ %s/\n", strings.TrimSuffix(st.Spec.AppDir, "/"))
 	r.config()
+	if r.err != nil {
+		return nil, r.err
+	}
 	r.out.Containerfile = r.b.Bytes()
 	return &r.out, nil
 }
 
 // url applies the org's mirrors to a download URL.
 func (r *renderer) url(u string) string {
-	return manifest.Rewrite(r.m.Spec.Mirrors, u)
+	out := manifest.Rewrite(r.m.Spec.Mirrors, u)
+	if err := manifest.CheckRef(out); err != nil && r.err == nil {
+		r.err = fmt.Errorf("mirrors turn %s into %w", u, err)
+	}
+	return out
 }
 
 func allSame(m map[string]lock.Artifact) bool {

@@ -3,6 +3,32 @@
 ClearCutt Factory is pre-1.0; see [docs/stability.md](docs/stability.md) for
 what may change between releases.
 
+## Unreleased
+
+### Breaking
+
+**Values the Containerfile can't hold are refused.** `spec.user`,
+`spec.workdir`, environment variable names, the paths of `oci` tools, and
+other values were printed into the Containerfile as they were, and
+`policy.requireNonRoot` read the raw string, so `user: "65532\nUSER 0"`
+passed the policy and ran the image as root. Loading a manifest (and
+rendering, for locks edited by hand) now refuses: a `user` that isn't a
+name or ID with an optional `:group`; a `workdir`, `oci` tool `path`, tool
+`dest`, stack `appDir`, or cache that isn't an absolute path without
+spaces, quotes, `$`, `\`, globs, commas, or `=`; environment names that
+aren't letters, digits, `_`, `.`, and `-`; newlines and other control
+characters in environment and label values, label keys, file
+destinations, and `extract`; control characters other than tabs and
+newlines in `run` scripts and stack steps; and lock values (image
+references, digests, versions, package names, checksums, URLs, nix store
+paths) that don't have their expected form. `requireNonRoot` also counts
+`00` and other spellings of ID 0 as root. A script that holds the heredoc
+delimiter `FACTORY_EOF` gets another one, `FACTORY_EOF_` and the start of
+its sha256, so it can't end its heredoc and add instructions; other
+Containerfiles are unchanged. `FuzzRender` renders arbitrary values and
+checks with BuildKit's own parser that the Containerfile has exactly the
+instructions a plain input gives, with each value unchanged.
+
 ## v0.3.0
 
 **`lock --update-package` moves only the packages it names

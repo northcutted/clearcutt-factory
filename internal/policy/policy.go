@@ -19,8 +19,13 @@ func Check(m *manifest.Manifest, o *manifest.Org, l *lock.Lock) error {
 	add := func(format string, a ...any) { errs = append(errs, fmt.Errorf("policy: "+format, a...)) }
 
 	if p.RequireNonRoot {
-		u, _, _ := strings.Cut(m.Spec.User, ":")
-		if u == "" || u == "root" || u == "0" {
+		// The user as the Containerfile's USER will hold it: a value it
+		// can't hold is refused, whatever it starts with.
+		u := m.Spec.User
+		switch err := manifest.CheckUser(u); {
+		case u != "" && err != nil:
+			add("spec.user %v (requireNonRoot)", err)
+		case manifest.UserIsRoot(u):
 			add("spec.user must be a non-root user (requireNonRoot)")
 		}
 	}

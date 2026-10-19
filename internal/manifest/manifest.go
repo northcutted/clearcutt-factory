@@ -419,7 +419,7 @@ func (m *Manifest) validate() error {
 		}
 	}
 	for _, p := range m.Spec.Platforms {
-		if _, _, ok := SplitPlatform(p); !ok {
+		if _, _, ok := SplitPlatform(p); !ok || CheckPlatform(p) != nil {
 			add("platform %q must look like linux/amd64", p)
 		}
 	}
@@ -468,6 +468,12 @@ func (m *Manifest) validate() error {
 			errs = append(errs, err)
 		}
 	}
+	if ref := m.Metadata.Ref; ref != "" {
+		if err := CheckRef(ref); err != nil {
+			add("metadata.ref: %v", err)
+		}
+	}
+	errs = append(errs, m.CheckSafe()...)
 	for i, f := range m.Spec.Files {
 		if f.Src == "" || f.Dst == "" || !strings.HasPrefix(f.Dst, "/") {
 			add("spec.files[%d]: src and an absolute dst are required", i)

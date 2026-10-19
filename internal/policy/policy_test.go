@@ -51,3 +51,41 @@ func TestCheck(t *testing.T) {
 		t.Fatalf("expected no violations, got %v", err)
 	}
 }
+
+// TestRequireNonRoot: the user is judged as the Containerfile's USER will
+// hold it, so a value that smuggles in a second USER (or spells root's ID
+// another way) doesn't pass.
+func TestRequireNonRoot(t *testing.T) {
+	o := manifest.DefaultOrg()
+	o.Policy.RequireNonRoot = true
+	l := &lock.Lock{}
+	for _, c := range []struct {
+		user string
+		ok   bool
+	}{
+		{"65532", true},
+		{"65532:65532", true},
+		{"nonroot", true},
+		{"app-user.1", true},
+		{"65532\nUSER 0", false},
+		{"65532 \\\n0", false},
+		{"65532\rUSER 0", false},
+		{"65532 0", false},
+		{"$UID", false},
+		{"", false},
+		{"0", false},
+		{"00", false},
+		{"0:65532", false},
+		{"root", false},
+		{"root:nonroot", false},
+	} {
+		m := &manifest.Manifest{Spec: manifest.Spec{User: c.user}}
+		err := Check(m, o, l)
+		if (err == nil) != c.ok {
+			t.Errorf("user %q: %v, want ok=%v", c.user, err, c.ok)
+		}
+		if err != nil && !strings.Contains(err.Error(), "requireNonRoot") {
+			t.Errorf("user %q: %v", c.user, err)
+		}
+	}
+}
