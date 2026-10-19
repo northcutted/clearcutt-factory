@@ -20,7 +20,7 @@ var version = "" // set with -ldflags "-X main.version=…"
 const usage = `clearcutt-factory: declarative, reproducible, signed OCI images (part of ClearCutt)
 
 Usage:
-  clearcutt-factory init    [--dir .] [--repo OWNER/NAME] [--registry REGISTRY] [--force]
+  clearcutt-factory init    [--dir .] [--repo OWNER/NAME] [--registry REGISTRY] [--default-branch BRANCH] [--force]
                             [--extends REF (--extends-identity URL [--extends-issuer URL] | --extends-key K)]
       Set up a repository: an org profile, an example image, and a GitHub
       Actions workflow that publishes, updates, and rebases with ClearCutt Factory.
@@ -202,6 +202,7 @@ func run(ctx context.Context, args []string) error {
 		fs.StringVar(&io.Dir, "dir", ".", "")
 		fs.StringVar(&io.Repo, "repo", "", "")
 		fs.StringVar(&io.Registry, "registry", "", "")
+		fs.StringVar(&io.Branch, "default-branch", "", "")
 		fs.BoolVar(&io.Force, "force", false, "")
 		fs.StringVar(&io.Extends, "extends", "", "")
 		fs.StringVar(&io.ExtendsIdentity, "extends-identity", "", "")

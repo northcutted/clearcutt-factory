@@ -94,6 +94,17 @@ job (`images.yml` again, given what `images` published), beside `fleet` and
 `notify` rather than before them, so they start as soon as the images are
 published; a failed reproduction still fails the run.
 
+**Only the default branch publishes.** `images.yml` and `fleet.yml` push,
+sign, and attest, and `fleet.yml` and `update-locks.yml` open pull requests,
+only in runs on the repository's default branch (`schedule`,
+`repository_dispatch`, and `workflow_run` always run there). A
+`workflow_dispatch` from another branch builds and checks, and publishes
+nothing: otherwise anyone who can push a branch could publish an image the
+signer identity trusts. To publish from another ref too (release branches,
+say), set the `publish-ref` input of each of them to it, or to a bash glob
+(`refs/heads/release/*`), and add a signer for it (the `sourceRef` below
+names one ref).
+
 ### A GitHub App for the automation
 
 An App's installation tokens expire within the hour, carry only the
@@ -338,6 +349,7 @@ signing:
     certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet)\.yml@refs/tags/v\d+\.\d+\.\d+$
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
     sourceRepository: https://github.com/acme/checkout
+    sourceRef: refs/heads/main
 vulnerabilities:
   failOn: high         # stricter than the shared critical: allowed
 ```
@@ -493,7 +505,10 @@ not your repository. Anyone can call those workflows and get the same
 identity, so an identity alone would accept images built in any repository.
 The certificate also records the repository whose run signed (Fulcio's GitHub
 workflow repository extension), and `sourceRepository` makes cosign require
-it. `init` writes both:
+it; and the ref the run was on, which `sourceRef` requires (so a run on
+another branch can't sign a trusted image, should one ever publish). `init`
+writes all three, with the origin remote's default branch (or
+`--default-branch`):
 
 ```yaml
 signing:
@@ -502,6 +517,7 @@ signing:
     certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet)\.yml@refs/tags/v\d+\.\d+\.\d+$
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
     sourceRepository: https://github.com/acme/checkout
+    sourceRef: refs/heads/main
   stacks:          # who may sign the stacks apps here build on
     certificateIdentity: https://github.com/acme/platform/.github/workflows/stacks.yml@refs/heads/main
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
@@ -509,8 +525,8 @@ signing:
 
 `sourceMatchesImage: true` instead requires the run to be in the repository
 the image names as its source (`org.opencontainers.image.source`), and
-`sourceRepositoryOwner` limits that to one owner's repositories; `sourceRef`
-requires a ref. It binds images only: a stack names no source, so a stack
+`sourceRepositoryOwner` limits that to one owner's repositories. These
+bind images only: a stack names no source, so a stack
 signer names its repository with `sourceRepository` (or is a workflow in it,
 as above), and with `policy.requireSignedStacks` a stack signer with
 `sourceMatchesImage` is an error. Pinning the workflows by commit SHA changes

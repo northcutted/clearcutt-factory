@@ -584,9 +584,12 @@ rebuild it yourself with `verify --image`.
 ## CI
 
 [`.github/workflows/images.yml`](.github/workflows/images.yml) is a complete
-pipeline. On pull requests it builds, scans, and gates. On `main` it also pushes,
-signs keylessly, adds SLSA provenance, and then rebuilds on a second runner from
-the signed recipe alone and attests the match. Its `published` output lists
+pipeline. On pull requests it builds, scans, and gates. On the default branch
+(and the ref its `publish-ref` input names, if any) it also pushes, signs
+keylessly, adds SLSA provenance, and then rebuilds on a second runner from
+the signed recipe alone and attests the match; runs on any other ref, such
+as a `workflow_dispatch` from a branch, publish nothing. `fleet.yml` and
+`update-locks.yml` push and open pull requests only there too. Its `published` output lists
 what the run newly published (a JSON array of `{manifest, kind, image,
 repository, digest, tags}`). A calling job gets it only when the whole
 workflow is done, reproduction included, so `init`'s workflow calls it with

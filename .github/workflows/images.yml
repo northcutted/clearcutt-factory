@@ -1,9 +1,10 @@
 # Builds every image and app manifest. Pull requests build, smoke-test, scan,
-# and gate; other events also push, sign keylessly (this workflow's OIDC
-# identity), attach SBOM / vulnerability / recipe attestations, add SLSA
-# provenance, and rebuild each newly published image on a second runner from
-# its signed recipe alone, attesting the match. Unchanged images aren't
-# republished.
+# and gate; runs on the default branch (and on the publish-ref input's ref)
+# also push, sign keylessly (this workflow's OIDC identity), attach SBOM /
+# vulnerability / recipe attestations, add SLSA provenance, and rebuild each
+# newly published image on a second runner from its signed recipe alone,
+# attesting the match. Runs on any other ref (workflow_dispatch from a
+# branch) only build and check. Unchanged images aren't republished.
 #
 # Other repositories call it (see docs/adopting.md):
 #
@@ -72,6 +73,10 @@ on:
         description: 'Build nothing; reproduce what an earlier call in this run published (its published output) on a second runner and attest the match'
         type: string
         default: ""
+      publish-ref:
+        description: 'A ref (or bash glob, e.g. refs/heads/release/*) that publishes too, besides the default branch. Runs on any other ref (workflow_dispatch from a branch, say) build and check without publishing'
+        type: string
+        default: ""
       factory-version:
         description: clearcutt-factory release to use
         type: string
@@ -103,13 +108,45 @@ env:
   FACTORY_VERSION: ${{ inputs.factory-version || 'source' }}
   MANIFESTS: ${{ inputs.manifests || 'examples/*/image.yaml examples/*/app.yaml' }}
   REGISTRY: ${{ inputs.registry || 'ghcr.io' }}
-  PUSH: ${{ github.event_name != 'pull_request' }}
 jobs:
   manifests:
     runs-on: ubuntu-latest
     outputs:
       manifests: ${{ steps.find.outputs.manifests }}
+      publish: ${{ steps.ref.outputs.publish }}
     steps:
+      # Only the default branch publishes (pushes, signs, opens pull
+      # requests), or the ref the publish-ref input names: a pull request,
+      # or workflow_dispatch from another branch, builds and checks only.
+      # schedule, repository_dispatch, and workflow_run run on the default
+      # branch.
+      - name: Publish from this ref?
+        id: ref
+        shell: bash
+        env:
+          PUBLISH_REF: ${{ inputs.publish-ref }}
+        run: |
+          default=$(jq -r '.repository.default_branch // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)
+          # publish-ref may be a glob (refs/heads/release/*).
+          # shellcheck disable=SC2053
+          publish_ref() { [ -n "$PUBLISH_REF" ] && [[ "$GITHUB_REF" == $PUBLISH_REF ]]; }
+          publish=false
+          case "$GITHUB_EVENT_NAME" in
+            pull_request | pull_request_target | merge_group) ;;
+            *)
+              if [ -n "$default" ] && [ "$GITHUB_REF" = "refs/heads/$default" ]; then
+                publish=true
+              elif [ -z "$default" ] && [[ "$GITHUB_EVENT_NAME" =~ ^(schedule|repository_dispatch|workflow_run)$ ]]; then
+                publish=true
+              elif publish_ref; then
+                publish=true
+              fi
+              ;;
+          esac
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          if [ "$publish" = false ] && [[ "$GITHUB_EVENT_NAME" != pull_request* ]]; then
+            echo "::notice::$GITHUB_REF is not the default branch${default:+ ($default)}${PUBLISH_REF:+ or $PUBLISH_REF}: checking only, nothing is published"
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: find
         shell: bash
@@ -142,6 +179,8 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      PUSH: ${{ needs.manifests.outputs.publish }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - if: env.FACTORY_VERSION != 'source'
@@ -290,8 +329,8 @@ jobs:
   # tags}. Images that were already published (only their tags moved) are
   # not in it.
   published:
-    needs: build
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.build.result != 'skipped' }}
+    needs: [manifests, build]
+    if: ${{ !cancelled() && needs.manifests.outputs.publish == 'true' && needs.build.result != 'skipped' }}
     runs-on: ubuntu-latest
     outputs:
       published: ${{ steps.list.outputs.published }}
@@ -317,7 +356,7 @@ jobs:
   # because inputs is empty outside workflow_call.
   reproduce:
     needs: [manifests, build]
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && format('{0}', inputs.reproduce) != 'false' && needs.manifests.result == 'success' && needs.manifests.outputs.manifests != '[]' }}
+    if: ${{ !cancelled() && needs.manifests.outputs.publish == 'true' && format('{0}', inputs.reproduce) != 'false' && needs.manifests.result == 'success' && needs.manifests.outputs.manifests != '[]' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

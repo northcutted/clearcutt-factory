@@ -21,6 +21,8 @@ jobs:
       - run: go test -race ./...
       - name: The bot's pull requests get valid branches
         run: .github/scripts/branch-names_test.sh
+      - name: Only the default branch publishes
+        run: .github/scripts/publish-ref_test.sh
       - name: Example lockfiles and Containerfiles are current
         run: |
           go install ./cmd/clearcutt-factory

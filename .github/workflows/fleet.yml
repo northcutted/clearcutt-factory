@@ -1,6 +1,7 @@
 # Keeps every app on the newest build of its stack's run image without
 # rebuilding it: daily, and after the images workflow publishes a push to
-# main.
+# main. Only runs on the default branch (or the publish-ref input's ref)
+# push and open pull requests; elsewhere each app's rebase is only checked.
 #
 # Each app's published image is rebased (when safe), smoke-tested, scanned,
 # gated, pushed, signed, and checked by repeating the rebase from its signed
@@ -59,6 +60,10 @@ on:
         description: GitHub App to open pull requests as, by Client ID or App ID (default the CLEARCUTT_APP_ID variable); needs the CLEARCUTT_APP_PRIVATE_KEY secret
         type: string
         default: ""
+      publish-ref:
+        description: 'A ref (or bash glob, e.g. refs/heads/release/*) that publishes too, besides the default branch. Runs on any other ref (workflow_dispatch from a branch, say) build and check without publishing'
+        type: string
+        default: ""
     secrets:
       CLEARCUTT_APP_PRIVATE_KEY:
         description: Private key of the GitHub App named by app-id or CLEARCUTT_APP_ID
@@ -92,7 +97,40 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       apps: ${{ steps.find.outputs.apps }}
+      publish: ${{ steps.ref.outputs.publish }}
     steps:
+      # Only the default branch publishes (pushes, signs, opens pull
+      # requests), or the ref the publish-ref input names: a pull request,
+      # or workflow_dispatch from another branch, builds and checks only.
+      # schedule, repository_dispatch, and workflow_run run on the default
+      # branch.
+      - name: Publish from this ref?
+        id: ref
+        shell: bash
+        env:
+          PUBLISH_REF: ${{ inputs.publish-ref }}
+        run: |
+          default=$(jq -r '.repository.default_branch // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)
+          # publish-ref may be a glob (refs/heads/release/*).
+          # shellcheck disable=SC2053
+          publish_ref() { [ -n "$PUBLISH_REF" ] && [[ "$GITHUB_REF" == $PUBLISH_REF ]]; }
+          publish=false
+          case "$GITHUB_EVENT_NAME" in
+            pull_request | pull_request_target | merge_group) ;;
+            *)
+              if [ -n "$default" ] && [ "$GITHUB_REF" = "refs/heads/$default" ]; then
+                publish=true
+              elif [ -z "$default" ] && [[ "$GITHUB_EVENT_NAME" =~ ^(schedule|repository_dispatch|workflow_run)$ ]]; then
+                publish=true
+              elif publish_ref; then
+                publish=true
+              fi
+              ;;
+          esac
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          if [ "$publish" = false ] && [[ "$GITHUB_EVENT_NAME" != pull_request* ]]; then
+            echo "::notice::$GITHUB_REF is not the default branch${default:+ ($default)}${PUBLISH_REF:+ or $PUBLISH_REF}: checking only, nothing is published"
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: find
         shell: bash
@@ -122,12 +160,13 @@ jobs:
     env:
       APP_ID: ${{ inputs.app-id || vars.CLEARCUTT_APP_ID }}
       APP_KEY_SET: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY != '' }}
+      PUBLISH: ${{ needs.apps.outputs.publish }}
     steps:
       # See update-locks.yml: limited to this repository's contents and pull
       # requests, and half an App fails rather than falls back.
       - name: Mint a GitHub App token
         id: app
-        if: env.APP_ID != '' || env.APP_KEY_SET == 'true'
+        if: env.PUBLISH == 'true' && (env.APP_ID != '' || env.APP_KEY_SET == 'true')
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ env.APP_ID }}
@@ -152,6 +191,7 @@ jobs:
       - run: echo "FACTORY_DIR=$([ "$FACTORY_VERSION" = source ] && echo . || echo .clearcutt-factory)" >> "$GITHUB_ENV"
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0; smoke tests run every platform
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        if: env.PUBLISH == 'true'
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.REGISTRY_USERNAME || github.actor }}
@@ -162,6 +202,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }} # GitHub API lookups when the lock is re-resolved
         run: |
+          if [ "$PUBLISH" != true ]; then
+            # Not a publishing ref: report whether the rebase is safe, and
+            # push nothing.
+            clearcutt-factory rebase -f "${{ matrix.app }}" --check
+            exit 0
+          fi
           if clearcutt-factory rebase -f "${{ matrix.app }}" --push --update-lock 2>&1 | tee "$RUNNER_TEMP/rebase.out"; then
             echo "failed=false" >> "$GITHUB_OUTPUT"
           else
@@ -221,7 +267,7 @@ jobs:
       # way, and without this pull request the next build from source would
       # go back to the old base.
       - name: Pin the lock to the same base
-        if: ${{ !cancelled() && steps.rebase.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.rebase.outcome == 'success' && env.PUBLISH == 'true' }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || secrets.CLEARCUTT_BOT_TOKEN || github.token }}
           APP: ${{ matrix.app }}

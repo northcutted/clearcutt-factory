@@ -29,6 +29,20 @@ published image now takes a cosign call per signature and attestation
 instead of one. `stack push` and `profile push` likewise push by digest,
 sign, and only then move the tag.
 
+**Only the default branch publishes.** `images.yml` pushed and signed on
+every event but pull requests, so a `workflow_dispatch` from any branch
+published images the signer identity trusts, and the verify block `init`
+writes named the repository but no ref. Now `images.yml` and `fleet.yml`
+push, sign, and attest, and `fleet.yml` and `update-locks.yml` open pull
+requests, only in runs on the default branch (where `schedule`,
+`repository_dispatch`, and `workflow_run` always run), or on the ref the new
+`publish-ref` input names (a bash glob, such as `refs/heads/release/*`);
+elsewhere they build and check (`fleet.yml` runs `rebase --check`;
+`update-locks.yml` reports without proposing). `init` writes
+`sourceRef: refs/heads/<branch>` into the signer, with the origin remote's
+default branch, or `--default-branch`, or `main`. Existing profiles: add
+`sourceRef` to `signing.verify` (or the trust policy's signers) yourself.
+
 **Only the source reaches the build context and the signed recipe.**
 Copying an app's source (and directories in `files:`) left out `.git`,
 `/out`, and factory's own files, and nothing else, so a local
