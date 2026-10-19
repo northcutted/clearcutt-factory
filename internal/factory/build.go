@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -322,7 +323,7 @@ func runBuild(ctx context.Context, opts Options, org *manifest.Org, req builder.
 	res, err := builder.Build(ctx, cfg, req)
 	if err != nil {
 		if !opts.Verbose {
-			opts.logf("%s", tail(logPath, 40))
+			opts.logf("%s", buildFailure(logPath))
 		}
 		return nil, fmt.Errorf("%w (full log: %s)", err, rel(logPath))
 	}
@@ -671,6 +672,44 @@ func summarize(c map[string]int) string {
 		return "no known vulnerabilities"
 	}
 	return strings.Join(parts, ", ")
+}
+
+// stepRE matches BuildKit's plain progress lines: "#12 0.345 output",
+// "#12 ERROR: …".
+var stepRE = regexp.MustCompile(`^#(\d+) (ERROR|CANCELED)?`)
+
+// buildFailure is what a failed build's log says about the failure: the
+// output of the step that failed (the last that BuildKit reports an ERROR
+// for), up to its last 40 lines, then the log's last 40 lines, which hold
+// BuildKit's summary and the Containerfile around the failing instruction.
+// The summary alone would hide what the step printed (the package an apk
+// check found, say).
+func buildFailure(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	last := func(s []string, n int) []string {
+		if len(s) > n {
+			return s[len(s)-n:]
+		}
+		return s
+	}
+	end := last(lines, 40)
+	id := ""
+	for i := len(lines) - 1; i >= 0 && id == ""; i-- {
+		if m := stepRE.FindStringSubmatch(lines[i]); m != nil && m[2] == "ERROR" {
+			id = m[1]
+		}
+	}
+	var step []string
+	for _, l := range lines[:len(lines)-len(end)] {
+		if m := stepRE.FindStringSubmatch(l); m != nil && m[1] == id {
+			step = append(step, l)
+		}
+	}
+	return strings.Join(append(last(step, 40), end...), "\n")
 }
 
 func tail(path string, n int) string {

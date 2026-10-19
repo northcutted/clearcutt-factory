@@ -135,6 +135,12 @@ in a `run:` block went to `env:`; `GITHUB_ENV` is no longer written (the
 action writes one fixed directory to `GITHUB_PATH`, with syft and grype
 linked into it); and `release.yml` builds without the Go cache.
 
+**A failed build shows what the failing step printed.** Without `-v`,
+`build` showed the build log's last 40 lines, which BuildKit fills with
+its summary and the Containerfile around the failing instruction, so the
+step's own error (the package an apk check names, say) was cut off. It
+now shows that step's output first, then the summary.
+
 **`policy.requireOfflineBuildTools`** runs the scripts of `from: build`
 tools with no network (`RUN --network=none`), so they can use only what
 their builder image holds. Off by default; a repository can't turn it off
