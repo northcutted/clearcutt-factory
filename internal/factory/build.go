@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -53,8 +54,10 @@ type Result struct {
 	Signed          bool              `json:"signed"`
 	// Tested reports that the smoke test passed on every platform.
 	Tested bool `json:"tested"`
-	// Published is false when the registry already had this digest with its
-	// attestations (an unchanged rebuild), so only the tags moved.
+	// Published is true when this run pushed the image, or added a
+	// signature or attestation it lacked (completing a run that failed
+	// partway), and false when the registry already had it signed and
+	// attested (an unchanged rebuild), so at most its tags moved.
 	Published bool `json:"published"`
 	// Rebased is the image the tags point at instead (repo@digest): this
 	// one rebased onto a newer build of its base (see publishBuild).
@@ -75,6 +78,9 @@ func Build(ctx context.Context, opts Options, bo BuildOptions) error {
 	if err != nil {
 		return err
 	}
+	if err := checkNoScan(org, bo.Push, bo.NoScan); err != nil {
+		return err
+	}
 	if err := policy.Check(m, org, l); err != nil {
 		return err
 	}
@@ -91,7 +97,7 @@ func Build(ctx context.Context, opts Options, bo BuildOptions) error {
 		return err
 	}
 	ctxDir := filepath.Join(work, "context")
-	if err := stage(out, ctxDir); err != nil {
+	if err := stage(out, ctxDir, opts.logf); err != nil {
 		return err
 	}
 
@@ -179,23 +185,40 @@ func Build(ctx context.Context, opts Options, bo BuildOptions) error {
 		}
 	}
 
+	resultPath := filepath.Join(work, "result.json")
+	write := func() error { return attest.WriteJSON(resultPath, result) }
 	if len(blocked) > 0 {
-		_ = attest.WriteJSON(filepath.Join(work, "result.json"), result)
+		_ = write()
 		return fmt.Errorf("vulnerability gate (failOn: %s) blocked the image:\n  %s", org.Vulnerabilities.FailOn, strings.Join(blocked, "\n  "))
 	}
 
+	// What was built is on record before anything is pushed, and each
+	// step of publishing updates it, so a run that fails partway leaves
+	// what it did for the steps after it (see publishBuild).
+	if err := write(); err != nil {
+		return err
+	}
 	if bo.Push {
-		if err := publishBuild(ctx, opts, org, m, art, bo, recipePath, outputs, &result); err != nil {
+		err := publishBuild(ctx, opts, org, m, art, bo, recipePath, outputs, &result, write)
+		if werr := write(); err == nil {
+			err = werr
+		}
+		if err != nil {
 			return err
 		}
 	} else {
 		opts.printf("not pushed (use --push); unsigned attestations are in %s", rel(attDir))
 	}
-	resultPath := filepath.Join(work, "result.json")
-	if err := attest.WriteJSON(resultPath, result); err != nil {
-		return err
-	}
 	opts.printf("wrote %s", rel(resultPath))
+	return nil
+}
+
+// checkNoScan refuses to publish without a scan under a shared profile:
+// its vulnerability gate is the platform's, and --no-scan would skip it.
+func checkNoScan(org *manifest.Org, push, noScan bool) error {
+	if push && noScan && org.Shared != nil {
+		return fmt.Errorf("--push with --no-scan: the shared profile %s sets the vulnerability gate every published image passes, and --no-scan skips it; drop --no-scan (it stays for builds that aren't pushed)", org.Shared.Name())
+	}
 	return nil
 }
 
@@ -206,7 +229,12 @@ func Build(ctx context.Context, opts Options, bo BuildOptions) error {
 // newest build as the fleet does it (safety checks, smoke test, scan, gate,
 // signed rebase record). The tags move to that image instead, if they still
 // hold what they did; if anything fails, they stay where they are.
-func publishBuild(ctx context.Context, opts Options, org *manifest.Org, m *manifest.Manifest, art *registry.Artifact, bo BuildOptions, recipePath string, outputs []platformOutputs, result *Result) error {
+//
+// Once the image is published (signed and attested), write records the
+// result and the GitHub Actions outputs say so, before any tag moves: a
+// failure after that still leaves the published image for the steps that
+// reproduce and announce it.
+func publishBuild(ctx context.Context, opts Options, org *manifest.Org, m *manifest.Manifest, art *registry.Artifact, bo BuildOptions, recipePath string, outputs []platformOutputs, result *Result, write func() error) error {
 	var why string
 	var held map[string]string
 	if m.Kind == manifest.KindApp && !bo.ForceTags {
@@ -221,14 +249,17 @@ func publishBuild(ctx context.Context, opts Options, org *manifest.Org, m *manif
 		tags, result.Tags = nil, nil
 	}
 	var err error
-	if result.Image, result.Published, result.Signed, err = publish(ctx, opts, org, art, result.Repository, tags, attest.RecipePredicateType, recipePath, outputs, bo.NoSign, bo.ForceTags, nil); err != nil {
+	if result.Image, result.Published, result.Signed, err = publishImage(ctx, opts, org, art, result.Repository, attest.RecipePredicateType, recipePath, outputs, bo.NoSign); err != nil {
+		return err
+	}
+	if err := write(); err != nil {
 		return err
 	}
 	if err := githubOutput(*result); err != nil {
 		return err
 	}
 	if why == "" {
-		return nil
+		return tagPublished(ctx, opts, art, result.Repository, tags, bo.ForceTags, nil)
 	}
 
 	ro := RebaseOptions{
@@ -292,7 +323,7 @@ func runBuild(ctx context.Context, opts Options, org *manifest.Org, req builder.
 	res, err := builder.Build(ctx, cfg, req)
 	if err != nil {
 		if !opts.Verbose {
-			opts.logf("%s", tail(logPath, 40))
+			opts.logf("%s", buildFailure(logPath))
 		}
 		return nil, fmt.Errorf("%w (full log: %s)", err, rel(logPath))
 	}
@@ -363,109 +394,251 @@ func buildRecipe(opts Options, m *manifest.Manifest, l *lock.Lock, out *render.O
 	}, nil
 }
 
-// publish pushes the artifact, signs it, and attaches its attestations.
-// When the registry already has this digest with its index attestation (an
-// unchanged rebuild), it only moves the tags, so republishing doesn't pile
-// up signatures and attestations on the same image. Tags holding a newer
-// image stay where they are unless forceTags is set (see moveTags).
+// publish publishes art (publishImage) and then moves its tags to it
+// (moveTags): tags move only to an image that is signed and carries every
+// attestation, and never back to an image older than the one they hold
+// unless forceTags is set.
 //
 // held maps tags to the digest each held when the caller decided to move it
 // ("" for none). Unless forceTags is set, such a tag moves only if it still
 // holds that digest (see retag). When one has moved, publish does all the
 // rest and then returns ref with a movedTags error.
 func publish(ctx context.Context, opts Options, org *manifest.Org, art *registry.Artifact, repo string, tags []string, predicateType, predicatePath string, outputs []platformOutputs, noSign, forceTags bool, held map[string]string) (ref string, published, signed bool, err error) {
-	ref = repo + "@" + art.Digest
-	sign := org.Signing.Mode != "none" && !noSign
+	if ref, published, signed, err = publishImage(ctx, opts, org, art, repo, predicateType, predicatePath, outputs, noSign); err != nil {
+		return "", false, false, err
+	}
+	return ref, published, signed, tagPublished(ctx, opts, art, repo, tags, forceTags, held)
+}
+
+// tagPublished moves tags to art once publishImage has published it.
+func tagPublished(ctx context.Context, opts Options, art *registry.Artifact, repo string, tags []string, forceTags bool, held map[string]string) error {
 	if forceTags {
 		held = nil
 	}
+	moved, left, err := moveTags(ctx, opts, art, repo, tags, forceTags, held)
+	if err != nil {
+		return err
+	}
+	if len(moved) > 0 {
+		opts.printf("moved its tags (%s) to %s@%s", strings.Join(moved, ", "), repo, art.Digest)
+	}
+	return left.orNil()
+}
+
+// publishImage pushes art to repo by digest (no tags), signs it, and
+// attaches its attestations: the index-level predicate (recipe or rebase
+// record) and each platform's SBOM and vulnerability report. It does only
+// what the registry lacks, so a run that failed partway (cosign or the
+// transparency log down) is completed by the next, and republishing an
+// unchanged image doesn't pile up signatures and attestations. published
+// reports that this run pushed the image or added anything to it.
+//
+// What the registry has is checked against the org's image signers
+// (published); with none to check against, everything is signed and
+// attested again. An empty predicatePath means there is no predicate to
+// attach: the image must carry one already.
+func publishImage(ctx context.Context, opts Options, org *manifest.Org, art *registry.Artifact, repo, predicateType, predicatePath string, outputs []platformOutputs, noSign bool) (ref string, published, signed bool, err error) {
+	ref = repo + "@" + art.Digest
+	sign := org.Signing.Mode != "none" && !noSign
 	exists, err := registry.Exists(ctx, ref)
 	if err != nil {
 		return "", false, false, err
 	}
-	if exists && (!sign || attestedEither(ctx, org, ref, predicateType, art.Source())) {
-		moved, left, err := moveTags(ctx, opts, art, repo, tags, forceTags, held)
-		if err != nil {
+	if !exists {
+		if _, err := registry.Push(ctx, art, repo, nil); err != nil {
 			return "", false, false, err
 		}
-		if len(moved) > 0 {
-			opts.printf("%s is already published; moved its tags (%s)", ref, strings.Join(moved, ", "))
-		} else {
+		opts.printf("pushed %s (by digest; tags move once it is signed and attested)", ref)
+	}
+	if !sign {
+		if exists {
 			opts.printf("%s is already published", ref)
 		}
-		return ref, false, sign, left.orNil()
+		return ref, !exists, false, nil
 	}
-	var now, later []string
-	for _, tag := range tags {
-		if _, ok := held[tag]; ok {
-			later = append(later, tag)
-		} else {
-			now = append(now, tag)
-		}
+	var have *publication
+	if exists {
+		have = inspectPublication(ctx, org, ref, repo, predicateType, art.Source(), expected(outputs))
 	}
-	if _, err := registry.Push(ctx, art, repo, now); err != nil {
-		return "", false, false, err
-	}
-	opts.printf("pushed %s", ref)
-	var left movedTags
-	for _, tag := range later {
-		if _, err := retag(ctx, ref, tag, held, &left); err != nil {
-			return "", false, false, err
-		}
-	}
-	if sign {
-		if err := signAndAttest(ctx, opts, org, repo, ref, predicateType, predicatePath, outputs); err != nil {
-			return "", false, false, err
-		}
-		opts.printf("signed %s and attached its attestations", ref)
-	}
-	return ref, true, sign, left.orNil()
+	return completePublication(ctx, opts, org, ref, repo, predicateType, predicatePath, outputs, have)
 }
 
-// attestedEither reports whether ref carries the org's index attestation of
-// predicateType or of the other kind: a rebase gives the image a build from
-// the lock it pinned gives, so a build may find the rebased image published
-// with its rebase record, and a rebase the built one with its recipe.
-func attestedEither(ctx context.Context, org *manifest.Org, ref, predicateType, source string) bool {
+// completePublication signs and attests what have (nil for an image just
+// pushed) lacks of what outputs and the predicate need.
+func completePublication(ctx context.Context, opts Options, org *manifest.Org, ref, repo, predicateType, predicatePath string, outputs []platformOutputs, have *publication) (string, bool, bool, error) {
+	exists := have != nil
+	todo := have.missing(outputs)
+	if todo.len() == 0 {
+		opts.printf("%s is already published, signed, and attested", ref)
+		return ref, false, true, nil
+	}
+	if exists {
+		opts.printf("%s is in the registry without %s; adding them", ref, strings.Join(todo.names(), ", "))
+	}
+	if err := todo.do(ctx, opts, org, repo, ref, predicateType, predicatePath); err != nil {
+		return "", false, false, err
+	}
+	opts.printf("signed %s and attached its attestations", ref)
+	return ref, true, true, nil
+}
+
+// publication is what the registry holds of an image, as the org's image
+// signers verify it.
+type publication struct {
+	// signed: the index and every platform image carry a signature.
+	signed bool
+	// predicate: the index carries a recipe or a rebase record. Either
+	// will do: a rebase gives the image a build from the lock it pinned
+	// gives, so a build may find the rebased image published with its
+	// rebase record, and a rebase the built one with its recipe.
+	predicate bool
+	// sbom and vuln: by platform image digest, what it carries.
+	sbom, vuln map[string]bool
+}
+
+// platformCheck is a platform image and whether it should carry a
+// vulnerability report (the org scans, and the run did).
+type platformCheck struct {
+	digest string
+	vuln   bool
+}
+
+func expected(outputs []platformOutputs) []platformCheck {
+	out := make([]platformCheck, len(outputs))
+	for i, po := range outputs {
+		out[i] = platformCheck{po.digest, po.vulnPath != ""}
+	}
+	return out
+}
+
+// inspectPublication checks what ref carries: each check passes when one
+// of the org's image signers verifies it. source is the repository the
+// image names as its source, for signers that must match it.
+func inspectPublication(ctx context.Context, org *manifest.Org, ref, repo, predicateType, source string, plats []platformCheck) *publication {
+	p := &publication{sbom: map[string]bool{}, vuln: map[string]bool{}}
+	signers, err := signerArgs(org, manifest.RoleImage, source)
+	if err != nil || len(signers) == 0 {
+		return p
+	}
+	verify := func(check func(args []string) error) bool {
+		_, err := firstVerified(signers, func(args []string) (struct{}, error) { return struct{}{}, check(args) })
+		return err == nil
+	}
+	attestedAs := func(ref, typ string) bool {
+		return verify(func(args []string) error { _, err := attest.VerifyPredicate(ctx, ref, typ, args); return err })
+	}
+	p.signed = verify(func(args []string) error { return attest.VerifySignature(ctx, ref, args) })
+	for _, pc := range plats {
+		pref := repo + "@" + pc.digest
+		if pref != ref {
+			p.signed = p.signed && verify(func(args []string) error { return attest.VerifySignature(ctx, pref, args) })
+		}
+	}
 	other := attest.RebasePredicateType
 	if predicateType == attest.RebasePredicateType {
 		other = attest.RecipePredicateType
 	}
-	return attested(ctx, org, ref, predicateType, source) || attested(ctx, org, ref, other, source)
+	p.predicate = attestedAs(ref, predicateType) || attestedAs(ref, other)
+	for _, pc := range plats {
+		pref := repo + "@" + pc.digest
+		p.sbom[pc.digest] = attestedAs(pref, attest.CycloneDXType)
+		if pc.vuln {
+			p.vuln[pc.digest] = attestedAs(pref, attest.VulnType)
+		}
+	}
+	return p
 }
 
-// attested reports whether ref already carries a verified attestation of
-// predicateType from one of the org's image signers. source is the
-// repository the image names as its source.
-func attested(ctx context.Context, org *manifest.Org, ref, predicateType, source string) bool {
-	signers, err := signerArgs(org, manifest.RoleImage, source)
-	if err != nil || len(signers) == 0 {
+// complete reports whether the image carries everything plats need.
+func (p *publication) complete(plats []platformCheck) bool {
+	if p == nil || !p.signed || !p.predicate {
 		return false
 	}
-	_, err = firstVerified(signers, func(args []string) ([]byte, error) { return attest.VerifyPredicate(ctx, ref, predicateType, args) })
-	return err == nil
+	for _, pc := range plats {
+		if !p.sbom[pc.digest] || pc.vuln && !p.vuln[pc.digest] {
+			return false
+		}
+	}
+	return true
 }
 
-// signAndAttest signs the pushed image and attaches the index-level
-// predicate (recipe or rebase record) and each platform's SBOM and
-// vulnerability report.
-func signAndAttest(ctx context.Context, opts Options, org *manifest.Org, repo, ref, predicateType, predicatePath string, outputs []platformOutputs) error {
-	c := attest.Cosign{Mode: org.Signing.Mode, Key: org.Signing.Key, Args: org.Signing.Args, Stdout: opts.Stderr, Stderr: opts.Stderr}
-	if err := c.Sign(ctx, ref); err != nil {
-		return err
-	}
-	if err := c.Attest(ctx, ref, predicateType, predicatePath); err != nil {
-		return err
-	}
+// publishSteps are what publishImage still has to do.
+type publishSteps struct {
+	sign, predicate bool
+	sboms, vulns    []platformOutputs
+}
+
+// missing returns what outputs still need attached (everything, for an
+// image not in the registry yet: p is nil).
+func (p *publication) missing(outputs []platformOutputs) publishSteps {
+	var s publishSteps
+	s.sign = p == nil || !p.signed
+	s.predicate = p == nil || !p.predicate
 	for _, po := range outputs {
-		pref := repo + "@" + po.digest
-		if err := c.Attest(ctx, pref, "cyclonedx", po.sbomPath); err != nil {
+		if p == nil || !p.sbom[po.digest] {
+			s.sboms = append(s.sboms, po)
+		}
+		if po.vulnPath != "" && (p == nil || !p.vuln[po.digest]) {
+			s.vulns = append(s.vulns, po)
+		}
+	}
+	return s
+}
+
+func (s publishSteps) len() int {
+	n := len(s.sboms) + len(s.vulns)
+	if s.sign {
+		n++
+	}
+	if s.predicate {
+		n++
+	}
+	return n
+}
+
+func (s publishSteps) names() []string {
+	var out []string
+	if s.sign {
+		out = append(out, "its signature")
+	}
+	if s.predicate {
+		out = append(out, "its recipe or rebase record")
+	}
+	for _, po := range s.sboms {
+		out = append(out, "the "+po.platform+" SBOM")
+	}
+	for _, po := range s.vulns {
+		out = append(out, "the "+po.platform+" vulnerability report")
+	}
+	return out
+}
+
+// do signs and attests what s lists, in that order: the signature (index
+// and every platform image), the predicate, then each platform's SBOM and
+// vulnerability report.
+func (s publishSteps) do(ctx context.Context, opts Options, org *manifest.Org, repo, ref, predicateType, predicatePath string) error {
+	if s.predicate && predicatePath == "" {
+		return fmt.Errorf("%s carries no recipe or rebase record from the org's image signer, so this run can't vouch for it; rebuild it", ref)
+	}
+	c := attest.Cosign{Mode: org.Signing.Mode, Key: org.Signing.Key, Args: org.Signing.Args, Stdout: opts.Stderr, Stderr: opts.Stderr}
+	if s.sign {
+		if err := c.Sign(ctx, ref); err != nil {
 			return err
 		}
-		if po.vulnPath != "" {
-			if err := c.Attest(ctx, pref, "vuln", po.vulnPath); err != nil {
-				return err
-			}
+	}
+	if s.predicate {
+		if err := c.Attest(ctx, ref, predicateType, predicatePath); err != nil {
+			return err
+		}
+	}
+	for _, po := range s.sboms {
+		if err := c.Attest(ctx, repo+"@"+po.digest, "cyclonedx", po.sbomPath); err != nil {
+			return err
+		}
+	}
+	for _, po := range s.vulns {
+		if err := c.Attest(ctx, repo+"@"+po.digest, "vuln", po.vulnPath); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -499,6 +672,44 @@ func summarize(c map[string]int) string {
 		return "no known vulnerabilities"
 	}
 	return strings.Join(parts, ", ")
+}
+
+// stepRE matches BuildKit's plain progress lines: "#12 0.345 output",
+// "#12 ERROR: …".
+var stepRE = regexp.MustCompile(`^#(\d+) (ERROR|CANCELED)?`)
+
+// buildFailure is what a failed build's log says about the failure: the
+// output of the step that failed (the last that BuildKit reports an ERROR
+// for), up to its last 40 lines, then the log's last 40 lines, which hold
+// BuildKit's summary and the Containerfile around the failing instruction.
+// The summary alone would hide what the step printed (the package an apk
+// check found, say).
+func buildFailure(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	last := func(s []string, n int) []string {
+		if len(s) > n {
+			return s[len(s)-n:]
+		}
+		return s
+	}
+	end := last(lines, 40)
+	id := ""
+	for i := len(lines) - 1; i >= 0 && id == ""; i-- {
+		if m := stepRE.FindStringSubmatch(lines[i]); m != nil && m[2] == "ERROR" {
+			id = m[1]
+		}
+	}
+	var step []string
+	for _, l := range lines[:len(lines)-len(end)] {
+		if m := stepRE.FindStringSubmatch(l); m != nil && m[1] == id {
+			step = append(step, l)
+		}
+	}
+	return strings.Join(append(last(step, 40), end...), "\n")
 }
 
 func tail(path string, n int) string {

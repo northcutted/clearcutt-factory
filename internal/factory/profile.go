@@ -72,7 +72,8 @@ func ProfilePush(ctx context.Context, opts Options, file string, po ProfilePushO
 		}
 		return githubOutput(Result{Image: pushed, Repository: repo, Digest: d, Signed: signer != nil, Published: false})
 	}
-	if _, err := registry.PushFiles(ctx, po.Ref, manifest.ProfileArtifactType, files); err != nil {
+	// By digest, then signed, then tagged, as stack push does.
+	if _, err := registry.PushFiles(ctx, pushed, manifest.ProfileArtifactType, files); err != nil {
 		return err
 	}
 	opts.printf("pushed profile %s to %s (%d files)", rel(file), pushed, len(files))
@@ -81,6 +82,9 @@ func ProfilePush(ctx context.Context, opts Options, file string, po ProfilePushO
 			return err
 		}
 		opts.printf("signed %s", pushed)
+	}
+	if err := tagAs(ctx, po.Ref, pushed); err != nil {
+		return err
 	}
 	if org.Signing.Profile.IsZero() {
 		opts.printf("note: set signing.profile to who signs it, so that pushing it unchanged only moves the tag")

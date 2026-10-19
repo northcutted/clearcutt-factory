@@ -185,6 +185,8 @@ func TestExtendRefusesLoosening(t *testing.T) {
 		{"requireSignedStacks off", sharedProfile, "policy: {requireSignedStacks: false}\n", "policy.requireSignedStacks: the shared profile turns it on"},
 		{"requireNonRoot off", sharedProfile + "  requireNonRoot: true\n", "policy: {requireNonRoot: false}\n", "policy.requireNonRoot: the shared profile turns it on"},
 		{"registry outside", sharedProfile, "policy: {allowedRegistries: [ghcr.io/acme/apps/, docker.io/]}\n", "policy.allowedRegistries: docker.io/ is outside"},
+		{"registry beside a shared entry", strings.Replace(sharedProfile, "ghcr.io/acme/,", "ghcr.io/acme,", 1), "policy: {allowedRegistries: [ghcr.io/acme-evil]}\n", "policy.allowedRegistries: ghcr.io/acme-evil is outside"},
+		{"requireOfflineBuildTools off", sharedProfile + "  requireOfflineBuildTools: true\n", "policy: {requireOfflineBuildTools: false}\n", "policy.requireOfflineBuildTools: the shared profile turns it on"},
 		{"host outside", sharedProfile, "policy: {allowedHosts: [evil.com]}\n", "policy.allowedHosts: evil.com is outside"},
 		{"broader host suffix", sharedProfile, "policy: {allowedHosts: [.com]}\n", "policy.allowedHosts: .com is outside"},
 		{"signing off", sharedProfile, "signing: {mode: none}\n", "signing.mode: the shared profile sets keyless"},

@@ -85,6 +85,36 @@ spec:
 	}
 }
 
+// TestContainerfileValues: what the Containerfile prints unquoted, or on
+// one quoted line, is refused when it would end its instruction (#5).
+func TestContainerfileValues(t *testing.T) {
+	for _, c := range []struct{ name, spec, want string }{
+		{"user with a second USER", `user: "65532\nUSER 0"`, "spec.user"},
+		{"user with a space", `user: "65532 0"`, "spec.user"},
+		{"workdir with a newline", `workdir: "/app\nUSER 0"`, "spec.workdir"},
+		{"relative workdir", `workdir: app`, "spec.workdir"},
+		{"env name with =", `env: {"A=1\nUSER 0": x}`, "spec.env name"},
+		{"env value with a newline", `env: {A: "x\nUSER 0"}`, "spec.env.A"},
+		{"label with a newline", `labels: {a: "x\r\nUSER 0"}`, "spec.labels.a"},
+		{"oci path with a space", "tools: [{name: c, from: oci, image: x, path: \"/a /etc/shadow\"}]", "spec.tools[0] (c).path"},
+		{"dest with a newline", "tools: [{name: c, from: oci, image: x, path: /a, dest: \"/b\\nUSER 0\"}]", "spec.tools[0] (c).dest"},
+		{"go package with a space", "tools: [{name: g, from: go, image: golang:1, package: \"x && curl e\"}]", "spec.tools[0] (g).package"},
+		{"script with a carriage return", "tools: [{name: b, from: build, image: x, run: \"true\\r\\nFACTORY_EOF\"}]", "spec.tools[0] (b).run"},
+		{"platform with a newline", `platforms: ["linux/amd64\nUSER 0"]`, "linux/amd64"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := write(t, "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Image\nmetadata: {name: x, ref: registry.example/x}\nspec:\n  base: wolfi\n  "+c.spec+"\n")
+			m, err := Load(p)
+			if err == nil {
+				err = m.ApplyOrg(DefaultOrg())
+			}
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("got %v, want an error about %s", err, c.want)
+			}
+		})
+	}
+}
+
 func TestUnknownFieldsRejected(t *testing.T) {
 	p := write(t, "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Image\nmetadata: {name: x}\nspec:\n  pakages: [bash]\n")
 	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "pakages") {
@@ -210,6 +240,26 @@ spec:
 	for _, want := range []string{"spec.packages is not allowed for kind App", "spec.source"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("missing %q in %v", want, err)
+		}
+	}
+}
+
+// TestOfflineBuildToolsFromPolicy: the org's policy decides whether
+// from: build scripts get a network, for the renderer.
+func TestOfflineBuildToolsFromPolicy(t *testing.T) {
+	for _, offline := range []bool{false, true} {
+		p := write(t, "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Image\nmetadata: {name: x, ref: registry.example/x}\nspec:\n  base: wolfi\n  tools: [{name: b, from: build, image: python:3, run: \"true\"}]\n")
+		m, err := Load(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o := DefaultOrg()
+		o.Policy.RequireOfflineBuildTools = offline
+		if err := m.ApplyOrg(o); err != nil {
+			t.Fatal(err)
+		}
+		if m.Spec.OfflineBuildTools != offline {
+			t.Errorf("policy %v: spec says %v", offline, m.Spec.OfflineBuildTools)
 		}
 	}
 }

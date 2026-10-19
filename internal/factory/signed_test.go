@@ -137,11 +137,14 @@ func TestAttested(t *testing.T) {
 	cosign := newFakeCosign(t, identity, ref)
 	signer := manifest.VerifyIdentity{CertificateIdentityRegexp: reusable, CertificateOIDCIssuer: ghIssuer, SourceMatchesImage: true, SourceRepositoryOwner: "https://github.com/acme"}
 	org := &manifest.Org{Signing: manifest.Signing{Mode: "keyless", Verify: signer}}
-
-	if !attested(ctx, org, ref, attest.RecipePredicateType, "https://github.com/acme/checkout") {
-		t.Error("signed by the image's source repository: not attested")
+	inspect := func(org *manifest.Org, ref, source string) *publication {
+		return inspectPublication(ctx, org, ref, "registry.example/checkout", attest.RecipePredicateType, source, nil)
 	}
-	if c := cosign.calls(); len(c) != 1 || !strings.HasPrefix(c[0], "verify-attestation --type "+attest.RecipePredicateType+" ") || !strings.HasSuffix(c[0], " "+ref) {
+
+	if p := inspect(org, ref, "https://github.com/acme/checkout"); !p.signed || !p.predicate {
+		t.Errorf("signed by the image's source repository: %+v", p)
+	}
+	if c := cosign.calls(); len(c) != 2 || !strings.HasPrefix(c[0], "verify --output json ") || !strings.HasPrefix(c[1], "verify-attestation --type "+attest.RecipePredicateType+" ") || !strings.HasSuffix(c[1], " "+ref) {
 		t.Errorf("cosign calls: %q", c)
 	}
 	for _, c := range []struct {
@@ -154,12 +157,13 @@ func TestAttested(t *testing.T) {
 		{"not attested", "registry.example/checkout@sha256:" + strings.Repeat("4", 64), "https://github.com/acme/checkout", org},
 		{"no signer", ref, "https://github.com/acme/checkout", &manifest.Org{}},
 	} {
-		if attested(ctx, c.org, c.ref, attest.RecipePredicateType, c.source) {
-			t.Errorf("%s: attested", c.name)
+		if p := inspect(c.org, c.ref, c.source); p.signed || p.predicate {
+			t.Errorf("%s: %+v", c.name, p)
 		}
 	}
-	// Signers whose constraints can't be met are never asked.
-	if c := cosign.calls(); len(c) != 2 {
+	// Signers whose constraints can't be met are never asked: the
+	// signature and both predicate types, twice.
+	if c := cosign.calls(); len(c) != 6 {
 		t.Errorf("cosign calls: %q", c)
 	}
 }

@@ -19,7 +19,7 @@ that report as a website.
 Distro packages come from the base image's own package manager — **apk**
 (Wolfi, Chainguard, Alpine), **apt** (Debian, Ubuntu), or **dnf** (Fedora,
 RHEL/UBI, Amazon Linux, Rocky, Alma) — with every package pinned by version and
-hash. Everything else — release binaries, **Nix** packages, tools inside other
+hash, and the hash checked when the image is built. Everything else — release binaries, **Nix** packages, tools inside other
 images, Go programs, arbitrary build steps — is declared inline as a *tool*, so
 there is no package recipe to write for each third-party binary.
 
@@ -126,6 +126,7 @@ spec:
     command: [/usr/local/bin/kubectl, version, --client]   # must exit 0
     # http: {port: 8080, path: /healthz}   # or: start the image, expect a non-error answer
     # timeout: 60s
+    # network: true              # a command test runs with no network unless this; an http test always has one
 ```
 
 | Tool source | Pinned by | Verified against |
@@ -135,7 +136,7 @@ spec:
 | `oci` | image digest | content addressing |
 | `go` | module version + toolchain image digest | the Go checksum database |
 | `nix` | nixpkgs commit + store path and closure per platform | cache.nixos.org's ed25519 signature on every store path, checked at lock and again by `nix copy` at build |
-| `build` | builder image digest | nothing — the lock marks it `unverified` |
+| `build` | builder image digest | nothing — the lock marks it `unverified`; with `policy.requireOfflineBuildTools` the script runs with no network |
 
 Placeholders: `{{version}}`, `{{os}}`, `{{arch}}` (renamed per tool with
 `archMap: {amd64: x86_64}`), `{{name}}`, plus `{{tag}}` and `{{asset}}` for
@@ -151,13 +152,18 @@ Tools install to `/usr/local/bin/<name>` with mode `0755` unless `dest:` and
 `clearcutt-factory lock` resolves packages with the distribution's own solver, run inside
 the digest-pinned base image (apt and dnf run in a container; apk is resolved
 in Go from the signed APKINDEX). The lock records every package that will be
-installed — for apt and dnf, each file's URL and sha256 — and the build
-downloads exactly those files with `ADD --checksum` and installs them offline.
-The build never asks a repository what is current.
+installed. For apt and dnf it records each file's URL and sha256, and the
+build downloads exactly those files with `ADD --checksum` and installs them
+offline, never asking a repository what is current. For apk it records each
+package's APKINDEX checksum (apk's `Q1…`: a SHA-1 over the package's signed
+control section, which holds the SHA-256 of its files); the build has apk
+install the pinned versions from the locked repositories, then checks every
+one against apk's database, which records the checksum of each installed
+package, so a package rebuilt under the same version fails the build.
 
 | Manager | Detected from | Resolution | Pinned download URL | Signatures checked at lock |
 |---|---|---|---|---|
-| apk | `/lib/apk/db/installed` | Go solver over the base's repositories; base packages are pinned too | apk fetches by exact version | APKINDEX signed by a key in the base's `/etc/apk/keys` |
+| apk | `/lib/apk/db/installed` | Go solver over the base's repositories; base packages are pinned too | apk fetches by exact version from the locked repositories; the build then checks each installed package's APKINDEX checksum against the lock | APKINDEX signed by a key in the base's `/etc/apk/keys` |
 | apt | os-release `debian`/`ubuntu` | `apt-get` in the base; Debian sources point at snapshot.debian.org | Debian: snapshot.debian.org. Ubuntu: Launchpad, which keeps every published file | apt verifies the signed indexes |
 | dnf | os-release `fedora`/`rhel`/`amzn`/… | `dnf --downloadonly` in the base | Fedora: Koji's signed copy of the build (byte-identical to the repository's). Amazon Linux: its content-addressed CDN. Others: the repository (mirror it) | `rpm -K` against the distribution's keys |
 
@@ -214,7 +220,7 @@ metadata: {name: hello-app}
 spec:
   stack: ../stacks/go.yaml
   source: .                 # default: the manifest's directory
-  exclude: [docs/]          # .gitignore-style; .git, /out, and factory's own files are always left out
+  exclude: [docs/]          # .gitignore-style; .git, /out, factory's own files, and what git doesn't track are always left out
   buildEnv: {MAIN: ./cmd/server}
   env: {PORT: "8080"}       # env, labels, user, workdir, entrypoint, cmd override the stack's
 ```
@@ -229,7 +235,13 @@ names (so a build image that meets `policy.requireNonRoot` works): that stage
 never ships, and the app runs as the stack's or app's `user`. The source the
 steps see leaves out `.git`, `/out`, and factory's own files when they are in
 it (the app's lock and Containerfile, and the org profile), so a pull request
-that only pins a new base doesn't change it. The app's layer therefore never touches the run
+that only pins a new base doesn't change it. It also leaves out what isn't
+part of the source: in a git work tree, every file git doesn't track (a
+stray `.env`, build output, an editor's backup; `build` names what it left
+out, so commit what the build needs), elsewhere what `.gitignore` files
+ignore, and in both what a `.dockerignore` at the source's root excludes, as
+Docker reads it. The same goes for directories in an image's `files:`. The
+recipe embeds this source, so nothing else can reach a signed recipe. The app's layer therefore never touches the run
 image's files, and the image records its base in the standard
 `org.opencontainers.image.base.name`/`.base.digest` annotations. Those two
 properties are what make it safe to rebase.
@@ -387,13 +399,14 @@ rebase needs the old base's manifest) and old app digests (rollback).
 
 **Tags only move forward.** Until an app's pin pull request merges, a build
 from unchanged source uses the old lock and reproduces the image the fleet
-rebased. Publishing an image the registry already has moves its tags to it,
-except a tag that holds a newer image: this image rebased onto a newer build
+rebased. Publishing moves the tags to the image, new or one the registry
+already has, except a tag that holds a newer image: this image rebased onto a newer build
 of its base (its own layers on another base, while its base's tag has moved
 on), or an image created later (built from a newer lock: a build's created
 time is its lock's `SOURCE_DATE_EPOCH`). That tag stays, with a warning.
 `--force-tags` (on `build` and `rebase`) moves it anyway, for a deliberate
-rollback.
+rollback. So a run of an older job (re-run after a newer one published)
+publishes its image without taking a tag back to it.
 
 A build from changed source before the pin pull request merges is a new
 image, on the old base. When a tag of an app holds an image on a newer build
@@ -423,7 +436,7 @@ found by walking up from the manifest (or `--org`). See
 | `sbom` | Whether to add a syft scan to the declared SBOM |
 | `extends` | A shared org profile to build on, and who may sign it ([below](#one-profile-for-every-repository)) |
 | `vulnerabilities` | Scanner and the `failOn` severity gate, optionally `onlyFixed`; `vex` documents applied to every scan |
-| `policy` | Non-root, required labels, TOFU, allowed download hosts (tools and packages) and registries |
+| `policy` | Non-root, required labels, TOFU, allowed download hosts (tools, package files, and apk repositories) and registries (each entry covers itself and the paths below it, by whole segment: `ghcr.io/acme` covers `ghcr.io/acme/app`, not `ghcr.io/acme-evil/app`), signed stacks, and `requireOfflineBuildTools` (`from: build` scripts run with no network) |
 | `mirrors` | URL prefix rewrites for every download (`from: https://snapshot.debian.org/`, `to: https://artifactory.acme/debian-snapshot/`); checksums still pin the content |
 
 ### One profile for every repository
@@ -473,7 +486,9 @@ rules and with no signer, since it is its own file; its locks pin the digest
 
 * **Every input is content-addressed in the lock**: base, BuildKit, frontend,
   and helper images by digest; every package *including transitive
-  dependencies* by exact version, and for apt/dnf by file sha256; every download
+  dependencies* by exact version and checksum (apk: the APKINDEX checksum,
+  checked against apk's database after install; apt/dnf: the file's sha256,
+  checked before); every download
   by sha256; Go modules by version (sumdb-checked); Nix store paths by their
   signed hashes.
 * **Pinned BuildKit**: builds run `moby/buildkit@sha256:…` in a container, so
@@ -507,6 +522,22 @@ it names the first differing layer and the files that differ.
 
 Unsigned copies of all of these are written to `out/<name>/attestations/`, and
 `out/<name>/result.json` summarizes the build for CI.
+
+**Tags move last.** `build --push` and `rebase --push` push the image by
+digest, sign it, and attach every attestation above before any tag moves, so
+a tag only ever names a signed, attested image. An image the registry
+already has counts as published only when the org's image signers verify
+its signature (on the index and every platform image), its recipe or
+rebase record, and each platform's SBOM and vulnerability report; whatever
+is missing is added, and nothing else is signed again. So a run that failed
+partway (cosign or the transparency log down) is completed by the next one,
+and `rebase --push` does the same for an image it finds already on the
+newest base (one with neither a recipe nor a rebase record from the org's
+signer is refused: rebuild it). Without a signer to check against
+(`signing.verify` or a trust policy), every publish signs and attests
+again. `result.json` is written before the push and again once the image
+is published, before its tags move; its `published` is true when the run
+pushed the image or added anything to it.
 
 **Reproductions.** `clearcutt-factory verify --image IMAGE --attest` rebuilds
 the image from its signed recipe without cache (or repeats its signed rebase
@@ -554,9 +585,12 @@ rebuild it yourself with `verify --image`.
 ## CI
 
 [`.github/workflows/images.yml`](.github/workflows/images.yml) is a complete
-pipeline. On pull requests it builds, scans, and gates. On `main` it also pushes,
-signs keylessly, adds SLSA provenance, and then rebuilds on a second runner from
-the signed recipe alone and attests the match. Its `published` output lists
+pipeline. On pull requests it builds, scans, and gates. On the default branch
+(and the ref its `publish-ref` input names, if any) it also pushes, signs
+keylessly, adds SLSA provenance, and then rebuilds on a second runner from
+the signed recipe alone and attests the match; runs on any other ref, such
+as a `workflow_dispatch` from a branch, publish nothing. `fleet.yml` and
+`update-locks.yml` push and open pull requests only there too. Its `published` output lists
 what the run newly published (a JSON array of `{manifest, kind, image,
 repository, digest, tags}`). A calling job gets it only when the whole
 workflow is done, reproduction included, so `init`'s workflow calls it with
@@ -604,7 +638,9 @@ nothing is GitHub-specific.
   actually built on a base (by layer digest), for `notify.yml`'s
   `repositories` input or for `clearcutt-factory rebase --image`.
 * Smoke tests run images on the build machine, other architectures through
-  emulation (QEMU in CI); `--no-test` skips them.
+  emulation (QEMU in CI); `--no-test` skips them. A command test's container
+  has no network unless the test sets `network: true`; an HTTP test's has the
+  runtime's default network, which publishing its port needs.
 
 ## Versions
 
@@ -619,7 +655,10 @@ go test ./...
 go test ./internal/render -update   # refresh the golden Containerfiles
 go test ./internal/schema -update   # regenerate schemas/ after changing manifest types
 CLEARCUTT_FACTORY_E2E=1 go test ./internal/factory   # real lock + build + no-cache rebuild per package manager,
-                                                     # and an app built on a stack, then rebased (needs docker or podman)
+                                                     # an app built on a stack, then rebased, and an image pushed
+                                                     # and signed with cosign (needs docker or podman, and cosign)
+CLEARCUTT_FACTORY_COSIGN_E2E=1 go test ./internal/factory -run TestEndToEndCosign   # publish with the real cosign
+                                                     # and check every signature and attestation with it
 scripts/release.sh v0.2.0           # after adding a CHANGELOG section: re-pin refs, commit, tag
 ```
 

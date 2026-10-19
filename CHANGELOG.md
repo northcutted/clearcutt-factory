@@ -3,6 +3,149 @@
 ClearCutt Factory is pre-1.0; see [docs/stability.md](docs/stability.md) for
 what may change between releases.
 
+## Unreleased
+
+### Breaking
+
+**Tags move only to a signed, fully attested image, and never back.**
+`build --push` and `rebase --push` pushed with the tags, then signed, so a
+cosign or Rekor failure left `latest` on an unsigned image; a rebase re-run
+then saw the image "already on the newest base" and left it so. Images are
+now pushed by digest, signed, and attested, and only then tagged. "Already
+published" means the org's image signers verify the signature (index and
+every platform image), the recipe or rebase record, and each platform's
+SBOM and vulnerability report; a run adds whatever is missing and signs
+nothing twice, so the next run completes one that failed partway. A
+rebase that finds the image already on the newest base does the same,
+and refuses an image with neither a recipe nor a rebase record from the
+org's signer (rebuild it), or one it has no signer to check against
+(`signing.verify` or a trust policy): `rebase --push` used to say "nothing
+to do" without looking. The check for a newer image under the tag now
+applies to new images too, so a re-run of an older job no longer moves
+`latest` back (`--force-tags` still does, for a rollback). `result.json`
+is written before the push and again once the image is published, before
+its tags move (with the `$GITHUB_OUTPUT` values), so a failure after that
+still leaves the record the reproduce and notify steps read; `published`
+is true when the run pushed the image or added anything to it. Checking a
+published image now takes a cosign call per signature and attestation
+instead of one. `stack push` and `profile push` likewise push by digest,
+sign, and only then move the tag.
+
+**A smoke test's container has no network unless the test asks.** It had
+the runtime's default network, which on a self-hosted runner reaches
+whatever that machine does. A command test now runs with `--network none`;
+`spec.test.network: true` gives it the default network. An HTTP test keeps
+the default network, which publishing its port needs.
+
+**Only the default branch publishes.** `images.yml` pushed and signed on
+every event but pull requests, so a `workflow_dispatch` from any branch
+published images the signer identity trusts, and the verify block `init`
+writes named the repository but no ref. Now `images.yml` and `fleet.yml`
+push, sign, and attest, and `fleet.yml` and `update-locks.yml` open pull
+requests, only in runs on the default branch (where `schedule`,
+`repository_dispatch`, and `workflow_run` always run), or on the ref the new
+`publish-ref` input names (a bash glob, such as `refs/heads/release/*`);
+elsewhere they build and check (`fleet.yml` runs `rebase --check`;
+`update-locks.yml` reports without proposing). `init` writes
+`sourceRef: refs/heads/<branch>` into the signer, with the origin remote's
+default branch, or `--default-branch`, or `main`. Existing profiles: add
+`sourceRef` to `signing.verify` (or the trust policy's signers) yourself.
+
+**Only the source reaches the build context and the signed recipe.**
+Copying an app's source (and directories in `files:`) left out `.git`,
+`/out`, and factory's own files, and nothing else, so a local
+`build --push` could embed a stray `.env` in the recipe, which holds the
+context's contents up to 2 MiB. In a git work tree only the files git
+tracks are copied now (`build` names what it left out: commit what the
+build needs); elsewhere, what `.gitignore` files ignore is left out; and in
+both, what a `.dockerignore` at the directory's root excludes, as Docker
+reads it. A source in a git work tree needs `git` on `PATH`.
+
+**apk packages are checked against the lock's checksums at build.** The
+lock recorded each apk package's APKINDEX checksum, but the build only
+asked apk for the pinned versions, so a repository that rebuilt a package
+under the same version changed the image without failing it, although
+the README said packages were pinned by version and hash. Each platform's
+install now ends by checking every package apk installed against apk's
+database, which records the APKINDEX checksum (`Q1…`, a SHA-1 over the
+package's signed control section, which holds the SHA-256 of its files),
+and fails naming the package that differs. The checksums differ per
+architecture, so a multi-platform image now installs in one stage per
+architecture. A lock without checksums can't be rendered; `lock --update`
+writes them. Every apk image's Containerfile changes, so it builds a new
+digest once: re-render (`clearcutt-factory render`) and commit.
+
+**`policy.allowedHosts` covers apk repositories, and `allowedRegistries`
+matches whole path segments.** apk packages have no URL of their own, so
+the repositories they come from went unchecked; they are checked now, so
+a profile with `allowedHosts` must list its apk repositories' hosts
+(`apk.cgr.dev` for Wolfi and Chainguard). An `allowedRegistries` entry was a
+string prefix, so `ghcr.io/acme` allowed `ghcr.io/acme-evil/app`; an entry
+now covers itself and the paths below it (with a tag or digest), and a
+repository's list must lie within the shared profile's the same way.
+Entries ending in `/` mean what they did.
+
+**`build --push` and `rebase --push` refuse `--no-scan` under a shared
+profile**, which would publish past the platform's vulnerability gate.
+
+**Values the Containerfile can't hold are refused.** `spec.user`,
+`spec.workdir`, environment variable names, the paths of `oci` tools, and
+other values were printed into the Containerfile as they were, and
+`policy.requireNonRoot` read the raw string, so `user: "65532\nUSER 0"`
+passed the policy and ran the image as root. Loading a manifest (and
+rendering, for locks edited by hand) now refuses: a `user` that isn't a
+name or ID with an optional `:group`; a `workdir`, `oci` tool `path`, tool
+`dest`, stack `appDir`, or cache that isn't an absolute path without
+spaces, quotes, `$`, `\`, globs, commas, or `=`; environment names that
+aren't letters, digits, `_`, `.`, and `-`; newlines and other control
+characters in environment and label values, label keys, file
+destinations, and `extract`; control characters other than tabs and
+newlines in `run` scripts and stack steps; and lock values (image
+references, digests, versions, package names, checksums, URLs, nix store
+paths) that don't have their expected form. `requireNonRoot` also counts
+`00` and other spellings of ID 0 as root. A script that holds the heredoc
+delimiter `FACTORY_EOF` gets another one, `FACTORY_EOF_` and the start of
+its sha256, so it can't end its heredoc and add instructions; other
+Containerfiles are unchanged. `FuzzRender` renders arbitrary values and
+checks with BuildKit's own parser that the Containerfile has exactly the
+instructions a plain input gives, with each value unchanged.
+
+### Added
+
+**CI publishes with the real cosign.** Every cosign interaction in the
+tests was a fake. A `cosign` job now publishes a two-platform image to a
+`registry:3` service through factory's publish path, signed with a key and
+no transparency log, and checks with `cosign verify` and
+`cosign verify-attestation` that the index and each platform image are
+signed, that the recipe and each platform's SBOM and vulnerability report
+are attached, and that `latest` names the signed digest; then a publish
+that cosign fails partway leaves `latest` alone, and the next run attaches
+only what is missing (`TestEndToEndCosign`). The end-to-end job also builds
+an image, pushes it to a local registry with `build --push`, and checks its
+signature and attestations with cosign.
+
+**The reusable workflows are linted and hardened.** CI runs actionlint and
+zizmor (online audits) on every workflow and the action, with the findings
+this repository keeps justified inline or in `.github/zizmor.yml`. Every job
+has a `timeout-minutes`; `setup-qemu-action` installs a binfmt image pinned
+by digest instead of `tonistiigi/binfmt:latest`; checkouts drop their
+credentials (`persist-credentials: false`) except the one in `fleet.yml`
+and `update-locks.yml` that pushes the pull request's branch; every `${{ }}`
+in a `run:` block went to `env:`; `GITHUB_ENV` is no longer written (the
+action writes one fixed directory to `GITHUB_PATH`, with syft and grype
+linked into it); and `release.yml` builds without the Go cache.
+
+**A failed build shows what the failing step printed.** Without `-v`,
+`build` showed the build log's last 40 lines, which BuildKit fills with
+its summary and the Containerfile around the failing instruction, so the
+step's own error (the package an apk check names, say) was cut off. It
+now shows that step's output first, then the summary.
+
+**`policy.requireOfflineBuildTools`** runs the scripts of `from: build`
+tools with no network (`RUN --network=none`), so they can use only what
+their builder image holds. Off by default; a repository can't turn it off
+when its shared profile turns it on.
+
 ## v0.3.0
 
 **`lock --update-package` moves only the packages it names

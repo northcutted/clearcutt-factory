@@ -66,19 +66,63 @@ RUN mkdir -p /out/etc/demo && cp -R /in/0/. /out/etc/demo/ \
 # ---- image ----
 FROM cgr.dev/chainguard/wolfi-base:latest@sha256:0000000000000000000000000000000000000000000000000000000000000000 AS packages-amd64
 ARG SOURCE_DATE_EPOCH
-RUN apk add --no-cache --repositories-file /dev/null \
-      --repository https://apk.cgr.dev/chainguard \
-      jq=1.8.2-r2 \
-      oniguruma=6.9.10-r5 \
- && rm -f /var/cache/ldconfig/aux-cache
+RUN <<'FACTORY_EOF'
+set -eu
+apk add --no-cache --repositories-file /dev/null \
+  --repository https://apk.cgr.dev/chainguard \
+  jq=1.8.2-r2 \
+  oniguruma=6.9.10-r5
+rm -f /var/cache/ldconfig/aux-cache
+# every package must be the build the lock pins (apk's database records
+# each one's APKINDEX checksum)
+awk '
+  NR == FNR { want[$1] = $2 " " $3; next }
+  /^P:/ { p = substr($0, 3) }
+  /^V:/ { v = substr($0, 3) }
+  /^C:/ { c = substr($0, 3) }
+  /^$/ { if (p != "") have[p] = v " " c; p = ""; v = ""; c = "" }
+  END {
+    if (p != "") have[p] = v " " c
+    for (n in want) if (have[n] != want[n]) {
+      printf "clearcutt-factory: %s is %s, but the lock pins %s\n", n, ((n in have) ? have[n] : "not installed"), want[n] > "/dev/stderr"
+      bad = 1
+    }
+    exit bad
+  }' - /lib/apk/db/installed <<'LOCKED'
+jq 1.8.2-r2 Q1cIjjnzqrowWo6jY/D8dmbkQ8mdk=
+oniguruma 6.9.10-r5 Q1aaaaaaaaaaaaaaaaaaaaaaaaaaa=
+LOCKED
+FACTORY_EOF
 
 FROM cgr.dev/chainguard/wolfi-base:latest@sha256:0000000000000000000000000000000000000000000000000000000000000000 AS packages-arm64
 ARG SOURCE_DATE_EPOCH
-RUN apk add --no-cache --repositories-file /dev/null \
-      --repository https://apk.cgr.dev/chainguard \
-      jq=1.8.2-r1 \
-      oniguruma=6.9.10-r5 \
- && rm -f /var/cache/ldconfig/aux-cache
+RUN <<'FACTORY_EOF'
+set -eu
+apk add --no-cache --repositories-file /dev/null \
+  --repository https://apk.cgr.dev/chainguard \
+  jq=1.8.2-r1 \
+  oniguruma=6.9.10-r5
+rm -f /var/cache/ldconfig/aux-cache
+# every package must be the build the lock pins (apk's database records
+# each one's APKINDEX checksum)
+awk '
+  NR == FNR { want[$1] = $2 " " $3; next }
+  /^P:/ { p = substr($0, 3) }
+  /^V:/ { v = substr($0, 3) }
+  /^C:/ { c = substr($0, 3) }
+  /^$/ { if (p != "") have[p] = v " " c; p = ""; v = ""; c = "" }
+  END {
+    if (p != "") have[p] = v " " c
+    for (n in want) if (have[n] != want[n]) {
+      printf "clearcutt-factory: %s is %s, but the lock pins %s\n", n, ((n in have) ? have[n] : "not installed"), want[n] > "/dev/stderr"
+      bad = 1
+    }
+    exit bad
+  }' - /lib/apk/db/installed <<'LOCKED'
+jq 1.8.2-r1 Q1UVd+QYZzLs19UhTnUAfchEVOH8Q=
+oniguruma 6.9.10-r5 Q1bbbbbbbbbbbbbbbbbbbbbbbbbbb=
+LOCKED
+FACTORY_EOF
 
 FROM packages-${TARGETARCH}
 COPY --link --from=tool-helm /out/ /

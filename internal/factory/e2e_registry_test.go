@@ -2,11 +2,13 @@ package factory
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log"
 	"net"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -19,7 +21,9 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 
+	"github.com/northcutted/clearcutt-factory/internal/attest"
 	"github.com/northcutted/clearcutt-factory/internal/container"
+	"github.com/northcutted/clearcutt-factory/internal/registry"
 )
 
 // TestEndToEndLocalRegistry builds an image on a base in a plain-HTTP
@@ -115,5 +119,60 @@ spec:
 	}
 	if err := Build(ctx, opts, BuildOptions{OutDir: filepath.Join(base, "out"), NoScan: true}); err != nil {
 		t.Fatal(err)
+	}
+
+	// The same build published to the local registry, signed with a key by
+	// the real cosign (no transparency log), as build --push does it: the
+	// tag must name the signed digest, which carries the recipe and each
+	// platform's SBOM.
+	cosign, err := exec.LookPath("cosign")
+	if err != nil {
+		t.Skip("cosign is not on PATH; skipping the signed publish")
+	}
+	t.Setenv("COSIGN_PASSWORD", "")
+	for _, args := range [][]string{{"generate-key-pair"}, {"signing-config", "create", "--out", "no-tlog.json"}} {
+		cmd := exec.Command(cosign, args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("cosign %v: %v\n%s", args, err, out)
+		}
+	}
+	org := strings.Replace(files["factory.org.yaml"], "registry: registry.example/e2e\nsigning: {mode: none}\n",
+		"registry: "+host+"/e2e\ntags: [latest]\nsigning:\n  mode: key\n  key: "+filepath.Join(dir, "cosign.key")+"\n  args: [--signing-config, "+filepath.Join(dir, "no-tlog.json")+"]\n"+
+			"  verify: {key: "+filepath.Join(dir, "cosign.pub")+", tlog: false}\n", 1)
+	if err := os.WriteFile(filepath.Join(dir, "factory.org.yaml"), []byte(org), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Lock(ctx, opts, LockOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(base, "out")
+	if err := Build(ctx, opts, BuildOptions{OutDir: out, NoScan: true, Push: true}); err != nil {
+		t.Fatal(err)
+	}
+	var res Result
+	b, err := os.ReadFile(filepath.Join(out, "e2e-local-registry", "result.json"))
+	if err == nil {
+		err = json.Unmarshal(b, &res)
+	}
+	if err != nil || !res.Published || !res.Signed || res.Image != host+"/e2e/e2e-local-registry@"+res.Digest {
+		t.Fatalf("result.json: %+v, %v", res, err)
+	}
+	keyArgs := []string{"--key", filepath.Join(dir, "cosign.pub"), "--insecure-ignore-tlog=true"}
+	verify := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command(cosign, append(append(args[:1:1], keyArgs...), args[1:]...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("cosign %v: %v\n%s", args, err, out)
+		}
+	}
+	verify("verify", res.Image)
+	verify("verify-attestation", "--type", attest.RecipePredicateType, res.Image)
+	for _, d := range res.Platforms {
+		verify("verify", host+"/e2e/e2e-local-registry@"+d)
+		verify("verify-attestation", "--type", "cyclonedx", host+"/e2e/e2e-local-registry@"+d)
+	}
+	if got, err := registry.Lookup(ctx, host+"/e2e/e2e-local-registry:latest"); err != nil || got != res.Digest {
+		t.Errorf("latest is %s (%v), want the signed %s", got, err, res.Digest)
 	}
 }

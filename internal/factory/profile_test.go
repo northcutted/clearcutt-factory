@@ -768,3 +768,42 @@ func TestInitExtends(t *testing.T) {
 		}
 	}
 }
+
+// TestNoScanPushUnderSharedProfile: under a shared profile, build --push
+// and rebase --push refuse --no-scan, which would skip the platform's
+// vulnerability gate (#10); without one, --no-scan stays.
+func TestNoScanPushUnderSharedProfile(t *testing.T) {
+	w := newProfileWorld(t, map[string]string{
+		"platform/.git/HEAD": "ref: refs/heads/main\n",
+		"platform/org/profile.yaml": "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\n" +
+			"builder: {buildkit: HOST/buildkit:1, frontend: HOST/frontend:1, toolbox: HOST/toolbox:1}\nsigning: {mode: none}\nvulnerabilities: {failOn: high}\n",
+		"platform/factory.org.yaml": "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\n" +
+			"extends: {path: org/profile.yaml}\nregistry: HOST/platform\n",
+		"platform/img/image.yaml": "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Image\nmetadata: {name: img}\nspec:\n  base: HOST/base:1\n  platforms: [linux/amd64]\n",
+	})
+	for _, r := range []string{"base", "buildkit", "frontend", "toolbox"} {
+		w.image(r)
+	}
+	opts := w.opts()
+	opts.ManifestPath = filepath.Join(w.dir, "platform/img/image.yaml")
+	if err := Lock(w.ctx, opts, LockOptions{}); err != nil {
+		t.Fatalf("lock: %v\n%s", err, w.out.String())
+	}
+	out := filepath.Join(w.dir, "out")
+	err := Build(w.ctx, opts, BuildOptions{Push: true, NoScan: true, OutDir: out})
+	if err == nil || !strings.Contains(err.Error(), "--push with --no-scan: the shared profile org/profile.yaml sets the vulnerability gate") {
+		t.Errorf("build --push --no-scan: %v", err)
+	}
+	opts.OrgPath = filepath.Join(w.dir, "platform/factory.org.yaml")
+	err = Rebase(w.ctx, opts, RebaseOptions{Image: w.host + "/platform/img:latest", Push: true, NoScan: true, OutDir: out})
+	if err == nil || !strings.Contains(err.Error(), "--push with --no-scan") {
+		t.Errorf("rebase --push --no-scan: %v", err)
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Errorf("wrote output before refusing: %v", err)
+	}
+	// Without a shared profile, --no-scan may still publish.
+	if err := checkNoScan(manifest.DefaultOrg(), true, true); err != nil {
+		t.Error(err)
+	}
+}

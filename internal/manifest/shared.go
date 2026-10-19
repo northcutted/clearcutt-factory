@@ -491,7 +491,10 @@ func extendWith(s, l *Org, set keySet) (*Org, error) {
 	p.AllowedHosts = within("policy.allowedHosts", sp.AllowedHosts, lp.AllowedHosts, func(e, a string) bool {
 		return e == a || (strings.HasPrefix(a, ".") && strings.HasSuffix(e, a))
 	})
-	p.AllowedRegistries = within("policy.allowedRegistries", sp.AllowedRegistries, lp.AllowedRegistries, strings.HasPrefix)
+	p.AllowedRegistries = within("policy.allowedRegistries", sp.AllowedRegistries, lp.AllowedRegistries, func(e, a string) bool {
+		return RegistryCovers(a, e)
+	})
+	p.RequireOfflineBuildTools = on("policy.requireOfflineBuildTools", sp.RequireOfflineBuildTools, lp.RequireOfflineBuildTools)
 	return out, errors.Join(errs...)
 }
 

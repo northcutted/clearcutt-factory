@@ -158,9 +158,22 @@ func LoadStack(p string) (*Stack, error) {
 	if d := s.Spec.AppDir; !path.IsAbs(d) || path.Clean(d) == "/" {
 		add("spec.appDir %q must be an absolute directory other than /", d)
 	}
+	if err := CheckPath(s.Spec.AppDir); err != nil {
+		add("spec.appDir: %v", err)
+	}
 	for _, c := range s.Spec.Caches {
-		if !path.IsAbs(c) {
-			add("spec.caches: %q must be absolute", c)
+		if err := CheckPath(c); err != nil {
+			add("spec.caches: %v", err)
+		}
+	}
+	for i, st := range s.Spec.Steps {
+		if err := CheckScript(st.Run); err != nil {
+			add("spec.steps[%d]: run %v", i, err)
+		}
+	}
+	if s.Spec.User != "" {
+		if err := CheckUser(s.Spec.User); err != nil {
+			add("spec.user: %v", err)
 		}
 	}
 	if err := errors.Join(errs...); err != nil {

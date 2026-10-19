@@ -12,8 +12,11 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -21,20 +24,74 @@ jobs:
       - run: go test -race ./...
       - name: The bot's pull requests get valid branches
         run: .github/scripts/branch-names_test.sh
+      - name: Only the default branch publishes
+        run: .github/scripts/publish-ref_test.sh
       - name: Example lockfiles and Containerfiles are current
         run: |
           go install ./cmd/clearcutt-factory
           for m in examples/*/image.yaml examples/*/app.yaml; do clearcutt-factory render -f "$m" --check; done
 
-  # Real locks and builds (apk, apt with Nix, dnf, and a Go app), each rebuilt
-  # without cache and compared, smoke-tested, and the app rebased.
-  e2e:
+  # The reusable workflows are what callers run: lint them like code.
+  # Justified zizmor findings are ignored inline, or in .github/zizmor.yml.
+  lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - name: actionlint
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: zizmor
+        uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
+        with:
+          version: 1.31.1
+          config: .github/zizmor.yml
+          advanced-security: false
+
+  # factory's publish path with the real cosign, against a real registry: a
+  # two-platform image signed with a key (no transparency log), with its
+  # recipe, SBOMs, and vulnerability reports attached, checked by cosign
+  # itself; and a publish cosign fails partway, which the next run
+  # completes. A change in cosign's formats fails here, not in production.
+  cosign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      registry:
+        image: docker.io/library/registry:3@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8
+        ports:
+          - 5000:5000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2, as action.yml installs it
+      - run: go test ./internal/factory -run TestEndToEndCosign -count=1 -v
+        env:
+          CLEARCUTT_FACTORY_COSIGN_E2E: "1"
+          CLEARCUTT_FACTORY_E2E_REGISTRY: localhost:5000
+
+  # Real locks and builds (apk, apt with Nix, dnf, and a Go app), each rebuilt
+  # without cache and compared, smoke-tested, and the app rebased; and one
+  # built, pushed to a local registry, and signed by cosign with a key.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - run: go test ./internal/factory -run TestEndToEnd -count=1 -timeout 45m -v
         env:
           CLEARCUTT_FACTORY_E2E: "1"
