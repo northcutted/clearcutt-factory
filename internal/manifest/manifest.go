@@ -150,6 +150,10 @@ type Test struct {
 	HTTP    *HTTPTest `yaml:"http,omitempty" json:"http,omitempty"`
 	// Timeout is a duration like 30s (default 60s; emulated platforms are slow).
 	Timeout string `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	// Network gives a command test the runtime's default network; without
+	// it the container has none. An HTTP test always has it: its port is
+	// published to the host.
+	Network bool `yaml:"network,omitempty" json:"network,omitempty"`
 }
 
 // HTTPTest probes a port the container listens on.

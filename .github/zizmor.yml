@@ -1,0 +1,13 @@
+# zizmor (https://docs.zizmor.sh) runs in ci.yml. Findings this repository
+# keeps, and why:
+rules:
+  # images.yml, fleet.yml, and update-locks.yml run the action from
+  # ./.clearcutt-factory, a checkout of the release their factory-version
+  # input names (which needn't be the ref the workflow is called at), or
+  # from ./ for this repository's own events. GitHub's $/ self-repository
+  # syntax names the workflow's own ref, which is not the same thing.
+  self-repository:
+    ignore:
+      - images.yml
+      - fleet.yml
+      - update-locks.yml

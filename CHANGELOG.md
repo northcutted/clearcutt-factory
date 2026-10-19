@@ -29,6 +29,12 @@ published image now takes a cosign call per signature and attestation
 instead of one. `stack push` and `profile push` likewise push by digest,
 sign, and only then move the tag.
 
+**A smoke test's container has no network unless the test asks.** It had
+the runtime's default network, which on a self-hosted runner reaches
+whatever that machine does. A command test now runs with `--network none`;
+`spec.test.network: true` gives it the default network. An HTTP test keeps
+the default network, which publishing its port needs.
+
 **Only the default branch publishes.** `images.yml` pushed and signed on
 every event but pull requests, so a `workflow_dispatch` from any branch
 published images the signer identity trusts, and the verify block `init`
@@ -103,6 +109,17 @@ checks with BuildKit's own parser that the Containerfile has exactly the
 instructions a plain input gives, with each value unchanged.
 
 ### Added
+
+**The reusable workflows are linted and hardened.** CI runs actionlint and
+zizmor (online audits) on every workflow and the action, with the findings
+this repository keeps justified inline or in `.github/zizmor.yml`. Every job
+has a `timeout-minutes`; `setup-qemu-action` installs a binfmt image pinned
+by digest instead of `tonistiigi/binfmt:latest`; checkouts drop their
+credentials (`persist-credentials: false`) except the one in `fleet.yml`
+and `update-locks.yml` that pushes the pull request's branch; every `${{ }}`
+in a `run:` block went to `env:`; `GITHUB_ENV` is no longer written (the
+action writes one fixed directory to `GITHUB_PATH`, with syft and grype
+linked into it); and `release.yml` builds without the Go cache.
 
 **`policy.requireOfflineBuildTools`** runs the scripts of `from: build`
 tools with no network (`RUN --network=none`), so they can use only what

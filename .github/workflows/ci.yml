@@ -12,8 +12,11 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -28,12 +31,36 @@ jobs:
           go install ./cmd/clearcutt-factory
           for m in examples/*/image.yaml examples/*/app.yaml; do clearcutt-factory render -f "$m" --check; done
 
+  # The reusable workflows are what callers run: lint them like code.
+  # Justified zizmor findings are ignored inline, or in .github/zizmor.yml.
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: actionlint
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: zizmor
+        uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
+        with:
+          version: 1.31.1
+          config: .github/zizmor.yml
+          advanced-security: false
+
   # Real locks and builds (apk, apt with Nix, dnf, and a Go app), each rebuilt
   # without cache and compared, smoke-tested, and the app rebased.
   e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod

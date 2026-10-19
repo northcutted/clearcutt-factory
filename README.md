@@ -126,6 +126,7 @@ spec:
     command: [/usr/local/bin/kubectl, version, --client]   # must exit 0
     # http: {port: 8080, path: /healthz}   # or: start the image, expect a non-error answer
     # timeout: 60s
+    # network: true              # a command test runs with no network unless this; an http test always has one
 ```
 
 | Tool source | Pinned by | Verified against |
@@ -637,7 +638,9 @@ nothing is GitHub-specific.
   actually built on a base (by layer digest), for `notify.yml`'s
   `repositories` input or for `clearcutt-factory rebase --image`.
 * Smoke tests run images on the build machine, other architectures through
-  emulation (QEMU in CI); `--no-test` skips them.
+  emulation (QEMU in CI); `--no-test` skips them. A command test's container
+  has no network unless the test sets `network: true`; an HTTP test's has the
+  runtime's default network, which publishing its port needs.
 
 ## Versions
 

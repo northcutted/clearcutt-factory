@@ -75,6 +75,7 @@ env:
 jobs:
   manifests:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       manifests: ${{ steps.find.outputs.manifests }}
       publish: ${{ steps.ref.outputs.publish }}
@@ -112,6 +113,8 @@ jobs:
             echo "::notice::$GITHUB_REF is not the default branch${default:+ ($default)}${PUBLISH_REF:+ or $PUBLISH_REF}: checking only, nothing is published"
           fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: find
         shell: bash
         run: |
@@ -124,6 +127,7 @@ jobs:
     needs: manifests
     if: needs.manifests.outputs.manifests != '[]'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
@@ -138,6 +142,8 @@ jobs:
       APP_ID: ${{ inputs.app-id || vars.CLEARCUTT_APP_ID }}
       APP_KEY_SET: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY != '' }}
       PUBLISH: ${{ needs.manifests.outputs.publish }}
+      # Where this workflow's scripts are (see fleet.yml).
+      FACTORY_DIR: ${{ (inputs.factory-version || 'source') != 'source' && '.clearcutt-factory' || '.' }}
     steps:
       # Half a GitHub App (an ID without a key, or a key without an ID) fails
       # here rather than quietly falling back to another identity.
@@ -150,12 +156,16 @@ jobs:
           private-key: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
+      # Keeps its credentials: open-pr.sh pushes the pull request's branch
+      # with them, and nothing in this job uploads the checkout.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ steps.app.outputs.token || secrets.CLEARCUTT_BOT_TOKEN || github.token }}
+          persist-credentials: true # zizmor: ignore[artipacked]
       - if: env.FACTORY_VERSION != 'source'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: northcutted/clearcutt-factory
           ref: ${{ env.FACTORY_VERSION }}
           path: .clearcutt-factory
@@ -168,13 +178,16 @@ jobs:
         uses: ./
         with:
           tools: "false"
-      - run: echo "FACTORY_DIR=$([ "$FACTORY_VERSION" = source ] && echo . || echo .clearcutt-factory)" >> "$GITHUB_ENV"
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0; apt and dnf resolve inside the base, per platform
+        with:
+          # The privileged binfmt image, pinned (update: crane digest tonistiigi/binfmt:<tag>).
+          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
 
       - name: Re-resolve every input
         env:
           GITHUB_TOKEN: ${{ github.token }} # GitHub API lookups (release digests, nixpkgs revisions) without the anonymous rate limit
-        run: clearcutt-factory lock -f "${{ matrix.manifest }}" --update | tee "$RUNNER_TEMP/lock.out"
+          MANIFEST: ${{ matrix.manifest }}
+        run: clearcutt-factory lock -f "$MANIFEST" --update | tee "$RUNNER_TEMP/lock.out"
 
       # Only a publishing ref proposes: a pull request from another branch
       # would carry that branch's commits.

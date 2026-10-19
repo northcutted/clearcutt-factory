@@ -111,6 +111,7 @@ env:
 jobs:
   manifests:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       manifests: ${{ steps.find.outputs.manifests }}
       publish: ${{ steps.ref.outputs.publish }}
@@ -148,6 +149,8 @@ jobs:
             echo "::notice::$GITHUB_REF is not the default branch${default:+ ($default)}${PUBLISH_REF:+ or $PUBLISH_REF}: checking only, nothing is published"
           fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: find
         shell: bash
         env:
@@ -167,6 +170,8 @@ jobs:
     needs: manifests
     if: needs.manifests.outputs.manifests != '[]' && !inputs.published
     runs-on: ubuntu-latest
+    # Other platforms build and smoke-test under emulation.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -183,9 +188,12 @@ jobs:
       PUSH: ${{ needs.manifests.outputs.publish }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - if: env.FACTORY_VERSION != 'source'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: northcutted/clearcutt-factory
           ref: ${{ env.FACTORY_VERSION }}
           path: .clearcutt-factory
@@ -196,9 +204,14 @@ jobs:
       - if: env.FACTORY_VERSION == 'source'
         uses: ./
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0; other platforms build and smoke-test under emulation
+        with:
+          # The privileged binfmt image, pinned (update: crane digest tonistiigi/binfmt:<tag>).
+          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
 
       - name: Lock and Containerfile are current
-        run: clearcutt-factory render -f "${{ matrix.manifest }}" --check
+        env:
+          MANIFEST: ${{ matrix.manifest }}
+        run: clearcutt-factory render -f "$MANIFEST" --check
 
       - name: Log in to ${{ env.REGISTRY }}
         if: env.PUSH == 'true'
@@ -208,10 +221,12 @@ jobs:
           username: ${{ secrets.REGISTRY_USERNAME || github.actor }}
           password: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
 
-      - name: Build, test, scan, gate (and push, sign, attest unless a pull request)
+      - name: Build, test, scan, gate (and push, sign, attest on a publishing ref)
         id: build
+        env:
+          MANIFEST: ${{ matrix.manifest }}
         run: |
-          args=(-f "${{ matrix.manifest }}")
+          args=(-f "$MANIFEST")
           if [ "$PUSH" = true ]; then args+=(--push); fi
           clearcutt-factory build "${args[@]}"
 
@@ -332,6 +347,7 @@ jobs:
     needs: [manifests, build]
     if: ${{ !cancelled() && needs.manifests.outputs.publish == 'true' && needs.build.result != 'skipped' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       published: ${{ steps.list.outputs.published }}
     steps:
@@ -358,6 +374,7 @@ jobs:
     needs: [manifests, build]
     if: ${{ !cancelled() && needs.manifests.outputs.publish == 'true' && format('{0}', inputs.reproduce) != 'false' && needs.manifests.result == 'success' && needs.manifests.outputs.manifests != '[]' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -371,9 +388,12 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - if: env.FACTORY_VERSION != 'source'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: northcutted/clearcutt-factory
           ref: ${{ env.FACTORY_VERSION }}
           path: .clearcutt-factory
@@ -387,6 +407,9 @@ jobs:
         with:
           tools: "false"
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          # The privileged binfmt image, pinned (update: crane digest tonistiigi/binfmt:<tag>).
+          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}

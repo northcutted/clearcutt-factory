@@ -49,7 +49,7 @@ func TestCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := f.called("run ")
-	if !strings.Contains(run, "--platform linux/arm64 --entrypoint /usr/local/bin/kubectl localhost/clearcutt-factory-smoke/platform-tools:linux-arm64 version --client") {
+	if !strings.Contains(run, "--platform linux/arm64 --network none --entrypoint /usr/local/bin/kubectl localhost/clearcutt-factory-smoke/platform-tools:linux-arm64 version --client") {
 		t.Errorf("run = %q", run)
 	}
 	if f.called("load -q -i ") == "" || f.called("rmi -f localhost/clearcutt-factory-smoke/platform-tools:linux-arm64") == "" || f.called("rm -f clearcutt-factory-smoke-") == "" {
@@ -64,6 +64,32 @@ func TestCommand(t *testing.T) {
 	}
 	if err := r.Run(context.Background(), img, "linux/arm64", "x", test); err == nil {
 		t.Error("a failing command passed")
+	}
+}
+
+// TestNetwork: a command test's container has no network unless the test
+// asks for one; an HTTP test's has the default, for its published port.
+func TestNetwork(t *testing.T) {
+	img, err := random.Image(64, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name string
+		test *manifest.Test
+		none bool
+	}{
+		{"command", &manifest.Test{Command: []string{"/bin/true"}}, true},
+		{"command with network", &manifest.Test{Command: []string{"/bin/true"}, Network: true}, false},
+	} {
+		f := &fake{}
+		r := &Runner{WorkDir: t.TempDir(), Exec: f.exec}
+		if err := r.Run(context.Background(), img, "linux/amd64", "x", c.test); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(f.called("run "), " --network none "); got != c.none {
+			t.Errorf("%s: run = %q", c.name, f.called("run "))
+		}
 	}
 }
 
@@ -99,7 +125,7 @@ func TestHTTP(t *testing.T) {
 	if err := r.Run(context.Background(), img, "linux/amd64", "hello", test); err != nil {
 		t.Fatal(err)
 	}
-	if run := f.called("run "); !strings.Contains(run, "-d -p 127.0.0.1::8080 localhost/clearcutt-factory-smoke/hello:linux-amd64") {
+	if run := f.called("run "); !strings.Contains(run, "-d -p 127.0.0.1::8080 localhost/clearcutt-factory-smoke/hello:linux-amd64") || strings.Contains(run, "--network") {
 		t.Errorf("run = %q", run)
 	}
 

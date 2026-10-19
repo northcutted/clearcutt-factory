@@ -47,15 +47,17 @@ runs:
     - id: grype
       if: inputs.tools == 'true'
       uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
-    - name: Put syft and grype on PATH
+    - name: Put syft and grype beside clearcutt-factory
       if: inputs.tools == 'true'
       shell: bash
       env:
         SYFT: ${{ steps.syft.outputs.cmd }}
         GRYPE: ${{ steps.grype.outputs.cmd }}
       run: |
-        dirname "$SYFT" >> "$GITHUB_PATH"
-        dirname "$GRYPE" >> "$GITHUB_PATH"
+        bin="$RUNNER_TEMP/clearcutt-factory/bin"
+        mkdir -p "$bin"
+        ln -sf "$SYFT" "$bin/syft"
+        ln -sf "$GRYPE" "$bin/grype"
 
     - if: steps.version.outputs.version == 'source'
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -63,13 +65,15 @@ runs:
         go-version-file: ${{ github.action_path }}/go.mod
         cache-dependency-path: ${{ github.action_path }}/go.sum
 
+    # Writes one fixed directory, under RUNNER_TEMP, to GITHUB_PATH: the
+    # verified (or locally built) binary, and syft and grype linked beside it.
     - name: Install clearcutt-factory
       shell: bash
       env:
         VERSION: ${{ steps.version.outputs.version }}
         SRC: ${{ github.action_path }}
         REPO: northcutted/clearcutt-factory
-      run: |
+      run: | # zizmor: ignore[github-env]
         set -euo pipefail
         bin="$RUNNER_TEMP/clearcutt-factory/bin"
         mkdir -p "$bin"
