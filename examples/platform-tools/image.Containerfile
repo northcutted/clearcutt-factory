@@ -7,19 +7,19 @@
 # (moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea):
 #   buildctl build --frontend dockerfile.v0 --local context=. --local dockerfile=. \
 #     --opt platform=linux/amd64,linux/arm64 \
-#     --opt build-arg:SOURCE_DATE_EPOCH=1791849600 \
+#     --opt build-arg:SOURCE_DATE_EPOCH=1792281600 \
 #     --output type=oci,dest=image.tar,rewrite-timestamp=true
 # from a context staged with `clearcutt-factory render --context-dir`.
 
 ARG TARGETARCH
 
 # ---- tool: kubectl (url 1.37.1, verified: checksum-file) ----
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43 AS tool-kubectl-amd64
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:c2a4815b6ca49b9bbafd451b4bde690d567a86b2b6b54877faac8082a7bc4296 AS tool-kubectl-amd64
 ARG SOURCE_DATE_EPOCH
 ADD --checksum=sha256:65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8 https://dl.k8s.io/release/v1.37.1/bin/linux/amd64/kubectl /src/kubectl
 RUN install -D -m 0755 /src/kubectl /out/usr/local/bin/kubectl
 
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43 AS tool-kubectl-arm64
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:c2a4815b6ca49b9bbafd451b4bde690d567a86b2b6b54877faac8082a7bc4296 AS tool-kubectl-arm64
 ARG SOURCE_DATE_EPOCH
 ADD --checksum=sha256:ff749f4b78d9c4f1ec87307df9b50119ed819e2094aa9810cb9acffc3286c8c7 https://dl.k8s.io/release/v1.37.1/bin/linux/arm64/kubectl /src/kubectl
 RUN install -D -m 0755 /src/kubectl /out/usr/local/bin/kubectl
@@ -27,13 +27,13 @@ RUN install -D -m 0755 /src/kubectl /out/usr/local/bin/kubectl
 FROM tool-kubectl-${TARGETARCH} AS tool-kubectl
 
 # ---- tool: helm (url 4.3.0, verified: checksum-file) ----
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43 AS tool-helm-amd64
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:c2a4815b6ca49b9bbafd451b4bde690d567a86b2b6b54877faac8082a7bc4296 AS tool-helm-amd64
 ARG SOURCE_DATE_EPOCH
 ADD --checksum=sha256:86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz /src/helm-v4.3.0-linux-amd64.tar.gz
 RUN mkdir -p /x && tar -xzf /src/helm-v4.3.0-linux-amd64.tar.gz -C /x \
  && install -D -m 0755 /x/linux-amd64/helm /out/usr/local/bin/helm
 
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43 AS tool-helm-arm64
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:c2a4815b6ca49b9bbafd451b4bde690d567a86b2b6b54877faac8082a7bc4296 AS tool-helm-arm64
 ARG SOURCE_DATE_EPOCH
 ADD --checksum=sha256:31c5794dd55c66a51e6b7d2e2ac7a114ae8b1de41ff1d9ba51748ac973b06a08 https://get.helm.sh/helm-v4.3.0-linux-arm64.tar.gz /src/helm-v4.3.0-linux-arm64.tar.gz
 RUN mkdir -p /x && tar -xzf /src/helm-v4.3.0-linux-arm64.tar.gz -C /x \
@@ -42,13 +42,13 @@ RUN mkdir -p /x && tar -xzf /src/helm-v4.3.0-linux-arm64.tar.gz -C /x \
 FROM tool-helm-${TARGETARCH} AS tool-helm
 
 # ---- tool: gh (github-release 2.102.0, verified: checksum-file) ----
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43 AS tool-gh-amd64
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:c2a4815b6ca49b9bbafd451b4bde690d567a86b2b6b54877faac8082a7bc4296 AS tool-gh-amd64
 ARG SOURCE_DATE_EPOCH
 ADD --checksum=sha256:bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386 https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_amd64.tar.gz /src/gh_2.102.0_linux_amd64.tar.gz
 RUN mkdir -p /x && tar -xzf /src/gh_2.102.0_linux_amd64.tar.gz -C /x \
  && install -D -m 0755 /x/gh_2.102.0_linux_amd64/bin/gh /out/usr/local/bin/gh
 
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43 AS tool-gh-arm64
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:c2a4815b6ca49b9bbafd451b4bde690d567a86b2b6b54877faac8082a7bc4296 AS tool-gh-arm64
 ARG SOURCE_DATE_EPOCH
 ADD --checksum=sha256:7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484 https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_arm64.tar.gz /src/gh_2.102.0_linux_arm64.tar.gz
 RUN mkdir -p /x && tar -xzf /src/gh_2.102.0_linux_arm64.tar.gz -C /x \
@@ -57,12 +57,12 @@ RUN mkdir -p /x && tar -xzf /src/gh_2.102.0_linux_arm64.tar.gz -C /x \
 FROM tool-gh-${TARGETARCH} AS tool-gh
 
 # ---- tool: cosign (github-release 3.1.3, verified: github-asset-digest) ----
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43 AS tool-cosign-amd64
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:c2a4815b6ca49b9bbafd451b4bde690d567a86b2b6b54877faac8082a7bc4296 AS tool-cosign-amd64
 ARG SOURCE_DATE_EPOCH
 ADD --checksum=sha256:4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71 https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign-linux-amd64 /src/cosign-linux-amd64
 RUN install -D -m 0755 /src/cosign-linux-amd64 /out/usr/local/bin/cosign
 
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43 AS tool-cosign-arm64
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:c2a4815b6ca49b9bbafd451b4bde690d567a86b2b6b54877faac8082a7bc4296 AS tool-cosign-arm64
 ARG SOURCE_DATE_EPOCH
 ADD --checksum=sha256:c5d324e091826b0d7a78eb16fef316450b4eb9aaec045611c08ba06f5e73220a https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign-linux-arm64 /src/cosign-linux-arm64
 RUN install -D -m 0755 /src/cosign-linux-arm64 /out/usr/local/bin/cosign
@@ -70,7 +70,7 @@ RUN install -D -m 0755 /src/cosign-linux-arm64 /out/usr/local/bin/cosign
 FROM tool-cosign-${TARGETARCH} AS tool-cosign
 
 # ---- tool: crane (oci, verified: image-digest) ----
-# copied straight from gcr.io/go-containerregistry/crane:latest@sha256:9162effd4c674ad2fa4e7170a894503ffff9114f15a57e75a0a32e111ad32d85
+# copied straight from gcr.io/go-containerregistry/crane:latest@sha256:5ccb3ca884e3890d820fbf5ce4071fa3bb89469a72cc3f0ac7404a99c2a68788
 
 # ---- tool: yq (go v4.54.1, verified: go-sumdb) ----
 FROM --platform=$BUILDPLATFORM golang:1@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8 AS tool-yq
@@ -81,13 +81,13 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
  && install -D -m 0755 "$(find /go/bin -type f | head -n 1)" /out/usr/local/bin/yq
 
 # ---- files ----
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43 AS files
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:c2a4815b6ca49b9bbafd451b4bde690d567a86b2b6b54877faac8082a7bc4296 AS files
 ARG SOURCE_DATE_EPOCH
 COPY files/0/ /in/0/
 RUN mkdir -p /out/etc/platform-tools && cp -R /in/0/. /out/etc/platform-tools/
 
 # ---- image ----
-FROM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43
+FROM cgr.dev/chainguard/wolfi-base:latest@sha256:c2a4815b6ca49b9bbafd451b4bde690d567a86b2b6b54877faac8082a7bc4296
 ARG SOURCE_DATE_EPOCH
 RUN apk add --no-cache --repositories-file /dev/null \
       --repository https://apk.cgr.dev/chainguard \
@@ -95,13 +95,13 @@ RUN apk add --no-cache --repositories-file /dev/null \
       bash=5.3-r14 \
       busybox=1.38.0-r3 \
       ca-certificates-bundle=20260909-r2 \
-      curl=8.22.0-r4 \
+      curl=8.23.0-r0 \
       cyrus-sasl-heimdal-libs=2.1.28-r58 \
       gdbm=1.26-r7 \
-      git=2.56.0-r0 \
+      git=2.56.0-r2 \
       glibc-2.44=2.44-r8 \
       glibc-2.44-locale-posix=2.44-r8 \
-      heimdal-libs=7.8.0-r53 \
+      heimdal-libs=7.8.0-r54 \
       jq=1.8.2-r3 \
       keyutils-libs=1.6.3-r41 \
       krb5-conf=1.0-r10 \
@@ -113,7 +113,7 @@ RUN apk add --no-cache --repositories-file /dev/null \
       libcom_err=1.47.4-r3 \
       libcrypt1-2.44=2.44-r8 \
       libcrypto3=3.6.5-r2 \
-      libcurl-openssl4=8.22.0-r4 \
+      libcurl-openssl4=8.23.0-r0 \
       libexpat1=2.9.0-r0 \
       libgcc=16.2.0-r1 \
       libidn2=2.3.8-r10 \
@@ -122,7 +122,7 @@ RUN apk add --no-cache --repositories-file /dev/null \
       libpcre2-8-0=10.49-r1 \
       libpsl=0.23.3-r2 \
       libssl3=3.6.5-r2 \
-      libunistring=1.4.2-r4 \
+      libunistring=1.5-r0 \
       libverto=0.3.2-r9 \
       libxcrypt=4.5.2-r6 \
       ncurses=6.6.20261010-r0 \
@@ -130,11 +130,11 @@ RUN apk add --no-cache --repositories-file /dev/null \
       nghttp3=1.18.0-r1 \
       ngtcp2=1.25.0-r5 \
       oniguruma=6.9.10-r5 \
-      openssl-4.0-libcrypto=4.0.3-r6 \
-      openssl-4.0-libssl=4.0.3-r6 \
+      openssl-4.0-libcrypto=4.0.3-r7 \
+      openssl-4.0-libssl=4.0.3-r7 \
       openssl-provider-legacy-allowed=4.0.3-r1 \
       readline=8.3-r3 \
-      sqlite-libs=3.54.0-r0 \
+      sqlite-libs=3.54.1-r0 \
       wolfi-base=1-r7 \
       wolfi-baselayout=20230201-r30 \
       wolfi-keys=1-r13 \
@@ -144,7 +144,7 @@ COPY --link --from=tool-kubectl /out/ /
 COPY --link --from=tool-helm /out/ /
 COPY --link --from=tool-gh /out/ /
 COPY --link --from=tool-cosign /out/ /
-COPY --link --from=gcr.io/go-containerregistry/crane:latest@sha256:9162effd4c674ad2fa4e7170a894503ffff9114f15a57e75a0a32e111ad32d85 /ko-app/crane /usr/local/bin/crane
+COPY --link --from=gcr.io/go-containerregistry/crane:latest@sha256:5ccb3ca884e3890d820fbf5ce4071fa3bb89469a72cc3f0ac7404a99c2a68788 /ko-app/crane /usr/local/bin/crane
 COPY --link --from=tool-yq /out/ /
 COPY --link --from=files /out/ /
 ENV KUBECONFIG="/home/nonroot/.kube/config"
