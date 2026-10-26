@@ -250,7 +250,7 @@
           "type": "boolean"
         },
         "allowedHosts": {
-          "description": "AllowedHosts restricts download hosts (exact, or \".suffix\" matches).",
+          "description": "AllowedHosts restricts download hosts (exact, or \".suffix\" matches): tool downloads, and the repositories apk, apt, dnf, and nix fetch packages from (apk.cgr.dev for Wolfi and Chainguard).",
           "items": {
             "type": "string"
           },

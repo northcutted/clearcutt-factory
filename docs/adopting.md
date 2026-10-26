@@ -41,8 +41,9 @@ It writes three files and keeps any that exist (`--force` overwrites):
 | `images/example/image.yaml` | An example image to replace |
 | `.github/workflows/clearcutt-factory.yml` | Calls the reusable workflows: build, test, and scan on pull requests; publish on the default branch; weekly lock updates; daily app rebases; across repositories, notify dependents of what it published and answer such notices ([below](#waking-the-apps-when-the-platform-publishes)) |
 
-`--repo owner/name` and `--registry` override what it reads from the `origin`
-remote. In an app repository of an organization that publishes a shared org
+`--repo owner/name`, `--registry`, and `--default-branch` override what it
+reads from the `origin` remote (the branch is the one the signer identity
+requires, as `sourceRef`). In an app repository of an organization that publishes a shared org
 profile, `--extends REF --extends-identity ID` (or `--extends-key K`) checks
 that profile's signature and writes a `factory.org.yaml` that extends it
 ([section 6](#6-one-org-profile-for-every-repository)). Every file names its JSON Schema, so editors with the YAML language

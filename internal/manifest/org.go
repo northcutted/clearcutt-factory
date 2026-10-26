@@ -204,7 +204,9 @@ type Policy struct {
 	// AllowTOFU permits tools whose hash was recorded on first download with
 	// no publisher checksum or digest to compare against.
 	AllowTOFU bool `yaml:"allowTOFU,omitempty"`
-	// AllowedHosts restricts download hosts (exact, or ".suffix" matches).
+	// AllowedHosts restricts download hosts (exact, or ".suffix" matches):
+	// tool downloads, and the repositories apk, apt, dnf, and nix fetch
+	// packages from (apk.cgr.dev for Wolfi and Chainguard).
 	AllowedHosts []string `yaml:"allowedHosts,omitempty"`
 	// AllowedRegistries restricts image references to registries or
 	// repository paths, e.g. cgr.dev/chainguard: an entry covers itself and
