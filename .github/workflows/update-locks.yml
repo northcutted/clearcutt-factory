@@ -277,7 +277,7 @@ jobs:
               # refused). A rebuild here would duplicate that pull request;
               # an open one of ours closes.
               echo "only the run image moved: fleet.yml rebases onto it; no rebuild proposed"
-              git checkout -q -- "${paths[@]}"
+              git checkout -q -- "${paths[@]}" || echo "::warning::could not restore ${paths[*]} (not committed yet?); proposing it as it is"
             fi
             if $build && $run; then on="build and run images"
             elif $build; then on="build image"
