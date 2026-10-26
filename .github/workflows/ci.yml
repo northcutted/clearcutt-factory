@@ -28,6 +28,8 @@ jobs:
         run: .github/scripts/publish-ref_test.sh
       - name: notify.yml announces build images as such
         run: .github/scripts/notify-events_test.sh
+      - name: open-pr.sh opens, updates, closes, and auto-merges
+        run: .github/scripts/open-pr_test.sh
       - name: Example lockfiles and Containerfiles are current
         run: |
           go install ./cmd/clearcutt-factory

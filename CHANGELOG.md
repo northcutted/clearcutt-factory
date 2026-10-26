@@ -159,6 +159,22 @@ instructions a plain input gives, with each value unchanged.
 
 ### Added
 
+**The bot's pull requests can merge by themselves: `auto-merge`.**
+`fleet.yml` and `update-locks.yml` take an `auto-merge` input naming the
+kinds of pull request to turn GitHub auto-merge on for (a merge commit),
+space-separated: `pin` (the lock pinned to the run image the fleet
+rebased onto) and `rebuild` (the rebase was refused) on `fleet.yml`;
+`update` (every input) and `rebuild` (the stack and its images, `update:
+stack`) on `update-locks.yml`; or `all`. Off by default. A pull request of
+a listed kind merges once the base branch's required checks pass, so with
+a GitHub App the fleet runs without a person. It needs "Allow auto-merge"
+in the repository settings, branch protection with required status checks
+(without them a pull request is mergeable at once and GitHub refuses to
+auto-merge it, so nothing would gate the change), and an opener whose pull
+requests get CI (the App or `CLEARCUTT_BOT_TOKEN`; `GITHUB_TOKEN`'s never
+merge). When it can't be turned on, the job warns and leaves the pull
+request open; it never fails for that (`open-pr_test.sh`).
+
 **A rebuilt build image reaches the apps in minutes:
 `clearcutt.build-image-published`.** `notify.yml` announced every published
 image as `clearcutt.run-image-published`, which apps answer by rebasing,

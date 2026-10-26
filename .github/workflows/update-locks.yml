@@ -32,6 +32,14 @@
 #      a maintainer approves them (the runs show as action_required). Allow
 #      Actions to create pull requests in the repository settings.
 #
+# With the auto-merge input (update, rebuild, or all), each pull request of
+# those kinds gets GitHub auto-merge (merge commit), so it merges by itself
+# once the base branch's required checks pass: that needs "Allow auto-merge"
+# in the repository settings, branch protection with required status checks
+# (without them nothing gates the change), and an opener whose pull requests
+# get CI (1 or 2 above). When it can't be turned on, the pull request stays
+# open with a warning; the job doesn't fail.
+#
 # Other repositories call it (see docs/adopting.md). Pass secrets by name:
 # secrets: inherit reaches only workflows in the caller's own organization or
 # enterprise.
@@ -70,6 +78,10 @@ on:
         default: ""
       publish-ref:
         description: 'A ref (or bash glob, e.g. refs/heads/release/*) that opens pull requests too, besides the default branch. Runs on any other ref (workflow_dispatch from a branch, say) only report what would move'
+        type: string
+        default: ""
+      auto-merge:
+        description: 'Turn on GitHub auto-merge (merge commit) for the pull requests of these kinds, space-separated, so each merges by itself once the base branch''s required checks pass: update (every input, update: all), rebuild (the stack and its images, update: stack), or all. Default none. Needs "Allow auto-merge" in the repository settings, branch protection with required status checks, and pull requests from a GitHub App or CLEARCUTT_BOT_TOKEN (GITHUB_TOKEN''s get no CI). When it can''t be turned on, the pull request stays open with a warning'
         type: string
         default: ""
     secrets:
@@ -230,6 +242,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || secrets.CLEARCUTT_BOT_TOKEN || github.token }}
           MANIFEST: ${{ matrix.manifest }}
+          AUTO_MERGE: ${{ inputs.auto-merge }}
         # One branch per directory (factory/update/examples-hello-app for
         # examples/hello-app), with the files there. At the repository root,
         # "." is neither a branch name nor a path to commit (it is the whole
@@ -262,11 +275,11 @@ jobs:
             elif $stack; then on="stack"
             elif $run; then on="run image"
             else on="stack images"; fi
-            branch=factory/rebuild/$name title="Rebuild $what on the newest $on"
+            kind=rebuild branch=factory/rebuild/$name title="Rebuild $what on the newest $on"
             intro="The platform published a new build image or stack. \`clearcutt-factory lock --update-stack\` of \`$MANIFEST\` moves the lock to the stack's newest images, and nothing else:"
             outro="CI builds, smoke-tests, scans, and gates this change. Merging rebuilds the app on them and publishes it. The weekly update pull request carries the same images with everything else; merging either lets the other close itself at its next run."
           else
-            branch=factory/update/$name title="Update the pinned inputs of $what"
+            kind=update branch=factory/update/$name title="Update the pinned inputs of $what"
             intro="Weekly \`clearcutt-factory lock --update\` of \`$MANIFEST\`:"
             outro="CI builds, smoke-tests, scans, and gates this change. Merging publishes the rebuilt image."
           fi
@@ -279,4 +292,4 @@ jobs:
             echo
             echo "$outro"
           } > "$RUNNER_TEMP/body.md"
-          "$FACTORY_DIR/.github/scripts/open-pr.sh" "$branch" "$title" "$RUNNER_TEMP/body.md" "${paths[@]}"
+          PR_KIND=$kind "$FACTORY_DIR/.github/scripts/open-pr.sh" "$branch" "$title" "$RUNNER_TEMP/body.md" "${paths[@]}"

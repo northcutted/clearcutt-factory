@@ -381,6 +381,7 @@ jobs:
     permissions: {contents: write, pull-requests: write}
     with:
       update: ${{ (github.event.schedule == '41 5 * * *' || github.event.action == 'clearcutt.build-image-published' || github.event.action == 'clearcutt.stack-published') && 'stack' || 'all' }}
+      # auto-merge: rebuild update # merge by itself once required checks pass; needs "Allow auto-merge", branch protection, and the App (docs/adopting.md#4-turn-on-the-automation)
     secrets:
       CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
       CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
@@ -390,6 +391,8 @@ jobs:
     if: always() && (github.event.schedule == '41 5 * * *' || github.event.action == 'clearcutt.run-image-published' || (github.event_name == 'push' && needs.images.result == 'success'))
     uses: northcutted/clearcutt-factory/.github/workflows/fleet.yml@{{ref}}
     permissions: {contents: write, pull-requests: write, packages: write, id-token: write, attestations: write}
+    # with:
+    #   auto-merge: pin rebuild # merge by itself once required checks pass (see update-locks above)
     secrets:
       CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
       CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}

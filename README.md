@@ -412,6 +412,19 @@ its repository's contents and pull requests; or a `CLEARCUTT_BOT_TOKEN` secret
 (a fine-grained token with contents and pull-requests write). The App wins
 when both are set ([adopting](docs/adopting.md#a-github-app-for-the-automation)).
 
+**Merging by itself.** The `auto-merge` input of `fleet.yml` (`pin`,
+`rebuild`) and `update-locks.yml` (`update`, `rebuild`; or `all`) turns on
+GitHub auto-merge, as a merge commit, for the pull requests of those kinds,
+so each merges once the base branch's required checks pass and the fleet
+runs without a person: a patched run image reaches every app, a rebuilt
+build image rebuilds every app. It needs **Allow auto-merge** in the
+repository settings, branch protection (or a ruleset) with required status
+checks on the base branch (without them nothing gates the change: a pull
+request is mergeable at once, and auto-merge is refused), and pull requests
+from the App or token above, since `GITHUB_TOKEN`'s get no CI. When it
+can't be turned on, the pull request stays open with a warning
+([adopting](docs/adopting.md#4-turn-on-the-automation)).
+
 Deploy by digest and let GitOps follow the tags; keep old run images (a
 rebase needs the old base's manifest) and old app digests (rollback).
 

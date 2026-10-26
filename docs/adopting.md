@@ -86,6 +86,19 @@ Push, then in the repository (or organization) settings:
    `action_required`).
 2. For a registry other than `ghcr.io`: set the reusable workflows' `registry`
    input and add `REGISTRY_USERNAME` and `REGISTRY_PASSWORD` secrets.
+3. **To merge the bot's pull requests by themselves** once CI passes, pass
+   the `auto-merge` input to `fleet.yml` (`pin`, `rebuild`) and
+   `update-locks.yml` (`update`, `rebuild`), or `all`, naming the kinds to
+   merge; each such pull request gets GitHub auto-merge (a merge commit).
+   For that, under **General**, allow auto-merge; under **Branches** (or
+   **Rules**), protect the default branch with required status checks (the
+   `images` jobs CI runs on pull requests), since without required checks
+   a pull request is mergeable at once and GitHub refuses to auto-merge it;
+   and use the App or token from step 1, since `GITHUB_TOKEN`'s pull
+   requests get no CI and would never merge. When auto-merge can't be
+   turned on, the job warns and leaves the pull request open; it never
+   fails for that. A reasonable start: `pin` and `rebuild` on the fleet,
+   `update` and `rebuild` on the weekly job once you trust its gate.
 
 On `main`, each changed image is pushed, signed keylessly, attested (SBOM,
 vulnerabilities, recipe, SLSA provenance), and rebuilt on a second runner from
@@ -657,8 +670,8 @@ output start right after the images are published
 | Workflow | Inputs | Secrets | Caller permissions |
 |---|---|---|---|
 | `images.yml` | `manifests` (globs, default `**/image.yaml **/app.yaml`), `registry`, `provenance`, `reproduce` (default `true`), `published` (only reproduce this) | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write`, `attestations: write` |
-| `update-locks.yml` | `manifests`, `update` (`all`, default, or `stack`: apps only, the stack and its build and run images, as a rebuild pull request), `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: write`, `pull-requests: write` |
-| `fleet.yml` | `apps` (default `**/app.yaml`), `registry`, `provenance`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: write`, `pull-requests: write`, `packages: write`, `id-token: write`, `attestations: write` |
+| `update-locks.yml` | `manifests`, `update` (`all`, default, or `stack`: apps only, the stack and its build and run images, as a rebuild pull request), `app-id`, `auto-merge` (`update`, `rebuild`, or `all`) | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: write`, `pull-requests: write` |
+| `fleet.yml` | `apps` (default `**/app.yaml`), `registry`, `provenance`, `app-id`, `auto-merge` (`pin`, `rebuild`, or `all`) | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: write`, `pull-requests: write`, `packages: write`, `id-token: write`, `attestations: write` |
 | `notify.yml` | `published` (required), `topic` (default `clearcutt-app`), `owner`, `repositories`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: read` |
 
 For workflows of your own, the action installs a signature-verified binary
