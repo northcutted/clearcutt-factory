@@ -24,6 +24,10 @@ const (
 	KindTrust       = "TrustPolicy"
 	RoleImage       = "image"
 	RoleStack       = "stack"
+	// RoleEstate signers sign clearcutt-verify's estate report bundles.
+	// factory reads the policy they are in and leaves them to verify:
+	// nothing here is checked against them.
+	RoleEstate = "estate"
 )
 
 // TrustedSigner is one signer and what it may sign. Its fields match
@@ -32,7 +36,8 @@ const (
 type TrustedSigner struct {
 	// Name labels the signer in messages.
 	Name string `yaml:"name,omitempty"`
-	// Roles is what the signer may sign: image (the default) and/or stack.
+	// Roles is what the signer may sign: image (the default), stack, or
+	// estate (clearcutt-verify's report bundles, which factory ignores).
 	Roles                 []string `yaml:"roles,omitempty"`
 	Identity              string   `yaml:"identity,omitempty"`
 	IdentityRegexp        string   `yaml:"identityRegexp,omitempty"`
@@ -67,8 +72,8 @@ func LoadTrustPolicy(path string) (*TrustPolicy, error) {
 		t.Signers[i].Key = keyPath(filepath.Dir(abs), t.Signers[i].Key)
 		s := t.Signers[i]
 		for _, r := range s.Roles {
-			if r != RoleImage && r != RoleStack {
-				errs = append(errs, fmt.Errorf("signers[%d]: role %q must be image or stack", i, r))
+			if r != RoleImage && r != RoleStack && r != RoleEstate {
+				errs = append(errs, fmt.Errorf("signers[%d]: role %q must be image, stack, or estate", i, r))
 			}
 		}
 		if err := s.Verify().validate(); err != nil {

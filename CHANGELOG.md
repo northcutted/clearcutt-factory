@@ -112,6 +112,13 @@ instructions a plain input gives, with each value unchanged.
 
 ### Added
 
+**A trust policy may name `estate` signers.** clearcutt-verify's trust
+policy gains a signer role `estate` (who signs estate report bundles). The
+same file is factory's `signing.trustPolicy`, and factory refused any role
+but `image` and `stack`; it now loads a policy with `estate` signers and
+leaves them out of what it checks images and stacks against. A role it
+doesn't know is still refused.
+
 **CI publishes with the real cosign.** Every cosign interaction in the
 tests was a fake. A `cosign` job now publishes a two-platform image to a
 `registry:3` service through factory's publish path, signed with a key and

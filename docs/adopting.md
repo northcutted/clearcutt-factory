@@ -363,7 +363,8 @@ tag could publish one naming themselves. `extends.signer` is a signer like
 `signing.verify` (a key, or a certificate identity and issuer), reviewed in
 the app repository like any other change; protect `factory.org.yaml` with
 CODEOWNERS. It isn't a role in a local trust policy: the trust policy is
-part of what the shared profile provides, and its roles (`image`, `stack`)
+part of what the shared profile provides, and its roles (`image`, `stack`,
+and `estate`, clearcutt-verify's report signers, which factory reads past)
 are shared with clearcutt-verify.
 
 **Rotating the shared profile's signer.** `extends.signers` lists several
