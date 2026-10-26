@@ -568,7 +568,7 @@ the field, not a silent override, so what the file says is what applies:
 | `policy.requireNonRoot`, `policy.requireSignedStacks`, `policy.requireOfflineBuildTools`, `sbom.scan` | Can only turn on |
 | `policy.requiredLabels` | Union |
 | `policy.allowedHosts`, `policy.allowedRegistries` | The repository's list, when it sets one, must lie within the shared one (a host or `.suffix` the shared list allows; a registry or repository path at or below a shared one, by whole path segments) |
-| `vulnerabilities.vex` | The shared profile's statements apply to every scan (a statement whose product is an image, `pkg:oci/…`, to that image only; see the README's [VEX statements are applied per image](../README.md#what-gets-attached-to-a-pushed-image)). The repository's (its profile's `vex` and its manifests' `spec.vex`) are refused unless the shared profile sets `vulnerabilities.allowLocalVEX: true`: a statement that a vulnerability doesn't apply lets an image past the gate |
+| `vulnerabilities.vex` | The shared profile's statements apply to every scan (a statement whose product is an image, `pkg:oci/…` by digest or `repository_url`, to that image only; see the README's [VEX statements are applied per image](../README.md#what-gets-attached-to-a-pushed-image)). The repository's (its profile's `vex` and its manifests' `spec.vex`) are refused unless the shared profile sets `vulnerabilities.allowLocalVEX: true`: a statement that a vulnerability doesn't apply lets an image past the gate |
 
 Under a shared profile, `build --push` and `rebase --push` refuse
 `--no-scan`, which would publish past its vulnerability gate; `--no-scan`

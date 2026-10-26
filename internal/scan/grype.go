@@ -28,6 +28,9 @@ type Report struct {
 	// VEXDocuments are the documents passed to the scanner as they were
 	// (not OpenVEX, so their statements aren't listed in VEX).
 	VEXDocuments []string
+	// Suppressed are the findings the scanner left out because of a VEX
+	// statement, each with the statement that did it.
+	Suppressed []Suppression
 	// Rescan names the signed SBOM attestation a rescan read (clearcutt-
 	// factory reattest); nil for a build's scan of the SBOM it made.
 	Rescan *Statement
@@ -136,6 +139,22 @@ func Grype(ctx context.Context, sbomPath string, img Image, vex []string) (*Repo
 				Version string `json:"version"`
 			} `json:"artifact"`
 		} `json:"matches"`
+		IgnoredMatches []struct {
+			Vulnerability struct {
+				ID string `json:"id"`
+			} `json:"vulnerability"`
+			RelatedVulnerabilities []struct {
+				ID string `json:"id"`
+			} `json:"relatedVulnerabilities"`
+			Artifact struct {
+				Name    string `json:"name"`
+				Version string `json:"version"`
+				PURL    string `json:"purl"`
+			} `json:"artifact"`
+			AppliedIgnoreRules []struct {
+				Namespace string `json:"namespace"`
+			} `json:"appliedIgnoreRules"`
+		} `json:"ignoredMatches"`
 	}
 	if err := json.Unmarshal(out, &doc); err != nil {
 		return nil, fmt.Errorf("parsing grype output: %w", err)
@@ -146,6 +165,23 @@ func Grype(ctx context.Context, sbomPath string, img Image, vex []string) (*Repo
 			Package: m.Artifact.Name, Version: m.Artifact.Version,
 			Fixed: m.Vulnerability.Fix.State == "fixed",
 		})
+	}
+	// What a VEX statement suppressed, and which statement.
+	for _, m := range doc.IgnoredMatches {
+		vex := false
+		for _, rule := range m.AppliedIgnoreRules {
+			vex = vex || rule.Namespace == "vex"
+		}
+		if !vex {
+			continue
+		}
+		ids := []string{m.Vulnerability.ID}
+		for _, rv := range m.RelatedVulnerabilities {
+			ids = append(ids, rv.ID)
+		}
+		r.Suppressed = append(r.Suppressed, attribute(r.VEX, ids, Suppression{
+			Vulnerability: m.Vulnerability.ID, Package: m.Artifact.Name, Version: m.Artifact.Version, PURL: m.Artifact.PURL,
+		}))
 	}
 	return r, nil
 }
@@ -175,6 +211,11 @@ func (r *Report) Predicate() any {
 		if r.VEX == nil {
 			vex["statements"] = []Applied{}
 		}
+		suppressed := r.Suppressed
+		if suppressed == nil {
+			suppressed = []Suppression{}
+		}
+		vex["suppressed"] = suppressed
 		metadata["vex"] = vex
 	}
 	// A rescan says which signed SBOM it scanned.

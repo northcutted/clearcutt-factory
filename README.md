@@ -466,7 +466,7 @@ found by walking up from the manifest (or `--org`). See
 | `signing` | `keyless` (Sigstore OIDC), `key` (file or any cosign KMS URI; `stackKey` signs stacks with a key of their own), or `none`; extra cosign args (a signing config for a private Sigstore, or for signing [without a transparency log](docs/adopting.md#who-signs-and-binding-signatures-to-your-repository)); who signs this repository's images (`verify`, bound to the workflow run's repository with `sourceRepository`) and its stacks (`stacks`), or a shared ClearCutt `trustPolicy` file ([adopting](docs/adopting.md#who-signs-and-binding-signatures-to-your-repository)) |
 | `sbom` | Whether to add a syft scan to the declared SBOM |
 | `extends` | A shared org profile to build on, and who may sign it ([below](#one-profile-for-every-repository)) |
-| `vulnerabilities` | Scanner and the `failOn` severity gate, optionally `onlyFixed`; `vex` documents applied to every scan: a statement whose product is an image (`pkg:oci/…`, by digest, `repository_url`, or bare name) applies to that image only, one whose product is a package wherever the package is ([below](#what-gets-attached-to-a-pushed-image)) |
+| `vulnerabilities` | Scanner and the `failOn` severity gate, optionally `onlyFixed`; `vex` documents applied to every scan: a statement whose product is an image (`pkg:oci/…` by digest or `repository_url`, or a reference) applies to that image only, one whose product is a package wherever the package is ([below](#what-gets-attached-to-a-pushed-image)) |
 | `policy` | Non-root, required labels, TOFU, allowed download hosts (tools, package files, and apk repositories) and registries (each entry covers itself and the paths below it, by whole segment: `ghcr.io/acme` covers `ghcr.io/acme/app`, not `ghcr.io/acme-evil/app`), signed stacks, and `requireOfflineBuildTools` (`from: build` scripts run with no network) |
 | `mirrors` | URL prefix rewrites for every download (`from: https://snapshot.debian.org/`, `to: https://artifactory.acme/debian-snapshot/`); checksums still pin the content |
 
@@ -559,20 +559,36 @@ Unsigned copies of all of these are written to `out/<name>/attestations/`, and
 
 **VEX statements are applied per image.** grype, scanning an SBOM, applies
 only statements whose product is a package, and applies them to every
-image; a statement whose product is an image (an OpenVEX `pkg:oci/…`
-product) it ignores. So before each scan, factory selects the statements
-whose product names the image being scanned (`pkg:oci/NAME@sha256:…` by the
-index's or the platform image's digest; `pkg:oci/NAME?repository_url=…` by
-the image's repository; `pkg:oci/NAME` by the repository's last path
-element), rewrites each as a statement about the packages its
-`subcomponents` name (every package in the SBOM when it names none), and
-passes grype that document; statements whose product is a package are
-passed as they are. A statement about another image never reaches the
-scan. The vulnerability attestation's `metadata.vex.statements` lists every
-statement passed (`document`, `vulnerability`, `status`, `justification`,
-`product` as written, `scope`: `image` or `package`, and `packages`), so a
-suppression is visible there, never silent; `metadata.vex.documents` lists
-documents that aren't OpenVEX, passed to grype unchanged.
+image; a statement whose product is an image it ignores. So before each
+scan (at build, rebase, and `reattest`), factory selects the statements
+that name the image being scanned, by the rule clearcutt-verify applies to
+its rescans:
+
+* a product that is an image purl (`pkg:oci/…` or `pkg:docker/…`) names the
+  image by its version, when that (percent-decoded) is the index's or the
+  platform image's digest, or, with no version, by its `repository_url`
+  qualifier (the image's repository; and its `tag` qualifier, if any, one
+  of the image's tags). A bare `pkg:oci/NAME` names no image: it would name
+  every repository called NAME;
+* a product that isn't a purl names the image when it is the image's
+  repository, `repository:tag`, `repository@digest`, or one of its digests;
+* any other purl is a package, and the statement is passed as it is: it
+  applies wherever the package is, in every image.
+
+A statement about the image is rewritten as one about the packages its
+`subcomponents` name (by `@id` or `identifiers.purl`; an OpenVEX 0.0.1
+document's statement-level `subcomponents` count), or every package in the
+SBOM when it names none; subcomponents none of which can be read leave the
+statement out, never widened to every package. A statement about another
+image never reaches the scan. The vulnerability attestation's
+`metadata.vex.statements` lists every statement passed (`document`,
+`vulnerability`, `status`, `justification`, `product` as written, `scope`:
+`image` or `package`, and `packages`), `metadata.vex.suppressed` each
+finding grype left out for a VEX statement (`vulnerability`, `package`,
+`version`, `purl`, and the statement's `document`, `product`, `status`, and
+`justification`, empty when it matches none passed), so a suppression is
+visible there, never silent; `metadata.vex.documents` lists documents that
+aren't OpenVEX, passed to grype unchanged.
 
 **Tags move last.** `build --push` and `rebase --push` push the image by
 digest, sign it, and attach every attestation above before any tag moves, so

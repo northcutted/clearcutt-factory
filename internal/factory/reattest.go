@@ -79,10 +79,11 @@ type ReattestPlatform struct {
 // others are done.
 func Reattest(ctx context.Context, opts Options, ro ReattestOptions) error {
 	var (
-		org *manifest.Org
-		vex []string
-		ref = ro.Image
-		err error
+		org  *manifest.Org
+		vex  []string
+		tags []string
+		ref  = ro.Image
+		err  error
 	)
 	if ref != "" {
 		if org, err = loadOrg(ctx, opts, ".", nil); err != nil {
@@ -98,7 +99,10 @@ func Reattest(ctx context.Context, opts Options, ro ReattestOptions) error {
 			tag = m.Metadata.Tags[0]
 		}
 		ref = m.Metadata.Ref + ":" + tag
-		vex = m.Spec.VEXFiles
+		vex, tags = m.Spec.VEXFiles, m.Metadata.Tags
+	}
+	if t := tagOf(ref); t != "" && !slices.Contains(tags, t) {
+		tags = append(tags, t)
 	}
 	art, err := registry.Fetch(ctx, ref)
 	if err != nil {
@@ -193,7 +197,7 @@ func Reattest(ctx context.Context, opts Options, ro ReattestOptions) error {
 		if err := os.WriteFile(sbomPath, t.sbom.Predicate, 0o644); err != nil {
 			return err
 		}
-		report, err := scan.Grype(ctx, sbomPath, scan.Image{Repository: repo, Digests: []string{art.Digest, t.p.Digest}}, vexFiles)
+		report, err := scan.Grype(ctx, sbomPath, scan.Image{Repository: repo, Tags: tags, Digests: []string{art.Digest, t.p.Digest}}, vexFiles)
 		if err != nil {
 			return fmt.Errorf("%s: %w", t.p.Platform, err)
 		}

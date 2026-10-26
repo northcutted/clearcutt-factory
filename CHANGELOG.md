@@ -285,25 +285,33 @@ shows; a platform repository's `images.yml` call needs no change.
 the newest run and build images" pull request.
 
 **VEX statements scoped to an image apply to that image only, and every
-statement a scan was given is recorded.** factory scanned with `grype
+suppression is recorded with its statement.** factory scanned with `grype
 sbom:FILE --vex DOC`, and given an SBOM grype ignores statements whose
 product is an image (`pkg:oci/…`) and applies statements whose product is
 a package to every image, so a suppression couldn't be limited to one
 image: a `not_affected` for the catalog service's Python applied to
 every image with that package, or, written as an image product, to none.
-Before each scan, factory now selects the statements whose product names
-the image being scanned (`pkg:oci/NAME@sha256:…` by the index's or the
-platform image's digest, `pkg:oci/NAME?repository_url=…` by repository, or
-`pkg:oci/NAME` by the repository's last path element), rewrites them as
-statements about the packages their `subcomponents` name (every package
-in the SBOM when they name none), writes that per-scan OpenVEX document,
-and passes it to grype; statements whose product is a package are passed
-as they are; statements about other images are left out. The vulnerability
+Before each scan (build, rebase, heal, `reattest`), factory now selects the
+statements that name the image being scanned, by the rule clearcutt-verify
+applies to its rescans: an image purl (`pkg:oci/…`, `pkg:docker/…`) by its
+version (the index's or platform image's digest) or by `repository_url`
+(and `tag`, if given); a product that isn't a purl by repository,
+`repository:tag`, `repository@digest`, or digest. A bare `pkg:oci/NAME`
+names no image. It rewrites each as a statement about the packages its
+`subcomponents` name (by `@id` or `identifiers.purl`; an OpenVEX 0.0.1
+statement's own `subcomponents` count), or every package in the SBOM when
+it names none; unreadable subcomponents leave the statement out rather
+than widen it. Statements whose product is a package are passed as they
+are; statements about other images are left out. The vulnerability
 attestation records what was passed in `metadata.vex.statements`
 (`document`, `vulnerability`, `status`, `justification`, `product` as
-written, `scope` of `image` or `package`, and `packages`), and
-`metadata.vex.documents` names documents that aren't OpenVEX, passed
-unchanged. clearcutt-verify applies the same rule to its rescans.
+written, `scope` of `image` or `package`, and `packages`), what grype left
+out for a VEX statement in `metadata.vex.suppressed` (`vulnerability`,
+`package`, `version`, `purl`, and the statement's `document`, `product`,
+`status`, `justification`), and in `metadata.vex.documents` the documents
+that aren't OpenVEX, passed unchanged. A rebase (and the heal of an image
+already on the newest base) now scans with the app manifest's VEX too, as
+its build did, so a suppression isn't lost when the fleet rebases.
 
 **A trust policy may name `estate` signers.** clearcutt-verify's trust
 policy gains a signer role `estate` (who signs estate report bundles). The

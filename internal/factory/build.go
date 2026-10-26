@@ -148,7 +148,7 @@ func Build(ctx context.Context, opts Options, bo BuildOptions) error {
 	for _, p := range plats {
 		result.Platforms[p.Platform] = p.Digest
 		declared := sbom.Declared(m, l, p.Platform, p.Digest, opts.Version)
-		po, err := sbomAndScan(ctx, org, declared, m.Spec.VEXFiles, scan.Image{Repository: repo, Digests: []string{res.Digest, p.Digest}}, p, work, bo.NoScan)
+		po, err := sbomAndScan(ctx, org, declared, m.Spec.VEXFiles, scan.Image{Repository: repo, Tags: m.Metadata.Tags, Digests: []string{res.Digest, p.Digest}}, p, work, bo.NoScan)
 		if err != nil {
 			return err
 		}
@@ -264,7 +264,7 @@ func publishBuild(ctx context.Context, opts Options, org *manifest.Org, m *manif
 
 	ro := RebaseOptions{
 		Image: result.Image, Tags: m.Metadata.Tags, Push: true, OutDir: bo.OutDir,
-		NoScan: bo.NoScan, NoSign: bo.NoSign, NoTest: bo.NoTest, held: held,
+		NoScan: bo.NoScan, NoSign: bo.NoSign, NoTest: bo.NoTest, held: held, vex: m.Spec.VEXFiles,
 	}
 	_, rebased, err := rebaseImage(ctx, opts, org, ro, m.Spec.Test, m.Metadata.Name)
 	var moved movedTags
