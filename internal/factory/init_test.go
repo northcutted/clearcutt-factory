@@ -61,6 +61,8 @@ func TestInit(t *testing.T) {
 		"northcutted/clearcutt-factory/.github/workflows/notify.yml@v1.2.3",
 		// Reproduction runs beside notify, not inside images (#60).
 		"reproduce: false",
+		// A pull request builds only the manifests it affects.
+		"changed-only: true",
 		"published: ${{ needs.images.outputs.published }}",
 		// Dependents of a platform repository are woken by its notify job.
 		"types: [clearcutt.run-image-published, clearcutt.build-image-published, clearcutt.stack-published, clearcutt.profile-published]",

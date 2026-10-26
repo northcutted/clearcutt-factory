@@ -636,7 +636,11 @@ rebuild it yourself with `verify --image`.
 ## CI
 
 [`.github/workflows/images.yml`](.github/workflows/images.yml) is a complete
-pipeline. On pull requests it builds, scans, and gates. On the default branch
+pipeline. On pull requests it builds, scans, and gates; with `changed-only:
+true` (as `init`'s workflow sets it), only the manifests the pull request
+affects, so one image's lock update isn't failed by another image's old
+lock ([adopting](docs/adopting.md#pull-requests-build-what-they-change)).
+On the default branch
 (and the ref its `publish-ref` input names, if any) it also pushes, signs
 keylessly, adds SLSA provenance, and then rebuilds on a second runner from
 the signed recipe alone and attests the match; runs on any other ref, such

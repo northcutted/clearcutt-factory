@@ -352,6 +352,9 @@ jobs:
     permissions: {contents: read, packages: write, id-token: write, attestations: write}
     with:
       reproduce: false # the reproduce job does it, so fleet and notify start without waiting
+      # A pull request builds only the manifests it affects, so one image's
+      # lock update isn't failed by another image's. Require images / result.
+      changed-only: true
     secrets:
       REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }} # only for a registry other than ghcr.io
       REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}

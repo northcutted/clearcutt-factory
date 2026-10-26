@@ -159,10 +159,25 @@ instructions a plain input gives, with each value unchanged.
 
 ### Added
 
-**`clearcutt-factory affected`: which manifests a change touches.**
-`clearcutt-factory affected --changed FILE MANIFEST…` reads `git diff
---name-status` (or `--name-only`, with or without `-z`) output and prints
-the manifests the changed files affect, one per line, writing
+**A pull request builds only the manifests it changes: `changed-only`.**
+`update-locks.yml` opens one pull request per image, and `images.yml`
+built every manifest on each, so when a gate failure spanned images (a
+fixable Critical in a package all six of a platform's images ship) no
+single pull request could pass: each failed on the other images' old
+locks. `images.yml` takes `changed-only` (default `false`): on a
+`pull_request`, it builds only the manifests the pull request affects,
+from the diff between GitHub's merge commit and the base branch; every
+other event (push, schedule, dispatch, `merge_group`) builds every
+manifest, as does a pull request whose affected set can't be told (with a
+warning). `init`'s workflow passes `changed-only: true`; existing callers
+add it to their `images.yml` call. A new `result` job passes when every
+manifest the run built passed, and when there was nothing to build: under
+`changed-only` the per-manifest checks differ between pull requests, so
+branch protection (which `auto-merge` needs) should require
+`<job> / result` instead ([docs/adopting.md](docs/adopting.md#pull-requests-build-what-they-change)).
+The new `clearcutt-factory affected --changed FILE MANIFEST…` does the
+choosing: it reads `git diff --name-status` (or `--name-only`, with or
+without `-z`) output, prints the affected manifests, and writes
 `manifests=` (a JSON array, `[]` for none) to `$GITHUB_OUTPUT`. A manifest
 owns the files under its directory (its lock and Containerfile among
 them), the files it extends, its `vex:` documents, its `files:` sources

@@ -91,8 +91,9 @@ Push, then in the repository (or organization) settings:
    `update-locks.yml` (`update`, `rebuild`), or `all`, naming the kinds to
    merge; each such pull request gets GitHub auto-merge (a merge commit).
    For that, under **General**, allow auto-merge; under **Branches** (or
-   **Rules**), protect the default branch with required status checks (the
-   `images` jobs CI runs on pull requests), since without required checks
+   **Rules**), protect the default branch with required status checks
+   (`images / result`, the check `images.yml` reports for the whole build:
+   [below](#pull-requests-build-what-they-change)), since without required checks
    a pull request is mergeable at once and GitHub refuses to auto-merge it;
    and use the App or token from step 1, since `GITHUB_TOKEN`'s pull
    requests get no CI and would never merge. When auto-merge can't be
@@ -118,6 +119,41 @@ signer identity trusts. To publish from another ref too (release branches,
 say), set the `publish-ref` input of each of them to it, or to a bash glob
 (`refs/heads/release/*`), and add a signer for it (the `sourceRef` below
 names one ref).
+
+### Pull requests build what they change
+
+With `changed-only: true`, as `init`'s workflow passes it, `images.yml`
+builds on a pull request only the manifests the pull request affects
+(`clearcutt-factory affected`, given the diff between GitHub's merge commit
+and the base branch). A manifest is affected when the pull request changes
+a file it owns: anything under its directory (its lock and Containerfile
+among them), a file it `extends`, its `vex:` documents, its `files:`
+sources and an app's `source` wherever they are, a `factory.org.yaml`
+above it, and, for an app, its stack file and the manifests of the stack's
+build and run images (and what they extend), which give the app's lock its
+build image and base. A build image's lock is not among them: the app's
+lock pins the build image that is published, not the one in the pull
+request. So the weekly job's pull request for one image builds that image
+only, and goes green on its own even when another image fails the gate on
+its old lock (a CVE in a package every image ships gets one pull request
+per image, each of which can merge).
+
+Every manifest builds when the pull request changes a file no manifest
+owns, since nothing says it can't matter: a shared profile, the trust
+policy or VEX documents a profile names, a workflow, a README at the root.
+Deleting a file no manifest owns builds nothing; a pull request that does
+only that builds no manifest. Every manifest builds, too, when the
+affected set can't be told (no merge commit, or a `factory-version`
+before `affected`, with a warning), and on every other event: a push to
+the default branch, a schedule, a dispatch, or a merge queue's
+`merge_group`.
+
+The per-manifest checks (`images / build (images/a/image.yaml)`) then
+differ from one pull request to the next, and branch protection that
+requires one waits forever on a pull request that doesn't build it.
+Require `images / result` (the job name in your workflow, then `result`):
+it passes when every manifest the run built passed, including when there
+was nothing to build, and fails otherwise.
 
 ### A GitHub App for the automation
 
@@ -241,6 +277,7 @@ events.
     permissions: {contents: read, packages: write, id-token: write, attestations: write}
     with:
       reproduce: false
+      changed-only: true # a pull request builds only the images it affects
 
   reproduce:
     needs: images
@@ -660,7 +697,9 @@ workflow does: `secrets: inherit` reaches only workflows in your own
 organization or enterprise. Variables (`CLEARCUTT_APP_ID`) are read from the
 calling repository. `images.yml`'s output `published` is what the run newly
 published: a JSON array of `{manifest, kind (image or app), image
-(repository@digest), repository, digest, tags}`, `[]` on pull requests.
+(repository@digest), repository, digest, tags, roles}` (`roles`: `build`
+and/or `run` for an image, as the stacks name it; `[]` for none), `[]` on
+pull requests.
 It arrives when the whole workflow is done. With `reproduce: false` the run
 publishes without reproducing, and a second call given its `published` builds
 nothing and only reproduces what that lists, so jobs that need only the
@@ -669,7 +708,7 @@ output start right after the images are published
 
 | Workflow | Inputs | Secrets | Caller permissions |
 |---|---|---|---|
-| `images.yml` | `manifests` (globs, default `**/image.yaml **/app.yaml`), `registry`, `provenance`, `reproduce` (default `true`), `published` (only reproduce this) | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write`, `attestations: write` |
+| `images.yml` | `manifests` (globs, default `**/image.yaml **/app.yaml`), `registry`, `provenance`, `reproduce` (default `true`), `published` (only reproduce this), `changed-only` (default `false`: on a pull request, only the manifests it affects; [above](#pull-requests-build-what-they-change)), `publish-ref` | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write`, `attestations: write` |
 | `update-locks.yml` | `manifests`, `update` (`all`, default, or `stack`: apps only, the stack and its build and run images, as a rebuild pull request), `app-id`, `auto-merge` (`update`, `rebuild`, or `all`) | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: write`, `pull-requests: write` |
 | `fleet.yml` | `apps` (default `**/app.yaml`), `registry`, `provenance`, `app-id`, `auto-merge` (`pin`, `rebuild`, or `all`) | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: write`, `pull-requests: write`, `packages: write`, `id-token: write`, `attestations: write` |
 | `notify.yml` | `published` (required), `topic` (default `clearcutt-app`), `owner`, `repositories`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: read` |

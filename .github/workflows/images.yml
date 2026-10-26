@@ -18,6 +18,13 @@
 # secrets: inherit reaches only workflows in the caller's organization or
 # enterprise.
 #
+# With changed-only: true, a pull request builds only the manifests its
+# changes affect (clearcutt-factory affected; a changed file no manifest
+# owns builds them all); other events build every manifest. Branch
+# protection should then require the result job (<caller job> / result),
+# which passes when everything the run built passed, rather than the
+# per-manifest builds, which differ from one pull request to the next.
+#
 # Output: published, what the run newly published (see the published job).
 # notify.yml takes it to wake the repositories that build on those images;
 # each image carries its roles (build, run, both, or none: what the stacks
@@ -81,6 +88,10 @@ on:
         description: 'A ref (or bash glob, e.g. refs/heads/release/*) that publishes too, besides the default branch. Runs on any other ref (workflow_dispatch from a branch, say) build and check without publishing'
         type: string
         default: ""
+      changed-only:
+        description: 'On a pull request, build only the manifests its changes affect (clearcutt-factory affected): their own directories, what they extend and name, an app''s stack and its images, the org profiles above them; a changed file no manifest owns (a shared profile, a workflow) builds every manifest, and nothing affected builds nothing. Other events build every manifest. Require the result job in branch protection, not the per-manifest builds'
+        type: boolean
+        default: false
       factory-version:
         description: clearcutt-factory release to use
         type: string
@@ -110,6 +121,8 @@ concurrency:
 env:
   # Callers use a release; this repository's own events build from source.
   FACTORY_VERSION: ${{ inputs.factory-version || 'source' }}
+  # changed-only applies to pull requests; every other event builds all.
+  CHANGED_ONLY: ${{ inputs.changed-only && github.event_name == 'pull_request' && !inputs.published }}
   MANIFESTS: ${{ inputs.manifests || 'examples/*/image.yaml examples/*/app.yaml' }}
   REGISTRY: ${{ inputs.registry || 'ghcr.io' }}
 jobs:
@@ -152,10 +165,37 @@ jobs:
           if [ "$publish" = false ] && [[ "$GITHUB_EVENT_NAME" != pull_request* ]]; then
             echo "::notice::$GITHUB_REF is not the default branch${default:+ ($default)}${PUBLISH_REF:+ or $PUBLISH_REF}: checking only, nothing is published"
           fi
+      # changed-only on a pull request: the merge commit GitHub made and its
+      # two parents, the first being the base branch, so the diff between
+      # them is what the pull request changes; and clearcutt-factory, which
+      # tells which manifests that affects.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - id: find
+          fetch-depth: ${{ env.CHANGED_ONLY == 'true' && 2 || 1 }}
+      - if: env.CHANGED_ONLY == 'true' && env.FACTORY_VERSION != 'source'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: northcutted/clearcutt-factory
+          ref: ${{ env.FACTORY_VERSION }}
+          path: .clearcutt-factory
+      - if: env.CHANGED_ONLY == 'true' && env.FACTORY_VERSION != 'source'
+        uses: ./.clearcutt-factory
+        with:
+          version: ${{ env.FACTORY_VERSION }}
+          tools: "false"
+      - if: env.CHANGED_ONLY == 'true' && env.FACTORY_VERSION == 'source'
+        uses: ./
+        with:
+          tools: "false"
+      # Every manifest the manifests input matches; with changed-only on a
+      # pull request, only those its changes affect (none, when it changes
+      # nothing a manifest owns but deletes files). When that can't be told
+      # (no merge commit, or a factory-version without affected), every
+      # manifest, with a warning.
+      - name: Find the manifests
+        id: find
         shell: bash
         env:
           PUBLISHED: ${{ inputs.published }}
@@ -168,7 +208,26 @@ jobs:
           shopt -s globstar nullglob
           found=()
           for pattern in $MANIFESTS; do for f in $pattern; do found+=("$f"); done; done
-          echo "manifests=$(printf '%s\n' "${found[@]}" | sort -u | jq -R -s -c 'split("\n") | map(select(. != ""))')" >> "$GITHUB_OUTPUT"
+          all=$(printf '%s\n' "${found[@]}" | sort -u | jq -R -s -c 'split("\n") | map(select(. != ""))')
+          manifests=$all
+          if [ "$CHANGED_ONLY" = true ] && [ "$all" != '[]' ]; then
+            if ! git rev-parse -q --verify 'HEAD^2' > /dev/null; then
+              echo "::warning::changed-only: $(git rev-parse --short HEAD) is not the pull request's merge commit; building every manifest"
+            elif ! git diff --no-renames --name-status -z 'HEAD^1' HEAD > "$RUNNER_TEMP/changed"; then
+              echo "::warning::changed-only: could not list what the pull request changes; building every manifest"
+            else
+              mapfile -t list < <(jq -r '.[]' <<<"$all")
+              : > "$RUNNER_TEMP/affected"
+              if GITHUB_OUTPUT="$RUNNER_TEMP/affected" clearcutt-factory affected --changed "$RUNNER_TEMP/changed" "${list[@]}" > /dev/null &&
+                affected=$(sed -n 's/^manifests=//p' "$RUNNER_TEMP/affected") && [ -n "$affected" ]; then
+                manifests=$affected
+                echo "::notice::changed-only: the pull request affects $(jq length <<<"$manifests") of $(jq length <<<"$all") manifests: $(jq -r 'join(", ")' <<<"$manifests")"
+              else
+                echo "::warning::changed-only: could not tell which manifests the pull request affects (clearcutt-factory affected, from v0.4.0); building every manifest"
+              fi
+            fi
+          fi
+          echo "manifests=$manifests" >> "$GITHUB_OUTPUT"
 
   build:
     needs: manifests
@@ -356,6 +415,32 @@ jobs:
         with:
           name: clearcutt-published-${{ steps.slug.outputs.slug }}
           path: ${{ runner.temp }}/published/published.json
+
+  # The one check to require on pull requests: it passes when every manifest
+  # the run built passed, and when there was nothing to build (changed-only
+  # on a pull request that affects no manifest). The per-manifest build
+  # checks differ from one pull request to the next under changed-only, so
+  # branch protection that names them would wait forever for one that
+  # doesn't run.
+  result:
+    needs: [manifests, build]
+    if: ${{ always() && !inputs.published }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Every manifest that needed building built
+        shell: bash
+        env:
+          MANIFESTS: ${{ needs.manifests.result }}
+          BUILD: ${{ needs.build.result }}
+          BUILT: ${{ needs.manifests.outputs.manifests }}
+        run: |
+          echo "manifests: $MANIFESTS; build: $BUILD; built: ${BUILT:-none}"
+          if [ "$MANIFESTS" != success ] || { [ "$BUILD" != success ] && ! { [ "$BUILD" = skipped ] && [ "$BUILT" = '[]' ]; }; }; then
+            echo "::error::not every manifest built (manifests: $MANIFESTS, build: $BUILD)"
+            exit 1
+          fi
 
   # The workflow's published output: every image and app this run newly
   # published, as a JSON array of {manifest, kind, image, repository, digest,
