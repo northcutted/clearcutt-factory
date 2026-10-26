@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,52 @@ type Report struct {
 	// VEXDocuments are the documents passed to the scanner as they were
 	// (not OpenVEX, so their statements aren't listed in VEX).
 	VEXDocuments []string
+	// Rescan names the signed SBOM attestation a rescan read (clearcutt-
+	// factory reattest); nil for a build's scan of the SBOM it made.
+	Rescan *Statement
+}
+
+// Statement names an attestation: its predicate type and the digest of its
+// in-toto statement (the signed payload).
+type Statement struct {
+	PredicateType string            `json:"predicateType"`
+	Digest        map[string]string `json:"digest"`
+}
+
+// UpdateDB brings grype's vulnerability database up to the newest one
+// published (grype db update), so a scan after it is as current as the
+// database can be. grype's progress goes to stderr.
+func UpdateDB(ctx context.Context, stderr io.Writer) error {
+	bin, err := exec.LookPath("grype")
+	if err != nil {
+		return fmt.Errorf("grype not found on PATH")
+	}
+	cmd := exec.CommandContext(ctx, bin, "db", "update")
+	cmd.Stdout, cmd.Stderr = stderr, stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("grype db update: %w", err)
+	}
+	return nil
+}
+
+// ScanTime is when a vulnerability attestation's predicate says its scan
+// finished (else started), and whether it says.
+func ScanTime(predicate json.RawMessage) (time.Time, bool) {
+	var p struct {
+		Metadata struct {
+			ScanFinishedOn string `json:"scanFinishedOn"`
+			ScanStartedOn  string `json:"scanStartedOn"`
+		} `json:"metadata"`
+	}
+	if json.Unmarshal(predicate, &p) != nil {
+		return time.Time{}, false
+	}
+	for _, v := range []string{p.Metadata.ScanFinishedOn, p.Metadata.ScanStartedOn} {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 type Match struct {
@@ -129,6 +176,10 @@ func (r *Report) Predicate() any {
 			vex["statements"] = []Applied{}
 		}
 		metadata["vex"] = vex
+	}
+	// A rescan says which signed SBOM it scanned.
+	if r.Rescan != nil {
+		metadata["rescan"] = map[string]any{"sbom": r.Rescan}
 	}
 	return map[string]any{
 		"invocation": map[string]any{"parameters": nil, "uri": "", "event_id": "", "builder.id": ""},

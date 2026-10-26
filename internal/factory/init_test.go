@@ -45,6 +45,7 @@ func TestInit(t *testing.T) {
 	for san, want := range map[string]bool{
 		"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@refs/tags/v1.2.3":       true,
 		"https://github.com/northcutted/clearcutt-factory/.github/workflows/fleet.yml@refs/tags/v1.3.0":        true,
+		"https://github.com/northcutted/clearcutt-factory/.github/workflows/reattest.yml@refs/tags/v1.2.3":     true,
 		"https://github.com/northcutted/clearcutt-factory/.github/workflows/update-locks.yml@refs/tags/v1.2.3": false,
 		"https://github.com/Acme/platform-images/.github/workflows/clearcutt-factory.yml@refs/heads/main":      false,
 	} {
@@ -63,6 +64,9 @@ func TestInit(t *testing.T) {
 		"reproduce: false",
 		// A pull request builds only the manifests it affects.
 		"changed-only: true",
+		// Published images are rescanned and re-attested daily.
+		"northcutted/clearcutt-factory/.github/workflows/reattest.yml@v1.2.3",
+		"if: github.event.schedule == '41 5 * * *'\n    uses: northcutted/clearcutt-factory/.github/workflows/reattest.yml",
 		"published: ${{ needs.images.outputs.published }}",
 		// Dependents of a platform repository are woken by its notify job.
 		"types: [clearcutt.run-image-published, clearcutt.build-image-published, clearcutt.stack-published, clearcutt.profile-published]",

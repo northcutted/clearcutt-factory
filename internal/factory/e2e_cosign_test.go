@@ -230,4 +230,55 @@ exec "`+real+`" "$@"
 		t.Errorf("healing run ran %q, want %q\n%s", got, want, out.String())
 	}
 	verified(second, secondOut)
+
+	// reattest reads each platform's SBOM back through cosign, scans it
+	// (with a stand-in grype: this checks cosign's side), and attaches a
+	// second vulnerability report beside the first; latest stays. The
+	// next run with --older-than finds the new report among the two
+	// cosign returns, and leaves it.
+	grypeDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(grypeDir, "grype"), []byte(fakeGrype), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", grypeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GITHUB_OUTPUT", "")
+	orgPath := filepath.Join(dir, "factory.org.yaml")
+	if err := os.WriteFile(orgPath, []byte("apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\n"+
+		"signing: {mode: key, key: "+key+", args: [--signing-config, "+signingConfig+"], verify: {key: "+pub+", tlog: false}}\n"+
+		"vulnerabilities: {scanner: grype}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reattestOpts := Options{OrgPath: orgPath, Version: "test", Stdout: &out, Stderr: &out}
+	out.Reset()
+	if err := Reattest(ctx, reattestOpts, ReattestOptions{Image: repo + ":latest", OlderThan: 7 * 24 * time.Hour, OutDir: filepath.Join(dir, "out")}); err != nil {
+		t.Fatalf("reattest: %v\n%s", err, out.String())
+	}
+	if got := calls(); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("reattest ran %q, want %q\n%s", got, want, out.String())
+	}
+	var scanned, attested any
+	b, _ := os.ReadFile(filepath.Join(grypeDir, "grype.sbom"))
+	a, _ := os.ReadFile(secondOut[len(secondOut)-1].sbomPath)
+	if json.Unmarshal(b, &scanned) != nil || json.Unmarshal(a, &attested) != nil || fmt.Sprint(scanned) != fmt.Sprint(attested) {
+		t.Errorf("grype scanned\n%s\nnot the attested SBOM\n%s", b, a)
+	}
+	for _, po := range secondOut {
+		got, err := cosign("verify-attestation", "--key", pub, "--insecure-ignore-tlog=true", "--type", "vuln", repo+"@"+po.digest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := strings.Count(strings.TrimSpace(string(got)), "\n") + 1; n != 2 {
+			t.Errorf("%s carries %d vulnerability reports, want the build's and the rescan's", po.platform, n)
+		}
+	}
+	if got, _ := registry.Lookup(ctx, repo+":latest"); got != second.Digest {
+		t.Errorf("reattest moved latest to %s", got)
+	}
+	out.Reset()
+	if err := Reattest(ctx, reattestOpts, ReattestOptions{Image: repo + ":latest", OlderThan: 7 * 24 * time.Hour, OutDir: filepath.Join(dir, "out")}); err != nil {
+		t.Fatalf("second reattest: %v\n%s", err, out.String())
+	}
+	if got := calls(); len(got) != 0 || strings.Count(out.String(), "not rescanned") != len(secondOut) {
+		t.Errorf("second reattest ran %q\n%s", got, out.String())
+	}
 }

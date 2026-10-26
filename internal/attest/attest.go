@@ -403,27 +403,75 @@ func VerifyPredicate(ctx context.Context, ref, predicateType string, args []stri
 	return raw, err
 }
 
+// VerifyPredicateFrom is VerifyPredicate, also naming the attestation the
+// predicate was read from.
+func VerifyPredicateFrom(ctx context.Context, ref, predicateType string, args []string) (json.RawMessage, Evidence, error) {
+	return verifyStatement(ctx, ref, predicateType, args)
+}
+
+// Attested is a verified attestation's predicate and the statement it is in.
+type Attested struct {
+	Predicate json.RawMessage
+	Evidence  Evidence
+}
+
+// VerifyPredicates verifies the attestations of predicateType on ref with
+// cosign and returns every one that verified (an image may carry several:
+// a vulnerability report from its build and later ones from rescans).
+func VerifyPredicates(ctx context.Context, ref, predicateType string, args []string) ([]Attested, error) {
+	out, err := cosignVerifyAttestation(ctx, ref, predicateType, args)
+	if err != nil {
+		return nil, err
+	}
+	all := predicatesFromEnvelopes(out, predicateType)
+	if len(all) == 0 {
+		return nil, fmt.Errorf("no %s attestation found in cosign output", predicateType)
+	}
+	return all, nil
+}
+
 // verifyStatement verifies the attestations of predicateType on ref with
 // cosign and returns the predicate and which statement it came from.
 func verifyStatement(ctx context.Context, ref, predicateType string, args []string) (json.RawMessage, Evidence, error) {
+	out, err := cosignVerifyAttestation(ctx, ref, predicateType, args)
+	if err != nil {
+		return nil, Evidence{}, err
+	}
+	return predicateFromEnvelopes(out, predicateType)
+}
+
+// cosignVerifyAttestation runs cosign verify-attestation and returns its
+// output: one DSSE envelope per line, for each attestation that verified.
+func cosignVerifyAttestation(ctx context.Context, ref, predicateType string, args []string) ([]byte, error) {
 	bin, err := exec.LookPath("cosign")
 	if err != nil {
-		return nil, Evidence{}, errors.New("cosign not found on PATH")
+		return nil, errors.New("cosign not found on PATH")
 	}
 	cmd := exec.CommandContext(ctx, bin, append([]string{"verify-attestation", "--type", predicateType, "--output", "json"}, append(args, ref)...)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, Evidence{}, fmt.Errorf("cosign verify-attestation: %w\n%s", err, stderr.String())
+		return nil, fmt.Errorf("cosign verify-attestation: %w\n%s", err, stderr.String())
 	}
-	return predicateFromEnvelopes(out, predicateType)
+	return out, nil
 }
 
-// predicateFromEnvelopes extracts the predicate from cosign's DSSE envelope
-// output (one JSON envelope per line), and names the statement it is in by
-// the sha256 of the payload.
+// predicateFromEnvelopes extracts the first predicate from cosign's DSSE
+// envelope output (one JSON envelope per line), and names the statement it
+// is in by the sha256 of the payload.
 func predicateFromEnvelopes(out []byte, predicateType string) (json.RawMessage, Evidence, error) {
+	all := predicatesFromEnvelopes(out, predicateType)
+	if len(all) == 0 {
+		return nil, Evidence{}, fmt.Errorf("no %s attestation found in cosign output", predicateType)
+	}
+	return all[0].Predicate, all[0].Evidence, nil
+}
+
+// predicatesFromEnvelopes extracts every predicate of predicateType from
+// cosign's DSSE envelope output, in order.
+func predicatesFromEnvelopes(out []byte, predicateType string) []Attested {
+	var all []Attested
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	sc.Buffer(make([]byte, 64<<20), 64<<20)
 	for sc.Scan() {
@@ -443,8 +491,8 @@ func predicateFromEnvelopes(out []byte, predicateType string) (json.RawMessage, 
 		}
 		if json.Unmarshal(payload, &st) == nil && st.PredicateType == predicateType {
 			sum := sha256.Sum256(payload)
-			return st.Predicate, Evidence{PredicateType: predicateType, Digest: map[string]string{"sha256": hex.EncodeToString(sum[:])}}, nil
+			all = append(all, Attested{st.Predicate, Evidence{PredicateType: predicateType, Digest: map[string]string{"sha256": hex.EncodeToString(sum[:])}}})
 		}
 	}
-	return nil, Evidence{}, fmt.Errorf("no %s attestation found in cosign output", predicateType)
+	return all
 }

@@ -81,3 +81,34 @@ func TestRecipeFromEnvelopes(t *testing.T) {
 		t.Errorf("subject: %+v", st.Subject)
 	}
 }
+
+// TestEveryPredicateFromEnvelopes: an image may carry several attestations
+// of a type (a build's vulnerability report and later rescans'); all of
+// them are returned, in order, each named by its statement.
+func TestEveryPredicateFromEnvelopes(t *testing.T) {
+	env := func(s Statement) string {
+		b, _ := json.Marshal(s)
+		e, _ := json.Marshal(map[string]string{"payload": base64.StdEncoding.EncodeToString(b)})
+		return string(e)
+	}
+	first := NewStatement("r/x", "sha256:abc", VulnType, map[string]any{"metadata": map[string]string{"scanFinishedOn": "2026-10-01T00:00:00Z"}})
+	second := NewStatement("r/x", "sha256:abc", VulnType, map[string]any{"metadata": map[string]string{"scanFinishedOn": "2026-10-20T00:00:00Z"}})
+	out := env(first) + "\n" + env(NewStatement("r/x", "sha256:abc", CycloneDXType, map[string]any{})) + "\n" + env(second) + "\n"
+	all := predicatesFromEnvelopes([]byte(out), VulnType)
+	if len(all) != 2 {
+		t.Fatalf("got %d predicates", len(all))
+	}
+	for i, st := range []Statement{first, second} {
+		payload, _ := json.Marshal(st)
+		sum := sha256.Sum256(payload)
+		if all[i].Evidence.Digest["sha256"] != hex.EncodeToString(sum[:]) {
+			t.Errorf("%d: evidence %+v", i, all[i].Evidence)
+		}
+	}
+	if string(all[1].Predicate) != `{"metadata":{"scanFinishedOn":"2026-10-20T00:00:00Z"}}` {
+		t.Errorf("second predicate %s", all[1].Predicate)
+	}
+	if got := predicatesFromEnvelopes([]byte(out), RecipePredicateType); got != nil {
+		t.Errorf("recipes: %v", got)
+	}
+}

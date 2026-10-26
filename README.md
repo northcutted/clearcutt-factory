@@ -633,6 +633,37 @@ attestation to that run's workflow and repository; it shows the image
 rebuilt on a fresh machine, not who else could rebuild it. For that,
 rebuild it yourself with `verify --image`.
 
+### Renewing the evidence
+
+A vulnerability report says what grype found the day it ran, and the next
+CVE comes out after it. `clearcutt-factory reattest [-f image.yaml | --image
+REF] [--older-than 7d]` renews it without rebuilding: for each platform
+image, it reads the SBOM attestation the org's image signer made (never an
+SBOM nobody vouched for), updates grype's database, scans the SBOM, and
+attaches the new vulnerability report to the same digest, signed with the
+org's `signing` settings, beside the reports already there. The report's
+`metadata.rescan.sbom` names the SBOM attestation it scanned (its predicate
+type and statement digest), and `metadata.scanFinishedOn` says when;
+clearcutt-verify reads the newest verified report. With `--older-than`, a
+platform whose newest verified report is younger is left alone. The gate
+doesn't fail a re-attestation (the image is out; the report says what it
+holds, and `reattest` lists what the gate would block); `update-locks.yml`
+proposes the fix. It also reports whether the image carries a verified
+reproduction attestation (`reproduced=` in `$GITHUB_OUTPUT`), and writes
+what it did to `out/<name>-reattest/reattest.json`. No tag moves.
+
+[`.github/workflows/reattest.yml`](.github/workflows/reattest.yml) runs it
+for every manifest on a schedule, on the default branch only, and
+reproduces, on its own runner, each image without a verified reproduction
+attestation (`verify --image … --attest`): one whose second-runner
+reproduction failed, or ran before reproductions were attested. `init`'s
+workflow calls it daily with `older-than: 6d`, so each image's report is
+renewed about weekly and a missed run costs a day; for a tighter
+`maxScanAgeDays` in clearcutt-verify, lower `older-than`. Its signatures name
+`reattest.yml`, so the image signer must accept it beside `images.yml` and
+`fleet.yml` (`init` writes `(images|fleet|reattest)`); a report signed by an
+identity the signer doesn't accept is ignored.
+
 ## CI
 
 [`.github/workflows/images.yml`](.github/workflows/images.yml) is a complete
@@ -659,7 +690,9 @@ failed reproduction still fails the run. `clearcutt-factory build`, `rebase`,
 [`update-locks.yml`](.github/workflows/update-locks.yml),
 [`fleet.yml`](.github/workflows/fleet.yml), and
 [`notify.yml`](.github/workflows/notify.yml) keep the fleet current (see
-[Running a fleet](#running-a-fleet)). Other CI systems call the same commands;
+[Running a fleet](#running-a-fleet)), and
+[`reattest.yml`](.github/workflows/reattest.yml) its evidence
+([Renewing the evidence](#renewing-the-evidence)). Other CI systems call the same commands;
 nothing is GitHub-specific.
 
 ## Limitations
@@ -677,8 +710,9 @@ nothing is GitHub-specific.
   images), and scanners cover Nix less thoroughly than distro packages.
 * `from: build` steps are only as reproducible as the script; `verify` will tell you.
 * SLSA provenance must come from the build platform, not from `clearcutt-factory`.
-* Vulnerability reports describe the day they were made. Rescanning and
-  re-attesting on a schedule is not built in yet.
+* Vulnerability reports describe the day they were made. `reattest.yml`
+  renews them on a schedule ([Renewing the evidence](#renewing-the-evidence));
+  between its runs, the newest report is as old as the last one.
 * The local BuildKit cache volume is shared, so run one build at a time per machine.
 * Rebase checks are file-level: they catch replaced files, missing libraries
   and interpreters, and a changed distribution release, not every behavior

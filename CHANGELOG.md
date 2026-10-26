@@ -164,6 +164,35 @@ instructions a plain input gives, with each value unchanged.
 
 ### Added
 
+**Published images' evidence is renewed on a schedule: `reattest`.** A
+vulnerability report described the day the image was built, and nothing
+renewed it, so a verifier's scan was as old as the image; an image whose
+second-runner reproduction failed stayed without one. `clearcutt-factory
+reattest [-f image.yaml | --image REF] [--older-than 7d] [--out DIR]
+[--no-sign]` reads each platform image's SBOM attestation that the org's
+image signer made (it refuses an image the signer didn't sign, and
+rescans no SBOM it didn't attest), runs `grype db update`, scans the SBOM
+with the image's VEX statements, and attaches the new vulnerability report
+to the same digest with the org's `signing` settings, beside the reports
+already there. The report's `metadata.rescan.sbom` (`predicateType`,
+`digest.sha256` of the SBOM's in-toto statement) names the SBOM it scanned.
+`--older-than` leaves a platform whose newest verified report is younger.
+The gate doesn't fail it (the image is out; the findings the gate would
+block are listed). It writes `image=`, `rescanned=` (platform images), and
+`reproduced=` (a verified reproduction attestation exists) to
+`$GITHUB_OUTPUT`, and `out/<name>-reattest/reattest.json`. It never
+rebuilds or moves a tag. The new reusable `reattest.yml` (inputs
+`manifests`, `registry`, `older-than` default `6d`, `reproduce` default
+`true`, `publish-ref`, `factory-version`) runs it for every manifest on the
+default branch, then reproduces each image without a verified
+reproduction attestation on its own runner (`verify --image … --attest`).
+`init`'s workflow calls it daily; existing callers add the job
+([docs/adopting.md](docs/adopting.md#the-reusable-workflows)). Its
+signatures name `reattest.yml`: `init` now writes
+`(images|fleet|reattest)` into `certificateIdentityRegexp`, and existing
+org profiles and trust policies must add `reattest` for its reports and
+reproductions to verify (until then they are ignored, never trusted).
+
 **A pull request builds only the manifests it changes: `changed-only`.**
 `update-locks.yml` opens one pull request per image, and `images.yml`
 built every manifest on each, so when a gate failure spanned images (a

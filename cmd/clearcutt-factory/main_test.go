@@ -44,6 +44,8 @@ func TestUsageErrors(t *testing.T) {
 		{[]string{"stack", "pull"}, "stack takes the subcommand push"},
 		{[]string{"render", "extra"}, "unexpected arguments: extra"},
 		{[]string{"affected", "image.yaml"}, "affected needs --changed FILE"},
+		{[]string{"reattest", "--older-than", "a week"}, `invalid value "a week" for flag -older-than`},
+		{[]string{"reattest", "-f", "image.yaml", "--image", "r/x:1"}, "reattest takes -f or --image, not both"},
 		{[]string{"affected", "--changed", "-"}, "affected needs the manifests to choose from"},
 		{nil, ""},
 	} {

@@ -53,6 +53,12 @@ Usage:
   clearcutt-factory rebase  [-f app.yaml] [--update-lock] [--no-test] [same flags]
       Rebase the app's published image onto its stack's run image and smoke-test
       it; --update-lock then pins the lock to that base.
+  clearcutt-factory reattest [-f image.yaml | --image repo[:tag|@sha256:…]] [--older-than 7d] [--out DIR] [--no-sign]
+      Rescan the published image's verified SBOMs with grype's newest database
+      and attach each platform's new vulnerability report to the same digest,
+      signed as builds sign theirs; never rebuilds, never moves a tag. Says
+      whether the image has a verified reproduction attestation (reproduced=
+      in $GITHUB_OUTPUT), for verify --image … --attest to make one.
   clearcutt-factory affected --changed FILE MANIFEST…
       Print which of the manifests the changed files affect (FILE: git diff
       --name-only or --name-status output; - for stdin), and write manifests=
@@ -224,6 +230,23 @@ var commands = []command{
 		fs.StringVar(&io.ExtendsIssuer, "extends-issuer", "", "its OIDC issuer (default: GitHub Actions)")
 		fs.StringVar(&io.ExtendsKey, "extends-key", "", "the public key that signs the shared profile instead of an identity")
 		return func(ctx context.Context) error { return factory.Init(ctx, *opts, io) }
+	}},
+	{"reattest", func(fs *flag.FlagSet, opts *factory.Options) func(context.Context) error {
+		var ro factory.ReattestOptions
+		fs.StringVar(&ro.Image, "image", "", "the published image to re-attest (repo[:tag|@sha256:…]); default: the manifest's, by its first tag")
+		fs.Func("older-than", "rescan only platforms whose newest verified vulnerability report is older than this (7d, 36h); default: every platform", func(s string) error {
+			d, err := factory.ParseAge(s)
+			ro.OlderThan = d
+			return err
+		})
+		fs.StringVar(&ro.OutDir, "out", "out", "directory for the SBOMs read and the new reports")
+		fs.BoolVar(&ro.NoSign, "no-sign", false, "write the new reports without attaching them")
+		return func(ctx context.Context) error {
+			if ro.Image != "" && flagSet(fs, "f") {
+				return usageError{errors.New("reattest takes -f or --image, not both")}
+			}
+			return factory.Reattest(ctx, *opts, ro)
+		}
 	}},
 	{"affected", func(fs *flag.FlagSet, opts *factory.Options) func(context.Context) error {
 		var ao factory.AffectedOptions

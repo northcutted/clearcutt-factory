@@ -191,14 +191,15 @@ func extendingOrg(ctx context.Context, opts Options, dir string, io InitOptions)
 }
 
 // workflowIdentityRegexp matches the certificate identity of ClearCutt
-// Factory's signing reusable workflows (images.yml and fleet.yml) at the
+// Factory's signing reusable workflows (images.yml, fleet.yml, and
+// reattest.yml) at the
 // ref the generated workflow calls them by: any release tag, or main.
 func workflowIdentityRegexp(ref string) string {
 	at := `refs/tags/v\d+\.\d+\.\d+$`
 	if !releaseRE.MatchString(ref) {
 		at = `refs/heads/` + regexp.QuoteMeta(ref) + `$`
 	}
-	return `^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet)\.yml@` + at
+	return `^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@` + at
 }
 
 // defaultBranch is the origin remote's default branch (its HEAD), else
@@ -337,7 +338,7 @@ on:
   pull_request:
   schedule:
     - cron: "23 6 * * 1" # weekly: re-resolve every input, one pull request per manifest
-    - cron: "41 5 * * *" # daily: rebase apps onto the newest build of their run image, and propose a rebuild on their stack's newest build image
+    - cron: "41 5 * * *" # daily: rebase apps onto the newest build of their run image, propose a rebuild on their stack's newest build image, and rescan what was published
   workflow_dispatch:
   # From a platform repository's notify job. The payload is only a hint: the
   # jobs re-resolve everything from the registry and verify it.
@@ -399,6 +400,19 @@ jobs:
     secrets:
       CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
       CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+
+  # Daily: each published image whose newest verified vulnerability report
+  # is 6 days old or more is scanned again from its signed SBOM with
+  # grype's newest database, and the new report attached to the same
+  # digest; an image without a verified reproduction is reproduced and the
+  # match attested. Nothing is rebuilt or retagged.
+  reattest:
+    if: github.event.schedule == '41 5 * * *'
+    uses: northcutted/clearcutt-factory/.github/workflows/reattest.yml@{{ref}}
+    permissions: {contents: read, packages: write, id-token: write}
+    secrets:
       REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
       REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
 

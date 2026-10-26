@@ -456,7 +456,7 @@ extends:
 registry: ghcr.io/acme/checkout       # what the shared profile leaves to each repository
 signing:
   verify:
-    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet)\.yml@refs/tags/v\d+\.\d+\.\d+$
+    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@refs/tags/v\d+\.\d+\.\d+$
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
     sourceRepository: https://github.com/acme/checkout
     sourceRef: refs/heads/main
@@ -625,7 +625,7 @@ writes all three, with the origin remote's default branch (or
 signing:
   mode: keyless
   verify:          # this repository's images
-    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet)\.yml@refs/tags/v\d+\.\d+\.\d+$
+    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@refs/tags/v\d+\.\d+\.\d+$
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
     sourceRepository: https://github.com/acme/checkout
     sourceRef: refs/heads/main
@@ -695,7 +695,7 @@ apiVersion: clearcutt.dev/v1
 kind: TrustPolicy
 signers:
   - name: factory-builds              # images (the default role)
-    identityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet)\.yml@refs/tags/v\d+\.\d+\.\d+$
+    identityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@refs/tags/v\d+\.\d+\.\d+$
     issuer: https://token.actions.githubusercontent.com
     sourceRepositoryOwner: https://github.com/acme
     sourceMatchesImage: true
@@ -731,7 +731,33 @@ output start right after the images are published
 | `images.yml` | `manifests` (globs, default `**/image.yaml **/app.yaml`), `registry`, `provenance`, `reproduce` (default `true`), `published` (only reproduce this), `changed-only` (default `false`: on a pull request, only the manifests it affects; [above](#pull-requests-build-what-they-change)), `publish-ref` | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write`, `attestations: write` |
 | `update-locks.yml` | `manifests`, `update` (`all`, default, or `stack`: apps only, the stack and its build and run images, as a rebuild pull request), `app-id`, `auto-merge` (`update`, `rebuild`, or `all`) | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: write`, `pull-requests: write` |
 | `fleet.yml` | `apps` (default `**/app.yaml`), `registry`, `provenance`, `app-id`, `auto-merge` (`pin`, `rebuild`, or `all`) | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: write`, `pull-requests: write`, `packages: write`, `id-token: write`, `attestations: write` |
+| `reattest.yml` | `manifests`, `registry`, `older-than` (default `6d`), `reproduce` (default `true`), `publish-ref` | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write` |
 | `notify.yml` | `published` (required), `topic` (default `clearcutt-app`), `owner`, `repositories`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: read` |
+
+`reattest.yml` renews published images' evidence on a schedule: each
+platform image's signed SBOM is scanned again with grype's newest database
+and the new vulnerability report attached to the same digest, and an image
+without a verified reproduction attestation is reproduced and the match
+attested; nothing is rebuilt or retagged
+([README](../README.md#renewing-the-evidence)). `init`'s workflow runs it
+daily with `older-than: 6d`, which renews each report about weekly; a
+caller of your own:
+
+```yaml
+on:
+  schedule:
+    - cron: "41 5 * * *"
+jobs:
+  reattest:
+    uses: northcutted/clearcutt-factory/.github/workflows/reattest.yml@v0.3.0
+    permissions: {contents: read, packages: write, id-token: write}
+```
+
+Its signatures name `reattest.yml`, so the org profile's image signer (or
+the trust policy's `image` signers) must match it:
+`certificateIdentityRegexp` with `(images|fleet|reattest)`, as `init` writes
+it. clearcutt-verify reads the newest verified report, so the estate's scan
+age follows.
 
 For workflows of your own, the action installs a signature-verified binary
 plus cosign, syft, and grype:
