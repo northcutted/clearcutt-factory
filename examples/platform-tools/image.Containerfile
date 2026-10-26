@@ -7,7 +7,7 @@
 # (moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea):
 #   buildctl build --frontend dockerfile.v0 --local context=. --local dockerfile=. \
 #     --opt platform=linux/amd64,linux/arm64 \
-#     --opt build-arg:SOURCE_DATE_EPOCH=1791849600 \
+#     --opt build-arg:SOURCE_DATE_EPOCH=1792886400 \
 #     --output type=oci,dest=image.tar,rewrite-timestamp=true
 # from a context staged with `clearcutt-factory render --context-dir`.
 
@@ -109,9 +109,9 @@ apk add --no-cache --repositories-file /dev/null \
   krb5-conf=1.0-r10 \
   krb5-libs=1.22.2-r5 \
   ld-linux-2.44=2.44-r8 \
-  libbrotlicommon1=1.2.0-r6 \
-  libbrotlidec1=1.2.0-r6 \
-  libbrotlienc1=1.2.0-r6 \
+  libbrotlicommon1=1.2.1-r1 \
+  libbrotlidec1=1.2.1-r1 \
+  libbrotlienc1=1.2.1-r1 \
   libcom_err=1.47.4-r3 \
   libcrypt1-2.44=2.44-r8 \
   libcrypto3=3.6.5-r2 \
@@ -174,9 +174,9 @@ keyutils-libs 1.6.3-r41 Q1XgkcHdv1/smZU0SQNAaWB5d4h1Y=
 krb5-conf 1.0-r10 Q1+nzcG33MVDgV7NxwDXA6r0h6j14=
 krb5-libs 1.22.2-r5 Q1gZY9KeWPIWMl4XhKlmOtDt+EYLQ=
 ld-linux-2.44 2.44-r8 Q1aH28bsgAgF+jvjKr5gugOyjTbmY=
-libbrotlicommon1 1.2.0-r6 Q1dc3PylzTdc8zdEqIVEZhJSJF82c=
-libbrotlidec1 1.2.0-r6 Q13yN4bTma6mLQVL3QB0gpiBtrgE0=
-libbrotlienc1 1.2.0-r6 Q1j2kuwO2hzFSUVqY1zCSjvxDsnk8=
+libbrotlicommon1 1.2.1-r1 Q1BnOASAJctNICIV3RYBxRlqcTIhs=
+libbrotlidec1 1.2.1-r1 Q18McycIizTY7w2et1oDNJ2OAnBtQ=
+libbrotlienc1 1.2.1-r1 Q1mmfdrEXpK/DsS57Iu4I61mELlUE=
 libcom_err 1.47.4-r3 Q1clzcZn1PrD2HuFWquJ0qANlaq8o=
 libcrypt1-2.44 2.44-r8 Q1ExmmYpVQuajyuK5ADM9RYRmNOYs=
 libcrypto3 3.6.5-r2 Q1QGirPfFiIRUV8XehQIeCaJvZMic=
@@ -231,9 +231,9 @@ apk add --no-cache --repositories-file /dev/null \
   krb5-conf=1.0-r10 \
   krb5-libs=1.22.2-r5 \
   ld-linux-2.44=2.44-r8 \
-  libbrotlicommon1=1.2.0-r6 \
-  libbrotlidec1=1.2.0-r6 \
-  libbrotlienc1=1.2.0-r6 \
+  libbrotlicommon1=1.2.1-r1 \
+  libbrotlidec1=1.2.1-r1 \
+  libbrotlienc1=1.2.1-r1 \
   libcom_err=1.47.4-r3 \
   libcrypt1-2.44=2.44-r8 \
   libcrypto3=3.6.5-r2 \
@@ -296,9 +296,9 @@ keyutils-libs 1.6.3-r41 Q1Jwz50TjAkWnJuq3rB9QODnUE87g=
 krb5-conf 1.0-r10 Q1VYg7l46TvIrY6GYfhkQ/ghkw7l8=
 krb5-libs 1.22.2-r5 Q15gVCBS8eVVRSoVyXGLW6FTQsk7M=
 ld-linux-2.44 2.44-r8 Q1yEVdnndrAroQKZ0y4eCq5QmOyFc=
-libbrotlicommon1 1.2.0-r6 Q1rcmcWhl6TMU5OGONpwa4sL/Yum8=
-libbrotlidec1 1.2.0-r6 Q1G37So3cozxiBlMijus7a5Y0SBt8=
-libbrotlienc1 1.2.0-r6 Q1DAKQKH9aN3rtuuZDDAWIyGS9OqI=
+libbrotlicommon1 1.2.1-r1 Q13kKxkPG4a4QoIEWOUYUWR745Urc=
+libbrotlidec1 1.2.1-r1 Q1D89+5z1UWrwdFvdl8ogPbG5l+x4=
+libbrotlienc1 1.2.1-r1 Q1shZXTE3aaTWTDElKuOp2ib6v9G0=
 libcom_err 1.47.4-r3 Q1o6Nj9DShuQkflDRleG4dd/tKXMI=
 libcrypt1-2.44 2.44-r8 Q1Anspz2H98t3yYWNYZwDUevwvbLE=
 libcrypto3 3.6.5-r2 Q1R853ywPuMZLxV3tKSzsAALpV8Ew=

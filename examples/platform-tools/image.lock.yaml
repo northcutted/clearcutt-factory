@@ -2,7 +2,7 @@
 apiVersion: factory.clearcutt.dev/v1alpha1
 kind: Lock
 inputsDigest: sha256:311d499688dd175491579a25208029a04c8e35d8de14485779439f56cb32f8cc
-sourceDateEpoch: 1791849600
+sourceDateEpoch: 1792886400
 builder:
   buildkit:
     ref: moby/buildkit:v0.33.1
@@ -136,23 +136,23 @@ packages:
         license: LGPL-2.1-or-later
         repo: https://apk.cgr.dev/chainguard
       - name: libbrotlicommon1
-        version: 1.2.0-r6
+        version: 1.2.1-r1
         arch: x86_64
-        checksum: Q1dc3PylzTdc8zdEqIVEZhJSJF82c=
+        checksum: Q1BnOASAJctNICIV3RYBxRlqcTIhs=
         origin: brotli
         license: MIT
         repo: https://apk.cgr.dev/chainguard
       - name: libbrotlidec1
-        version: 1.2.0-r6
+        version: 1.2.1-r1
         arch: x86_64
-        checksum: Q13yN4bTma6mLQVL3QB0gpiBtrgE0=
+        checksum: Q18McycIizTY7w2et1oDNJ2OAnBtQ=
         origin: brotli
         license: MIT
         repo: https://apk.cgr.dev/chainguard
       - name: libbrotlienc1
-        version: 1.2.0-r6
+        version: 1.2.1-r1
         arch: x86_64
-        checksum: Q1j2kuwO2hzFSUVqY1zCSjvxDsnk8=
+        checksum: Q1mmfdrEXpK/DsS57Iu4I61mELlUE=
         origin: brotli
         license: MIT
         repo: https://apk.cgr.dev/chainguard
@@ -473,23 +473,23 @@ packages:
         license: LGPL-2.1-or-later
         repo: https://apk.cgr.dev/chainguard
       - name: libbrotlicommon1
-        version: 1.2.0-r6
+        version: 1.2.1-r1
         arch: aarch64
-        checksum: Q1rcmcWhl6TMU5OGONpwa4sL/Yum8=
+        checksum: Q13kKxkPG4a4QoIEWOUYUWR745Urc=
         origin: brotli
         license: MIT
         repo: https://apk.cgr.dev/chainguard
       - name: libbrotlidec1
-        version: 1.2.0-r6
+        version: 1.2.1-r1
         arch: aarch64
-        checksum: Q1G37So3cozxiBlMijus7a5Y0SBt8=
+        checksum: Q1D89+5z1UWrwdFvdl8ogPbG5l+x4=
         origin: brotli
         license: MIT
         repo: https://apk.cgr.dev/chainguard
       - name: libbrotlienc1
-        version: 1.2.0-r6
+        version: 1.2.1-r1
         arch: aarch64
-        checksum: Q1DAKQKH9aN3rtuuZDDAWIyGS9OqI=
+        checksum: Q1shZXTE3aaTWTDElKuOp2ib6v9G0=
         origin: brotli
         license: MIT
         repo: https://apk.cgr.dev/chainguard
