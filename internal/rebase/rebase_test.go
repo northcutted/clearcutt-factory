@@ -188,15 +188,20 @@ func TestAnalyzeViolations(t *testing.T) {
 		f{"usr/", ""}, f{"usr/lib/", ""}, f{"lib -> usr/lib", ""},
 		f{"var/lib/dpkg/status", "Package: base"},
 	)}
-	nw := []v1.Layer{old[0], layer(t, f{"usr/bin/", ""}, f{"usr/bin/tool", "new"})}
+	nw := []v1.Layer{old[0], layer(t, f{"usr/bin/", ""}, f{"usr/bin/tool", "new"}, f{"usr/share/", ""}, f{"usr/share/doc/", ""}, f{"usr/share/doc/tool", "d"}, f{"etc/motd", "hi"})}
 	app := []v1.Layer{layer(t,
-		f{"etc/", ""},              // directory over directory: fine
-		f{"etc/passwd", "app"},     // replaces a base file
-		f{"etc/.wh.hosts", ""},     // deletes a base file
-		f{"usr/bin/tool", "mine"},  // hides the new base's file
-		f{"lib/libmine.so.1", "x"}, // writes through a base symlink
+		f{"etc/", ""},                   // directory over directory: fine
+		f{"etc/passwd", "app"},          // replaces a base file
+		f{"etc/.wh.hosts", ""},          // deletes a base file
+		f{"usr/bin/tool", "mine"},       // hides the new base's file
+		f{"etc/.wh.motd", ""},           // deletes a file only the new base has
+		f{"usr/share/.wh..wh..opq", ""}, // empties a directory only the new base has
+		f{"lib/libmine.so.1", "x"},      // writes through a base symlink
 		f{"var/lib/dpkg/status", "Package: base\n\nPackage: curl"},
 		f{"app/ok", "fine"},
+		f{"app/tmp", "scratch"},
+	), layer(t,
+		f{"app/.wh.tmp", ""}, // deletes the app's own file: fine
 	)}
 	rep, err := Analyze(Layers{OldBase: old, NewBase: nw, App: app})
 	if err != nil {
@@ -208,14 +213,24 @@ func TestAnalyzeViolations(t *testing.T) {
 		"replace files of the old base: /etc/passwd, /var/lib/dpkg/status",
 		"hide files of the new base: /usr/bin/tool",
 		"delete files of the old base: /etc/hosts",
+		"would delete files of the new base: /etc/motd, /usr/share/ (all of it)",
 		"write through base symlinks: /lib/libmine.so.1 (/lib is a symlink in the old base)",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "/app/ok") || strings.Contains(got, "/etc,") {
+	if strings.Contains(got, "/app/ok") || strings.Contains(got, "/app/tmp") || strings.Contains(got, "/etc,") {
 		t.Errorf("flagged an allowed path:\n%s", got)
+	}
+	// The same app on a new base that has none of the deleted paths: the
+	// whiteouts against the new base are no violation.
+	rep, err = Analyze(Layers{OldBase: old, NewBase: old, App: app})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(rep.Violations, "\n"); strings.Contains(got, "new base") {
+		t.Errorf("flagged against a new base without the files:\n%s", got)
 	}
 }
 

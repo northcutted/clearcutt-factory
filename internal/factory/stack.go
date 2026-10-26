@@ -151,7 +151,7 @@ func fetchAppStack(ctx context.Context, m *manifest.Manifest, fresh bool) error 
 	ref := m.Spec.Stack
 	target := ref
 	if !fresh {
-		if l, err := lock.Read(m.LockPath()); err == nil && l.App != nil && l.App.StackArtifact != nil && l.App.StackArtifact.Ref == ref {
+		if l := lockPins(m.LockPath()); l != nil && l.App != nil && l.App.StackArtifact != nil && l.App.StackArtifact.Ref == ref {
 			target = lock.RepoOf(ref) + "@" + l.App.StackArtifact.Digest
 		}
 	}

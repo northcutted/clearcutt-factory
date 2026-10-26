@@ -78,13 +78,15 @@ func loadWith(ctx context.Context, opts Options, freshStack, freshProfile bool) 
 	return m, org, nil
 }
 
-// loadLocked loads the manifest and a lock that is current for it.
+// loadLocked loads the manifest and a lock that is current for it: written
+// by this release or an older one, intact (its content digest matches),
+// and resolved from this manifest and org profile.
 func loadLocked(ctx context.Context, opts Options) (*manifest.Manifest, *manifest.Org, *lock.Lock, error) {
 	m, org, err := load(ctx, opts, false)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	l, err := lock.Read(m.LockPath())
+	l, err := lock.ReadFor(m.LockPath(), opts.Version)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil, nil, fmt.Errorf("%s does not exist; run clearcutt-factory lock", filepath.Base(m.LockPath()))
 	}
@@ -105,6 +107,18 @@ func loadLocked(ctx context.Context, opts Options) (*manifest.Manifest, *manifes
 		return nil, nil, nil, fmt.Errorf("%s is stale (the shared profile %s changed since it was pinned at %s); run clearcutt-factory lock", filepath.Base(m.LockPath()), sp.Name(), l.Profile.Digest)
 	}
 	return m, org, l, nil
+}
+
+// lockPins reads the lock at path for the pins commands follow before the
+// lock is checked in full (a registry stack's digest, the shared
+// profile's): an intact lock, or one written before content digests. An
+// edited lock pins nothing.
+func lockPins(path string) *lock.Lock {
+	l, err := lock.Read(path)
+	if _, missing := lock.IsEdited(err); err == nil || missing {
+		return l
+	}
+	return nil
 }
 
 type LockOptions struct {
@@ -136,8 +150,20 @@ func Lock(ctx context.Context, opts Options, lo LockOptions) error {
 }
 
 func lockManifest(ctx context.Context, opts Options, m *manifest.Manifest, org *manifest.Org, lo LockOptions) error {
-	prev, err := lock.Read(m.LockPath())
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+	prev, err := lock.ReadFor(m.LockPath(), opts.Version)
+	edited, missing := lock.IsEdited(err)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		prev, err = nil, nil
+	case edited && missing:
+		// Written before content digests: its pins are reused and the
+		// digest written.
+	case edited && !lo.Update:
+		return fmt.Errorf("%w (nothing in it is reused; --update resolves every input again)", err)
+	case edited:
+		// Nothing is reused from an edited lock; it only shows in what
+		// changed.
+	case err != nil:
 		return err
 	}
 	if len(lo.UpdatePackages) > 0 {
@@ -148,9 +174,13 @@ func lockManifest(ctx context.Context, opts Options, m *manifest.Manifest, org *
 			return fmt.Errorf("--update-package: %s does not exist; run clearcutt-factory lock", rel(m.LockPath()))
 		}
 	}
-	base := prev
-	if (lo.UpdateBase || lo.UpdateStack) && prev != nil {
-		p := *prev
+	reuse, orig := prev, prev
+	if edited && !missing {
+		reuse, orig = nil, nil
+	}
+	base := reuse
+	if (lo.UpdateBase || lo.UpdateStack) && reuse != nil {
+		p := *reuse
 		p.Base = lock.Image{Ref: m.Spec.Base, Digest: lo.BaseDigest}
 		if p.App != nil {
 			a := *p.App
@@ -166,36 +196,41 @@ func lockManifest(ctx context.Context, opts Options, m *manifest.Manifest, org *
 	r.Log = opts.Stderr
 	r.Run = container.Runner{Runtime: org.Builder.Runtime}.Run
 	r.UpdatePackages = lo.UpdatePackages
-	l, err := r.LockFrom(ctx, m, org, base, prev, lo.Update)
+	l, err := r.LockFrom(ctx, m, org, base, orig, lo.Update)
 	if err != nil {
 		return err
 	}
 	if err := policy.Check(m, org, l); err != nil {
 		return err
 	}
-	if prev != nil && bytes.Equal(prev.Marshal(), l.Marshal()) {
+	// Rendered before anything is written: a lock the Containerfile can't
+	// be rendered from is never on disk.
+	out, err := render.Render(m, l)
+	if err != nil {
+		return err
+	}
+	if prev != nil && !edited && bytes.Equal(prev.Content(), l.Content()) {
 		opts.printf("%s is up to date", rel(m.LockPath()))
 	} else {
 		for _, c := range lock.Changes(prev, l) {
 			opts.printf("  %s", c)
 		}
+		l.Generator = lock.Generator(opts.Version)
 		if err := l.Write(m.LockPath()); err != nil {
 			return err
 		}
 		opts.printf("wrote %s", rel(m.LockPath()))
 	}
-	return writeContainerfile(opts, m, l)
+	return writeContainerfile(opts, m, out)
 }
 
-func writeContainerfile(opts Options, m *manifest.Manifest, l *lock.Lock) error {
-	out, err := render.Render(m, l)
-	if err != nil {
-		return err
-	}
+// writeContainerfile writes the rendered Containerfile when it changed,
+// atomically.
+func writeContainerfile(opts Options, m *manifest.Manifest, out *render.Output) error {
 	if old, err := os.ReadFile(m.ContainerfilePath()); err == nil && bytes.Equal(old, out.Containerfile) {
 		return nil
 	}
-	if err := os.WriteFile(m.ContainerfilePath(), out.Containerfile, 0o644); err != nil {
+	if err := lock.WriteFileAtomic(m.ContainerfilePath(), out.Containerfile, 0o644); err != nil {
 		return err
 	}
 	opts.printf("wrote %s", rel(m.ContainerfilePath()))
@@ -219,7 +254,7 @@ func Render(ctx context.Context, opts Options, check bool, contextDir string) er
 			return fmt.Errorf("%s is out of date; run clearcutt-factory render", rel(m.ContainerfilePath()))
 		}
 		opts.printf("%s is up to date", rel(m.ContainerfilePath()))
-	} else if err := writeContainerfile(opts, m, l); err != nil {
+	} else if err := writeContainerfile(opts, m, out); err != nil {
 		return err
 	}
 	if contextDir != "" {

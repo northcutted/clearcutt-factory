@@ -75,6 +75,35 @@ architecture. A lock without checksums can't be rendered; `lock --update`
 writes them. Every apk image's Containerfile changes, so it builds a new
 digest once: re-render (`clearcutt-factory render`) and commit.
 
+**Locks carry a content digest and the release that wrote them.** A lock
+edited by hand (a digest, URL, checksum, or version changed) was read as it
+was: `loadLocked` checked only that the manifest's inputs matched. Every
+lock now records `contentDigest`, the sha256 of the rest of the file, and
+`generator`, the clearcutt-factory that last wrote it. A lock whose digest
+doesn't match is refused by every command that reads it, including `lock`
+(nothing in it is reused; `lock --update` resolves every input again, and
+shows the edit as a change). A lock without a digest, written by an
+earlier release, is refused by `render`, `build`, `verify`, and `rebase`
+until `clearcutt-factory lock` rewrites it, which keeps its pins: run it
+once per manifest after upgrading (the examples are re-locked here). A
+lock a newer minor release wrote is refused with a message naming both
+versions, as is one this release can't decode when any newer release
+wrote it, instead of a `field … not found` error.
+
+**The lock is written only once its Containerfile renders, and both are
+written atomically.** `lock` wrote the lock, then rendered, so a resolution
+the Containerfile can't hold left a lock on disk that `render` and `build`
+refused. It now renders first, and writes each file to a temporary file
+beside it that is renamed over the old one, so a failed write leaves the
+previous lock and Containerfile intact.
+
+**A rebase refuses an app whose layers would delete files of the new
+base.** The check read whiteouts against the old base only, so an app
+layer that deleted a path the old base lacked and the new base has (an
+opaque directory, say) was rebased, and the result lacked the new base's
+files. Such whiteouts are a violation now ("app layers would delete files
+of the new base"), like the files an app layer would hide.
+
 **`policy.allowedHosts` covers apk repositories, and `allowedRegistries`
 matches whole path segments.** apk packages have no URL of their own, so
 the repositories they come from went unchecked; they are checked now, so

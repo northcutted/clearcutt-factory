@@ -124,7 +124,7 @@ func loadOrg(ctx context.Context, opts Options, startDir string, pin func(ref st
 // ref, if any.
 func lockedProfile(m *manifest.Manifest) func(ref string) string {
 	return func(ref string) string {
-		if l, err := lock.Read(m.LockPath()); err == nil && l.Profile != nil && l.Profile.Ref == ref {
+		if l := lockPins(m.LockPath()); l != nil && l.Profile != nil && l.Profile.Ref == ref {
 			return l.Profile.Digest
 		}
 		return ""

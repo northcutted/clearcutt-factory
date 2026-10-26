@@ -490,7 +490,10 @@ rules and with no signer, since it is its own file; its locks pin the digest
   checked against apk's database after install; apt/dnf: the file's sha256,
   checked before); every download
   by sha256; Go modules by version (sumdb-checked); Nix store paths by their
-  signed hashes.
+  signed hashes. The lock also records which release wrote it (`generator`)
+  and a digest of its own content (`contentDigest`): a lock edited by hand
+  is refused wherever it is read (`lock --update` resolves it again), and a
+  lock a newer release wrote says so instead of failing to decode.
 * **Pinned BuildKit**: builds run `moby/buildkit@sha256:…` in a container, so
   every machine uses the same builder.
 * **Clamped timestamps**: `SOURCE_DATE_EPOCH` comes from the lock (midnight

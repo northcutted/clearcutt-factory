@@ -181,7 +181,7 @@ func (r *Resolver) LockFrom(ctx context.Context, m *manifest.Manifest, o *manife
 	unprofiled := func(x *lock.Lock) []byte {
 		c := *x
 		c.Profile = nil
-		return c.Marshal()
+		return c.Content()
 	}
 	if orig.SourceDateEpoch == 0 || !bytes.Equal(unprofiled(l), unprofiled(orig)) {
 		l.SourceDateEpoch = epochFor(r.Now())
