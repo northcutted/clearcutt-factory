@@ -22,6 +22,10 @@ type InitOptions struct {
 	Repo string
 	// Registry receives the images (default ghcr.io/<owner>).
 	Registry string
+	// Branch is the branch that publishes, which the signer identity
+	// requires (sourceRef). Default: the origin remote's default branch,
+	// else main.
+	Branch string
 	// Force overwrites existing files.
 	Force bool
 	// Extends makes the org profile extend this shared profile (published
@@ -65,12 +69,19 @@ func Init(ctx context.Context, opts Options, io InitOptions) error {
 			return err
 		}
 	}
+	branch := io.Branch
+	if branch == "" {
+		branch = defaultBranch(ctx, dir)
+	}
+	if !regexp.MustCompile(`^[\w./-]+$`).MatchString(branch) || strings.HasPrefix(branch, "refs/") {
+		return fmt.Errorf("--default-branch %q must be a branch name, like main", branch)
+	}
 	// Release builds pin what they are; development builds follow main.
 	ref := "main"
 	if releaseRE.MatchString(opts.Version) {
 		ref = opts.Version
 	}
-	r := strings.NewReplacer("{{ref}}", ref, "{{repo}}", repo, "{{identityRegexp}}", workflowIdentityRegexp(ref), "{{registry}}", registry)
+	r := strings.NewReplacer("{{ref}}", ref, "{{repo}}", repo, "{{identityRegexp}}", workflowIdentityRegexp(ref), "{{registry}}", registry, "{{branch}}", branch)
 
 	var wrote []string
 	for _, f := range []struct{ path, body string }{
@@ -190,6 +201,16 @@ func workflowIdentityRegexp(ref string) string {
 	return `^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet)\.yml@` + at
 }
 
+// defaultBranch is the origin remote's default branch (its HEAD), else
+// main.
+func defaultBranch(ctx context.Context, dir string) string {
+	out, err := exec.CommandContext(ctx, "git", "-C", dir, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD").Output()
+	if b, ok := strings.CutPrefix(strings.TrimSpace(string(out)), "refs/remotes/origin/"); err == nil && ok && b != "" {
+		return b
+	}
+	return "main"
+}
+
 // githubRepo reads owner/name from the origin remote, if it is on GitHub.
 func githubRepo(ctx context.Context, dir string) string {
 	out, err := exec.CommandContext(ctx, "git", "-C", dir, "config", "--get", "remote.origin.url").Output()
@@ -229,10 +250,13 @@ signing:
   verify:
     # Images are signed inside ClearCutt Factory's reusable workflows, so the
     # certificate names those workflows. Any repository can call them, so
-    # sourceRepository binds signatures to runs in this repository.
+    # sourceRepository binds signatures to runs in this repository, and
+    # sourceRef to runs on the branch that publishes (the reusable workflows
+    # publish only from the default branch, or their publish-ref input).
     certificateIdentityRegexp: {{identityRegexp}}
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
     sourceRepository: https://github.com/{{repo}}
+    sourceRef: refs/heads/{{branch}}
   # Stacks from a platform repository have their own signer, for
   # policy.requireSignedStacks:
   # stacks:
@@ -265,10 +289,13 @@ signing:
   verify:
     # Images are signed inside ClearCutt Factory's reusable workflows, so the
     # certificate names those workflows. Any repository can call them, so
-    # sourceRepository binds signatures to runs in this repository.
+    # sourceRepository binds signatures to runs in this repository, and
+    # sourceRef to runs on the branch that publishes (the reusable workflows
+    # publish only from the default branch, or their publish-ref input).
     certificateIdentityRegexp: {{identityRegexp}}
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
     sourceRepository: https://github.com/{{repo}}
+    sourceRef: refs/heads/{{branch}}
 `
 
 const imageTemplate = `# yaml-language-server: $schema=https://raw.githubusercontent.com/northcutted/clearcutt-factory/{{ref}}/schemas/manifest.schema.json

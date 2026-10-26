@@ -401,7 +401,7 @@ func TestBuildRebasesOntoNewerBase(t *testing.T) {
 		out.Reset()
 		_ = os.Remove(ghOut)
 		res := Result{Repository: repo, Digest: art.Digest, Tags: m.Metadata.Tags}
-		return res, publishBuild(ctx, opts, org, m, art, bo, "", nil, &res)
+		return res, publishBuild(ctx, opts, org, m, art, bo, "", nil, &res, func() error { return nil })
 	}
 	latest := func() string {
 		t.Helper()

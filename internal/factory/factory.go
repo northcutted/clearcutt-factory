@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/northcutted/clearcutt-factory/internal/container"
+	"github.com/northcutted/clearcutt-factory/internal/ignore"
 	"github.com/northcutted/clearcutt-factory/internal/lock"
 	"github.com/northcutted/clearcutt-factory/internal/manifest"
 	"github.com/northcutted/clearcutt-factory/internal/policy"
@@ -222,7 +223,7 @@ func Render(ctx context.Context, opts Options, check bool, contextDir string) er
 		return err
 	}
 	if contextDir != "" {
-		if err := stage(out, contextDir); err != nil {
+		if err := stage(out, contextDir, opts.logf); err != nil {
 			return err
 		}
 		opts.printf("staged build context in %s", contextDir)
@@ -232,7 +233,7 @@ func Render(ctx context.Context, opts Options, check bool, contextDir string) er
 
 // stage writes a self-contained build context: the Containerfile plus the
 // declared local files at the paths the Containerfile expects.
-func stage(out *render.Output, dir string) error {
+func stage(out *render.Output, dir string, note func(format string, a ...any)) error {
 	if err := os.RemoveAll(dir); err != nil {
 		return err
 	}
@@ -248,22 +249,47 @@ func stage(out *render.Output, dir string) error {
 	}
 	for _, f := range out.Context {
 		dst := filepath.Join(abs, filepath.FromSlash(f.Rel))
-		if err := copyTree(f.Src, dst, f.Exclude, abs); err != nil {
+		skipped, err := copyTree(f.Src, dst, f.Exclude, abs)
+		if err != nil {
 			return err
+		}
+		if len(skipped) > 0 && note != nil {
+			more := ""
+			if len(skipped) > 5 {
+				skipped, more = skipped[:5], fmt.Sprintf(", and %d more", len(skipped)-5)
+			}
+			note("note: left out of the build what git doesn't track in %s: %s%s (commit it to build with it)", rel(f.Src), strings.Join(skipped, ", "), more)
 		}
 	}
 	return nil
 }
 
 // copyTree copies src to dst, leaving out excluded paths and skip (the
-// context being staged, should it sit inside src).
-func copyTree(src, dst string, exclude []string, skip string) error {
-	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+// context being staged, should it sit inside src). A directory's files are
+// filtered as ignore reads them: in a git work tree only what git tracks,
+// elsewhere what .gitignore files don't ignore, and in both what
+// .dockerignore doesn't exclude. It returns the untracked paths it left out.
+func copyTree(src, dst string, exclude []string, skip string) ([]string, error) {
+	var filter *ignore.Filter
+	if st, err := os.Stat(src); err == nil && st.IsDir() {
+		if filter, err = ignore.New(src); err != nil {
+			return nil, err
+		}
+	}
+	err := filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		r, _ := filepath.Rel(src, p)
-		if p == skip || (r != "." && excluded(filepath.ToSlash(r), exclude)) {
+		leave := p == skip || (r != "." && excluded(filepath.ToSlash(r), exclude))
+		if !leave && r != "." && filter != nil {
+			ok, err := filter.Include(filepath.ToSlash(r), d.IsDir())
+			if err != nil {
+				return err
+			}
+			leave = !ok
+		}
+		if leave {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -299,6 +325,10 @@ func copyTree(src, dst string, exclude []string, skip string) error {
 		}
 		return os.WriteFile(target, b, info.Mode().Perm())
 	})
+	if err != nil || filter == nil {
+		return nil, err
+	}
+	return filter.Skipped, nil
 }
 
 // excluded reports whether rel (slash-separated, relative to the source)

@@ -19,8 +19,13 @@ func Check(m *manifest.Manifest, o *manifest.Org, l *lock.Lock) error {
 	add := func(format string, a ...any) { errs = append(errs, fmt.Errorf("policy: "+format, a...)) }
 
 	if p.RequireNonRoot {
-		u, _, _ := strings.Cut(m.Spec.User, ":")
-		if u == "" || u == "root" || u == "0" {
+		// The user as the Containerfile's USER will hold it: a value it
+		// can't hold is refused, whatever it starts with.
+		u := m.Spec.User
+		switch err := manifest.CheckUser(u); {
+		case u != "" && err != nil:
+			add("spec.user %v (requireNonRoot)", err)
+		case manifest.UserIsRoot(u):
 			add("spec.user must be a non-root user (requireNonRoot)")
 		}
 	}
@@ -54,6 +59,16 @@ func Check(m *manifest.Manifest, o *manifest.Org, l *lock.Lock) error {
 		}
 	}
 	reported := map[string]bool{}
+	// apk installs from the repositories (the packages have no URL of
+	// their own); apt and dnf lock each file's URL, below.
+	for _, repo := range l.Packages.Repositories {
+		if !hostAllowed(repo, p.AllowedHosts) {
+			if u, err := url.Parse(repo); err == nil && !reported[u.Host] {
+				reported[u.Host] = true
+				add("packages download from a repository not in allowedHosts: %s", repo)
+			}
+		}
+	}
 	for _, pkgs := range l.Packages.Platforms {
 		for _, pk := range pkgs {
 			if pk.URL == "" || hostAllowed(pk.URL, p.AllowedHosts) {
@@ -115,7 +130,7 @@ func registryAllowed(ref string, allowed []string) bool {
 		}
 	}
 	for _, a := range allowed {
-		if strings.HasPrefix(full, a) {
+		if manifest.RegistryCovers(a, full) {
 			return true
 		}
 	}

@@ -204,14 +204,36 @@ type Policy struct {
 	// AllowTOFU permits tools whose hash was recorded on first download with
 	// no publisher checksum or digest to compare against.
 	AllowTOFU bool `yaml:"allowTOFU,omitempty"`
-	// AllowedHosts restricts download hosts (exact, or ".suffix" matches).
+	// AllowedHosts restricts download hosts (exact, or ".suffix" matches):
+	// tool downloads, and the repositories apk, apt, dnf, and nix fetch
+	// packages from (apk.cgr.dev for Wolfi and Chainguard).
 	AllowedHosts []string `yaml:"allowedHosts,omitempty"`
-	// AllowedRegistries restricts image references by prefix, e.g. cgr.dev/chainguard/.
+	// AllowedRegistries restricts image references to registries or
+	// repository paths, e.g. cgr.dev/chainguard: an entry covers itself and
+	// what is below it, whole path segments only (ghcr.io/acme covers
+	// ghcr.io/acme/app, not ghcr.io/acme-evil/app).
 	AllowedRegistries []string `yaml:"allowedRegistries,omitempty"`
 	// RequireSignedStacks requires stacks fetched from a registry to carry
 	// a signature from the org's stack signer: signing.stacks (else
 	// signing.verify), or the stack signers of signing.trustPolicy.
 	RequireSignedStacks bool `yaml:"requireSignedStacks,omitempty"`
+	// RequireOfflineBuildTools runs the scripts of from: build tools with
+	// no network (RUN --network=none), so they can only use what their
+	// builder image holds.
+	RequireOfflineBuildTools bool `yaml:"requireOfflineBuildTools,omitempty"`
+}
+
+// RegistryCovers reports whether an allowedRegistries entry covers ref (an
+// image reference, or another entry): ref is the entry, or below it by
+// whole path segments, with any tag or digest. A trailing slash on the
+// entry changes nothing.
+func RegistryCovers(entry, ref string) bool {
+	entry = strings.TrimSuffix(entry, "/")
+	if entry == "" {
+		return false
+	}
+	rest, ok := strings.CutPrefix(ref, entry)
+	return ok && (rest == "" || rest[0] == '/' || rest[0] == ':' || rest[0] == '@')
 }
 
 // DefaultOrg is used when no org profile is found.

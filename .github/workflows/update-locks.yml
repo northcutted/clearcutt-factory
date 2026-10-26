@@ -1,5 +1,6 @@
 # Re-resolves every input of every image and app once a week and opens one
-# pull request per manifest listing what moved (image digests, package and
+# pull request per manifest (on the default branch, or the publish-ref
+# input's ref; elsewhere it only reports) listing what moved (image digests, package and
 # tool versions). Nothing moved, nothing proposed: an update that resolves the
 # same content keeps the lock, and its stale pull request closes. CI on the
 # pull request builds, smoke-tests, scans, and gates the change; merging it
@@ -49,6 +50,10 @@ on:
         description: GitHub App to open pull requests as, by Client ID or App ID (default the CLEARCUTT_APP_ID variable); needs the CLEARCUTT_APP_PRIVATE_KEY secret
         type: string
         default: ""
+      publish-ref:
+        description: 'A ref (or bash glob, e.g. refs/heads/release/*) that opens pull requests too, besides the default branch. Runs on any other ref (workflow_dispatch from a branch, say) only report what would move'
+        type: string
+        default: ""
     secrets:
       CLEARCUTT_APP_PRIVATE_KEY:
         description: Private key of the GitHub App named by app-id or CLEARCUTT_APP_ID
@@ -70,10 +75,46 @@ env:
 jobs:
   manifests:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       manifests: ${{ steps.find.outputs.manifests }}
+      publish: ${{ steps.ref.outputs.publish }}
     steps:
+      # Only the default branch publishes (pushes, signs, opens pull
+      # requests), or the ref the publish-ref input names: a pull request,
+      # or workflow_dispatch from another branch, builds and checks only.
+      # schedule, repository_dispatch, and workflow_run run on the default
+      # branch.
+      - name: Publish from this ref?
+        id: ref
+        shell: bash
+        env:
+          PUBLISH_REF: ${{ inputs.publish-ref }}
+        run: |
+          default=$(jq -r '.repository.default_branch // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)
+          # publish-ref may be a glob (refs/heads/release/*).
+          # shellcheck disable=SC2053
+          publish_ref() { [ -n "$PUBLISH_REF" ] && [[ "$GITHUB_REF" == $PUBLISH_REF ]]; }
+          publish=false
+          case "$GITHUB_EVENT_NAME" in
+            pull_request | pull_request_target | merge_group) ;;
+            *)
+              if [ -n "$default" ] && [ "$GITHUB_REF" = "refs/heads/$default" ]; then
+                publish=true
+              elif [ -z "$default" ] && [[ "$GITHUB_EVENT_NAME" =~ ^(schedule|repository_dispatch|workflow_run)$ ]]; then
+                publish=true
+              elif publish_ref; then
+                publish=true
+              fi
+              ;;
+          esac
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          if [ "$publish" = false ] && [[ "$GITHUB_EVENT_NAME" != pull_request* ]]; then
+            echo "::notice::$GITHUB_REF is not the default branch${default:+ ($default)}${PUBLISH_REF:+ or $PUBLISH_REF}: checking only, nothing is published"
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: find
         shell: bash
         run: |
@@ -86,6 +127,7 @@ jobs:
     needs: manifests
     if: needs.manifests.outputs.manifests != '[]'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
@@ -99,24 +141,31 @@ jobs:
     env:
       APP_ID: ${{ inputs.app-id || vars.CLEARCUTT_APP_ID }}
       APP_KEY_SET: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY != '' }}
+      PUBLISH: ${{ needs.manifests.outputs.publish }}
+      # Where this workflow's scripts are (see fleet.yml).
+      FACTORY_DIR: ${{ (inputs.factory-version || 'source') != 'source' && '.clearcutt-factory' || '.' }}
     steps:
       # Half a GitHub App (an ID without a key, or a key without an ID) fails
       # here rather than quietly falling back to another identity.
       - name: Mint a GitHub App token
         id: app
-        if: env.APP_ID != '' || env.APP_KEY_SET == 'true'
+        if: env.PUBLISH == 'true' && (env.APP_ID != '' || env.APP_KEY_SET == 'true')
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ env.APP_ID }}
           private-key: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
+      # Keeps its credentials: open-pr.sh pushes the pull request's branch
+      # with them, and nothing in this job uploads the checkout.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ steps.app.outputs.token || secrets.CLEARCUTT_BOT_TOKEN || github.token }}
+          persist-credentials: true # zizmor: ignore[artipacked]
       - if: env.FACTORY_VERSION != 'source'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: northcutted/clearcutt-factory
           ref: ${{ env.FACTORY_VERSION }}
           path: .clearcutt-factory
@@ -129,15 +178,21 @@ jobs:
         uses: ./
         with:
           tools: "false"
-      - run: echo "FACTORY_DIR=$([ "$FACTORY_VERSION" = source ] && echo . || echo .clearcutt-factory)" >> "$GITHUB_ENV"
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0; apt and dnf resolve inside the base, per platform
+        with:
+          # The privileged binfmt image, pinned (update: crane digest tonistiigi/binfmt:<tag>).
+          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
 
       - name: Re-resolve every input
         env:
           GITHUB_TOKEN: ${{ github.token }} # GitHub API lookups (release digests, nixpkgs revisions) without the anonymous rate limit
-        run: clearcutt-factory lock -f "${{ matrix.manifest }}" --update | tee "$RUNNER_TEMP/lock.out"
+          MANIFEST: ${{ matrix.manifest }}
+        run: clearcutt-factory lock -f "$MANIFEST" --update | tee "$RUNNER_TEMP/lock.out"
 
+      # Only a publishing ref proposes: a pull request from another branch
+      # would carry that branch's commits.
       - name: Open, update, or close the pull request
+        if: env.PUBLISH == 'true'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || secrets.CLEARCUTT_BOT_TOKEN || github.token }}
           MANIFEST: ${{ matrix.manifest }}

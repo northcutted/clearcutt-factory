@@ -39,10 +39,11 @@ It writes three files and keeps any that exist (`--force` overwrites):
 |---|---|
 | `factory.org.yaml` | Your registry (default `ghcr.io/<owner>`), signer identity (keyless: ClearCutt Factory's reusable workflows, bound to runs in this repository; see [Who signs](#who-signs-and-binding-signatures-to-your-repository)), vulnerability gate, and policy |
 | `images/example/image.yaml` | An example image to replace |
-| `.github/workflows/clearcutt-factory.yml` | Calls the reusable workflows: build, test, and scan on pull requests; publish on `main`; weekly lock updates; daily app rebases; across repositories, notify dependents of what it published and answer such notices ([below](#waking-the-apps-when-the-platform-publishes)) |
+| `.github/workflows/clearcutt-factory.yml` | Calls the reusable workflows: build, test, and scan on pull requests; publish on the default branch; weekly lock updates; daily app rebases; across repositories, notify dependents of what it published and answer such notices ([below](#waking-the-apps-when-the-platform-publishes)) |
 
-`--repo owner/name` and `--registry` override what it reads from the `origin`
-remote. In an app repository of an organization that publishes a shared org
+`--repo owner/name`, `--registry`, and `--default-branch` override what it
+reads from the `origin` remote (the branch is the one the signer identity
+requires, as `sourceRef`). In an app repository of an organization that publishes a shared org
 profile, `--extends REF --extends-identity ID` (or `--extends-key K`) checks
 that profile's signature and writes a `factory.org.yaml` that extends it
 ([section 6](#6-one-org-profile-for-every-repository)). Every file names its JSON Schema, so editors with the YAML language
@@ -93,6 +94,17 @@ Unchanged images aren't republished. The rebuild is the workflow's `reproduce`
 job (`images.yml` again, given what `images` published), beside `fleet` and
 `notify` rather than before them, so they start as soon as the images are
 published; a failed reproduction still fails the run.
+
+**Only the default branch publishes.** `images.yml` and `fleet.yml` push,
+sign, and attest, and `fleet.yml` and `update-locks.yml` open pull requests,
+only in runs on the repository's default branch (`schedule`,
+`repository_dispatch`, and `workflow_run` always run there). A
+`workflow_dispatch` from another branch builds and checks, and publishes
+nothing: otherwise anyone who can push a branch could publish an image the
+signer identity trusts. To publish from another ref too (release branches,
+say), set the `publish-ref` input of each of them to it, or to a bash glob
+(`refs/heads/release/*`), and add a signer for it (the `sourceRef` below
+names one ref).
 
 ### A GitHub App for the automation
 
@@ -338,6 +350,7 @@ signing:
     certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet)\.yml@refs/tags/v\d+\.\d+\.\d+$
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
     sourceRepository: https://github.com/acme/checkout
+    sourceRef: refs/heads/main
 vulnerabilities:
   failOn: high         # stricter than the shared critical: allowed
 ```
@@ -442,10 +455,14 @@ the field, not a silent override, so what the file says is what applies:
 | `signing.profile` | Only in a profile you publish |
 | `vulnerabilities.failOn` | The repository may set a stricter (lower) severity, not a looser one |
 | `vulnerabilities.onlyFixed`, `vulnerabilities.allowLocalVEX`, `policy.allowTOFU` | Can only turn off |
-| `policy.requireNonRoot`, `policy.requireSignedStacks`, `sbom.scan` | Can only turn on |
+| `policy.requireNonRoot`, `policy.requireSignedStacks`, `policy.requireOfflineBuildTools`, `sbom.scan` | Can only turn on |
 | `policy.requiredLabels` | Union |
-| `policy.allowedHosts`, `policy.allowedRegistries` | The repository's list, when it sets one, must lie within the shared one (a host or `.suffix` the shared list allows; a registry prefix under a shared one) |
+| `policy.allowedHosts`, `policy.allowedRegistries` | The repository's list, when it sets one, must lie within the shared one (a host or `.suffix` the shared list allows; a registry or repository path at or below a shared one, by whole path segments) |
 | `vulnerabilities.vex` | The shared profile's statements apply to every scan. The repository's (its profile's `vex` and its manifests' `spec.vex`) are refused unless the shared profile sets `vulnerabilities.allowLocalVEX: true`: a statement that a vulnerability doesn't apply lets an image past the gate |
+
+Under a shared profile, `build --push` and `rebase --push` refuse
+`--no-scan`, which would publish past its vulnerability gate; `--no-scan`
+still works for builds that aren't pushed.
 
 ### The platform repository extends it by path
 
@@ -489,7 +506,10 @@ not your repository. Anyone can call those workflows and get the same
 identity, so an identity alone would accept images built in any repository.
 The certificate also records the repository whose run signed (Fulcio's GitHub
 workflow repository extension), and `sourceRepository` makes cosign require
-it. `init` writes both:
+it; and the ref the run was on, which `sourceRef` requires (so a run on
+another branch can't sign a trusted image, should one ever publish). `init`
+writes all three, with the origin remote's default branch (or
+`--default-branch`):
 
 ```yaml
 signing:
@@ -498,6 +518,7 @@ signing:
     certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet)\.yml@refs/tags/v\d+\.\d+\.\d+$
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
     sourceRepository: https://github.com/acme/checkout
+    sourceRef: refs/heads/main
   stacks:          # who may sign the stacks apps here build on
     certificateIdentity: https://github.com/acme/platform/.github/workflows/stacks.yml@refs/heads/main
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
@@ -505,8 +526,8 @@ signing:
 
 `sourceMatchesImage: true` instead requires the run to be in the repository
 the image names as its source (`org.opencontainers.image.source`), and
-`sourceRepositoryOwner` limits that to one owner's repositories; `sourceRef`
-requires a ref. It binds images only: a stack names no source, so a stack
+`sourceRepositoryOwner` limits that to one owner's repositories. These
+bind images only: a stack names no source, so a stack
 signer names its repository with `sourceRepository` (or is a workflow in it,
 as above), and with `policy.requireSignedStacks` a stack signer with
 `sourceMatchesImage` is an error. Pinning the workflows by commit SHA changes

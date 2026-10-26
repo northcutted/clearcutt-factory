@@ -457,7 +457,7 @@ func TestPublishOnce(t *testing.T) {
 			t.Errorf("%s points at %s, want %s", tag, got, d)
 		}
 	}
-	if !strings.Contains(out.String(), "already published; moved its tags") {
+	if !strings.Contains(out.String(), "is already published\n") || !strings.Contains(out.String(), "moved its tags (latest, v1)") {
 		t.Errorf("output:\n%s", out.String())
 	}
 	if ok, err := registry.Exists(ctx, host+"/app@sha256:"+strings.Repeat("0", 64)); ok || err != nil {

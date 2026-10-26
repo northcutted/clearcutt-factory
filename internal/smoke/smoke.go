@@ -90,6 +90,11 @@ func (r *Runner) Run(ctx context.Context, img v1.Image, platform, label string, 
 	cname := fmt.Sprintf("clearcutt-factory-smoke-%s-%s-%d", sanitize(label), sanitize(platform), time.Now().UnixNano())
 	defer func() { _, _ = r.exec(context.WithoutCancel(ctx), "rm", "-f", cname) }()
 	run := []string{"run", "--name", cname, "--platform", platform}
+	if t.HTTP == nil && !t.Network {
+		// No network unless the test asks for one: the image runs on the
+		// build machine (a self-hosted runner, say).
+		run = append(run, "--network", "none")
+	}
 	var args []string
 	if len(t.Command) > 0 {
 		run = append(run, "--entrypoint", t.Command[0])

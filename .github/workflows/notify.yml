@@ -91,6 +91,7 @@ permissions:
 jobs:
   notify:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     defaults:
@@ -132,7 +133,10 @@ jobs:
         with:
           client-id: ${{ env.APP_ID }}
           private-key: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
-          owner: ${{ env.OWNER }}
+          # Every repository of the owner the App is installed on, with
+          # metadata read only: enough to find the dependents by topic. The
+          # token that dispatches is limited to them (below).
+          owner: ${{ env.OWNER }} # zizmor: ignore[github-app]
           permission-metadata: read
 
       - name: Find dependents
