@@ -12,7 +12,9 @@ import (
 	"testing"
 
 	ggcrregistry "github.com/google/go-containerregistry/pkg/registry"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 
+	"github.com/northcutted/clearcutt-factory/internal/lock"
 	"github.com/northcutted/clearcutt-factory/internal/manifest"
 	"github.com/northcutted/clearcutt-factory/internal/registry"
 )
@@ -131,5 +133,159 @@ func TestStackSigner(t *testing.T) {
 		case c.mode != "" && (s == nil || s.Mode != c.mode || (c.mode == "key" && s.Key != c.key) || strings.Join(s.Args, " ") != strings.Join(c.org.Signing.Args, " ")):
 			t.Errorf("%s: %+v, want mode %s key %s", c.name, s, c.mode, c.key)
 		}
+	}
+}
+
+// TestStackPinsBuildImage: stack push pins a build image given as a factory
+// manifest by the digest its tag holds (the tag kept for readers), so a
+// rebuilt build image under the same tag changes the stack and publishes a
+// new one, which an app's lock --update then takes, moving the build image
+// with it. The run image stays a tag (apps follow it by rebasing). A stack
+// published before, naming its build image by tag alone, still loads.
+func TestStackPinsBuildImage(t *testing.T) {
+	srv := httptest.NewServer(ggcrregistry.New(ggcrregistry.Logger(log.New(io.Discard, "", 0))))
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	ctx := context.Background()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	image := func(content string) v1.ImageIndex {
+		return testIndex(t, nil, func(arch string) []v1.Layer {
+			return []v1.Layer{testLayer(t, map[string]string{"etc/x": content + arch})}
+		}, nil)
+	}
+	for _, name := range []string{"platform/build-go", "platform/go-runtime", "bk", "fe", "tb"} {
+		push(t, host+"/"+name+":1", image(name))
+	}
+	digestOf := func(ref string) string {
+		t.Helper()
+		d, err := registry.Digest(ctx, ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	buildOne := digestOf(host + "/platform/build-go:1")
+
+	dir := t.TempDir()
+	builder := "builder: {buildkit: " + host + "/bk:1, frontend: " + host + "/fe:1, toolbox: " + host + "/tb:1}\n"
+	files := map[string]string{
+		"platform/factory.org.yaml":           "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nregistry: " + host + "/platform\ntags: [\"1\"]\nsigning: {mode: none}\n" + builder,
+		"platform/images/build-go/image.yaml": "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Image\nmetadata: {name: build-go}\nspec: {base: cgr.dev/chainguard/wolfi-base:latest}\n",
+		"platform/runtime/image.yaml":         "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Image\nmetadata: {name: go-runtime}\nspec: {base: cgr.dev/chainguard/static:latest}\n",
+		"platform/stacks/go.yaml":             "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Stack\nmetadata: {name: go}\nspec:\n  build: ../images/build-go/image.yaml\n  run: ../runtime/image.yaml\n  steps: [{run: go build -o /out/app .}]\n  entrypoint: [\"/app/{{name}}\"]\n",
+		"team/factory.org.yaml":               "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nregistry: " + host + "/team\nsigning: {mode: none}\n" + builder,
+		"team/svc/app.yaml":                   "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: App\nmetadata: {name: svc}\nspec: {stack: " + host + "/stacks/go:1, platforms: [linux/amd64, linux/arm64]}\n",
+		"team/svc/main.go":                    "package main\n",
+	}
+	for n, body := range files {
+		p := filepath.Join(dir, n)
+		_ = os.MkdirAll(filepath.Dir(p), 0o755)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out bytes.Buffer
+	opts := Options{Stdout: &out, Stderr: &out, Version: "v0.4.0"}
+	ghOutput := filepath.Join(dir, "github-output")
+	t.Setenv("GITHUB_OUTPUT", ghOutput)
+	pushStack := func() (digest string, published bool) {
+		t.Helper()
+		_ = os.Remove(ghOutput)
+		if err := StackPush(ctx, opts, filepath.Join(dir, "platform/stacks/go.yaml"), host+"/stacks/go:1", false); err != nil {
+			t.Fatalf("%v\n%s", err, out.String())
+		}
+		gho, _ := os.ReadFile(ghOutput)
+		for _, line := range strings.Split(string(gho), "\n") {
+			if d, ok := strings.CutPrefix(line, "digest="); ok {
+				digest = d
+			}
+			published = published || line == "published=true"
+		}
+		return digest, published
+	}
+	stackOne, published := pushStack()
+	if !published {
+		t.Fatal("first push: not published")
+	}
+	content, _, err := registry.FetchFile(ctx, host+"/stacks/go@"+stackOne, manifest.StackArtifactType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "build: " + host + "/platform/build-go:1@" + buildOne + "\n"; !strings.Contains(string(content), want) || !strings.Contains(string(content), "run: "+host+"/platform/go-runtime:1\n") {
+		t.Errorf("published stack:\n%s\nwant build %q and the run image by tag", content, want)
+	}
+	// Unchanged: the tag moves back, nothing is published.
+	if d, published := pushStack(); d != stackOne || published {
+		t.Errorf("unchanged push: digest %s published %v", d, published)
+	}
+
+	// An app in another repository locks the build image at the digest
+	// the stack pins.
+	opts.ManifestPath = filepath.Join(dir, "team/svc/app.yaml")
+	if err := Lock(ctx, opts, LockOptions{}); err != nil {
+		t.Fatalf("lock: %v\n%s", err, out.String())
+	}
+	l, err := lock.Read(filepath.Join(dir, "team/svc/app.lock.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.App.Build.Ref != host+"/platform/build-go:1@"+buildOne || l.App.Build.Digest != buildOne || l.App.StackArtifact.Digest != stackOne {
+		t.Errorf("lock: build %+v, stack %+v", l.App.Build, l.App.StackArtifact)
+	}
+	if err := Render(ctx, opts, true, ""); err != nil {
+		t.Errorf("render --check: %v", err)
+	}
+	cf, _ := os.ReadFile(filepath.Join(dir, "team/svc/app.Containerfile"))
+	if !strings.Contains(string(cf), "FROM "+host+"/platform/build-go:1@"+buildOne+" AS build") {
+		t.Errorf("Containerfile builds with the wrong image:\n%s", cf)
+	}
+
+	// The build image is rebuilt under the same tag: the stack changes and
+	// a new one is published; the app's lock keeps its pin until --update.
+	push(t, host+"/platform/build-go:1", image("patched"))
+	buildTwo := digestOf(host + "/platform/build-go:1")
+	stackTwo, published := pushStack()
+	if !published || stackTwo == stackOne {
+		t.Fatalf("after the build image was rebuilt: digest %s (was %s), published %v", stackTwo, stackOne, published)
+	}
+	out.Reset()
+	if err := Lock(ctx, opts, LockOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ = lock.Read(filepath.Join(dir, "team/svc/app.lock.yaml")); l.App.Build.Digest != buildOne || !strings.Contains(out.String(), "is up to date") {
+		t.Errorf("lock without --update moved the pin: %+v\n%s", l.App.Build, out.String())
+	}
+	out.Reset()
+	if err := Lock(ctx, opts, LockOptions{Update: true}); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ = lock.Read(filepath.Join(dir, "team/svc/app.lock.yaml")); l.App.Build.Digest != buildTwo || l.App.StackArtifact.Digest != stackTwo {
+		t.Errorf("lock --update: build %+v, stack %+v", l.App.Build, l.App.StackArtifact)
+	}
+	if s := out.String(); !strings.Contains(s, "build image: "+host+"/platform/build-go:1@"+buildOne+" → "+host+"/platform/build-go:1@"+buildTwo) || !strings.Contains(s, "stack "+host+"/stacks/go:1: ") {
+		t.Errorf("lock --update should list the build image and the stack:\n%s", s)
+	}
+
+	// A stack published by an earlier release names the build image by
+	// tag alone: it loads, and the lock pins what the tag holds.
+	old := strings.Replace(string(content), "build: "+host+"/platform/build-go:1@"+buildOne, "build: "+host+"/platform/build-go:1", 1)
+	if _, err := registry.PushFile(ctx, host+"/stacks/go:1", manifest.StackArtifactType, "stack.yaml", []byte(old)); err != nil {
+		t.Fatal(err)
+	}
+	if err := Lock(ctx, opts, LockOptions{Update: true}); err != nil {
+		t.Fatalf("lock --update on a stack by tag: %v\n%s", err, out.String())
+	}
+	if l, _ = lock.Read(filepath.Join(dir, "team/svc/app.lock.yaml")); l.App.Build.Ref != host+"/platform/build-go:1" || l.App.Build.Digest != buildTwo {
+		t.Errorf("old stack: build %+v", l.App.Build)
+	}
+
+	// A build image not published yet can't be pinned: the push says so.
+	if err := os.WriteFile(filepath.Join(dir, "platform/images/build-go/image.yaml"), []byte("apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Image\nmetadata: {name: build-rust}\nspec: {base: cgr.dev/chainguard/wolfi-base:latest}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := StackPush(ctx, opts, filepath.Join(dir, "platform/stacks/go.yaml"), host+"/stacks/go:1", false); err == nil || !strings.Contains(err.Error(), "the published image "+host+"/platform/build-rust:1 can't be resolved") {
+		t.Errorf("unpublished build image: %v", err)
 	}
 }

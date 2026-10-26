@@ -88,9 +88,9 @@ func TestEditedLockRefused(t *testing.T) {
 	// A digest edited by hand.
 	w.write("image.lock.yaml", strings.Replace(good, base.Base.Digest, "sha256:"+strings.Repeat("e", 64), 1))
 	for name, run := range map[string]func() error{
-		"render": func() error { return Render(ctx, w.opts, true, "") },
-		"build":  func() error { return Build(ctx, w.opts, BuildOptions{}) },
-		"lock":   func() error { return Lock(ctx, w.opts, LockOptions{}) },
+		"render":             func() error { return Render(ctx, w.opts, true, "") },
+		"build":              func() error { return Build(ctx, w.opts, BuildOptions{}) },
+		"lock":               func() error { return Lock(ctx, w.opts, LockOptions{}) },
 		"lock --update-base": func() error { return Lock(ctx, w.opts, LockOptions{UpdateBase: true}) },
 	} {
 		if err := run(); err == nil || !strings.Contains(err.Error(), "image.lock.yaml was edited by hand") {

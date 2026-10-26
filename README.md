@@ -249,7 +249,12 @@ properties are what make it safe to rebase.
 **Stacks in a registry.** A platform team publishes a stack once
 (`clearcutt-factory stack push -f stacks/go.yaml --ref ghcr.io/acme/stacks/go:1`,
 which resolves manifest paths to image references and signs it), and apps in
-any repository name it: `stack: ghcr.io/acme/stacks/go:1`. The app's lock pins
+any repository name it: `stack: ghcr.io/acme/stacks/go:1`. A build image
+given as a manifest is pinned by the digest its tag holds when the stack is
+pushed (`ghcr.io/acme/build-go:1@sha256:…`, the tag kept for readers), so a
+rebuilt build image changes the stack's content: pushing the stack again
+publishes a new one, and `notify.yml` announces it. The run image stays a
+tag: apps follow it by rebasing. The app's lock pins
 the stack's digest until `lock --update` moves it, and
 `policy.requireSignedStacks` accepts only stacks signed by the org's stack
 signer (`signing.stacks`). Every command that uses the stack checks the

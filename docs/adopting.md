@@ -153,7 +153,12 @@ clearcutt-factory stack push -f stacks/go.yaml --ref ghcr.io/acme/stacks/go:1
 
 Build and run images given as factory manifests (`run: ../go-runtime/image.yaml`)
 are resolved to their published references before pushing, and the stack is
-signed. A stack is published by its content, so pushing an unchanged one
+signed. The build image is pinned by the digest its tag holds at that
+moment (`ghcr.io/acme/build-go:1@sha256:…`), so push stacks after the
+images workflow has published, and a rebuilt build image (a Go or npm
+fix, say) makes the next `stack push` publish a new stack; the run image
+is named by tag, since apps follow it by rebasing. A stack is published
+by its content, so pushing an unchanged one
 again only moves the tag, once the org's stack signer (`signing.stacks`,
 below) has signed it: a workflow can run `stack push` on every change
 without piling up signatures. App repositories name it by reference:

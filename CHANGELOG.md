@@ -75,6 +75,24 @@ architecture. A lock without checksums can't be rendered; `lock --update`
 writes them. Every apk image's Containerfile changes, so it builds a new
 digest once: re-render (`clearcutt-factory render`) and commit.
 
+**A published stack pins its build image by digest.** `stack push`
+resolved a build image given as a factory manifest to its tag
+(`ghcr.io/acme/build-go:1`), so a rebuilt build image with the same tag
+(a toolchain fix) left every published stack unchanged: no
+`clearcutt.stack-published` reached the apps, and they rebuilt with the new
+toolchain only at their weekly update. The build image is now pinned by
+the digest the tag holds when the stack is pushed
+(`ghcr.io/acme/build-go:1@sha256:…`, the tag kept for readers), so a rebuilt
+build image changes the stack's content, the next `stack push` publishes a
+new stack, and the apps' lock-update job takes it. The first push after
+upgrading publishes a new stack for the same reason. `stack push` needs
+the build image in the registry: push stacks after the images workflow
+has published (as `init`'s and the showcase's workflows do). The run image
+stays a tag: apps follow it by rebasing, and their locks pin what it
+held. Stacks published before, naming the build image by tag, still load,
+and an app's lock pins what the tag holds, as before. Build images given
+as plain references (`golang:1`) are published as written.
+
 **Locks carry a content digest and the release that wrote them.** A lock
 edited by hand (a digest, URL, checksum, or version changed) was read as it
 was: `loadLocked` checked only that the manifest's inputs matched. Every
