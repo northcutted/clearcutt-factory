@@ -300,7 +300,7 @@ func rebaseImage(ctx context.Context, opts Options, org *manifest.Org, ro Rebase
 		from := lock.Image{Ref: plan.repo, Digest: plan.platform(p.Platform).app.Digest}
 		base := lock.Image{Ref: plan.onto.Name, Digest: plan.platform(p.Platform).newDigest}
 		declared := sbom.Rebased(plan.repo, p.Platform, p.Digest, cf.Created.Time, base, from, opts.Version)
-		po, err := sbomAndScan(ctx, org, declared, nil, p, work, ro.NoScan)
+		po, err := sbomAndScan(ctx, org, declared, nil, scan.Image{Repository: plan.repo, Digests: []string{art.Digest, p.Digest}}, p, work, ro.NoScan)
 		if err != nil {
 			return "", "", err
 		}

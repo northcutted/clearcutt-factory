@@ -148,7 +148,7 @@ func Build(ctx context.Context, opts Options, bo BuildOptions) error {
 	for _, p := range plats {
 		result.Platforms[p.Platform] = p.Digest
 		declared := sbom.Declared(m, l, p.Platform, p.Digest, opts.Version)
-		po, err := sbomAndScan(ctx, org, declared, m.Spec.VEXFiles, p, work, bo.NoScan)
+		po, err := sbomAndScan(ctx, org, declared, m.Spec.VEXFiles, scan.Image{Repository: repo, Digests: []string{res.Digest, p.Digest}}, p, work, bo.NoScan)
 		if err != nil {
 			return err
 		}
@@ -331,8 +331,10 @@ func runBuild(ctx context.Context, opts Options, org *manifest.Org, req builder.
 }
 
 // sbomAndScan writes the platform image's SBOM (the declared components,
-// merged into a syft scan when enabled) and its vulnerability report.
-func sbomAndScan(ctx context.Context, org *manifest.Org, declared *sbom.BOM, vex []string, p registry.PlatformImage, work string, noScan bool) (platformOutputs, error) {
+// merged into a syft scan when enabled) and its vulnerability report, with
+// the org's and the manifest's VEX statements applied as far as they are
+// for img (see scan.Grype).
+func sbomAndScan(ctx context.Context, org *manifest.Org, declared *sbom.BOM, vex []string, img scan.Image, p registry.PlatformImage, work string, noScan bool) (platformOutputs, error) {
 	po := platformOutputs{platform: p.Platform, digest: p.Digest}
 	slug := strings.ReplaceAll(p.Platform, "/", "-")
 
@@ -365,7 +367,7 @@ func sbomAndScan(ctx context.Context, org *manifest.Org, declared *sbom.BOM, vex
 		return po, nil
 	}
 	vex = append(slices.Clone(org.Vulnerabilities.VEXFiles), vex...)
-	if po.report, err = scan.Grype(ctx, po.sbomPath, vex); err != nil {
+	if po.report, err = scan.Grype(ctx, po.sbomPath, img, vex); err != nil {
 		return po, fmt.Errorf("%w (install grype, or set vulnerabilities.scanner: none / pass --no-scan)", err)
 	}
 	po.vulnPath = filepath.Join(work, "attestations", "vuln-"+slug+".predicate.json")

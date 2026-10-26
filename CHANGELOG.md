@@ -159,6 +159,27 @@ instructions a plain input gives, with each value unchanged.
 
 ### Added
 
+**VEX statements scoped to an image apply to that image only, and every
+statement a scan was given is recorded.** factory scanned with `grype
+sbom:FILE --vex DOC`, and given an SBOM grype ignores statements whose
+product is an image (`pkg:oci/…`) and applies statements whose product is
+a package to every image, so a suppression couldn't be limited to one
+image: a `not_affected` for the catalog service's Python applied to
+every image with that package, or, written as an image product, to none.
+Before each scan, factory now selects the statements whose product names
+the image being scanned (`pkg:oci/NAME@sha256:…` by the index's or the
+platform image's digest, `pkg:oci/NAME?repository_url=…` by repository, or
+`pkg:oci/NAME` by the repository's last path element), rewrites them as
+statements about the packages their `subcomponents` name (every package
+in the SBOM when they name none), writes that per-scan OpenVEX document,
+and passes it to grype; statements whose product is a package are passed
+as they are; statements about other images are left out. The vulnerability
+attestation records what was passed in `metadata.vex.statements`
+(`document`, `vulnerability`, `status`, `justification`, `product` as
+written, `scope` of `image` or `package`, and `packages`), and
+`metadata.vex.documents` names documents that aren't OpenVEX, passed
+unchanged. clearcutt-verify applies the same rule to its rescans.
+
 **A trust policy may name `estate` signers.** clearcutt-verify's trust
 policy gains a signer role `estate` (who signs estate report bundles). The
 same file is factory's `signing.trustPolicy`, and factory refused any role

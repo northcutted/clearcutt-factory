@@ -121,7 +121,7 @@ spec:
   labels: {org.opencontainers.image.source: https://github.com/acme/images}
   user: "65532"
   entrypoint: [/bin/bash]
-  vex: [vex/triaged.openvex.json] # OpenVEX statements applied to scans
+  vex: [vex/triaged.openvex.json] # OpenVEX statements applied to scans (for this image, or a package anywhere)
   test:                          # smoke test, run in every platform image before pushing
     command: [/usr/local/bin/kubectl, version, --client]   # must exit 0
     # http: {port: 8080, path: /healthz}   # or: start the image, expect a non-error answer
@@ -440,7 +440,7 @@ found by walking up from the manifest (or `--org`). See
 | `signing` | `keyless` (Sigstore OIDC), `key` (file or any cosign KMS URI; `stackKey` signs stacks with a key of their own), or `none`; extra cosign args (a signing config for a private Sigstore, or for signing [without a transparency log](docs/adopting.md#who-signs-and-binding-signatures-to-your-repository)); who signs this repository's images (`verify`, bound to the workflow run's repository with `sourceRepository`) and its stacks (`stacks`), or a shared ClearCutt `trustPolicy` file ([adopting](docs/adopting.md#who-signs-and-binding-signatures-to-your-repository)) |
 | `sbom` | Whether to add a syft scan to the declared SBOM |
 | `extends` | A shared org profile to build on, and who may sign it ([below](#one-profile-for-every-repository)) |
-| `vulnerabilities` | Scanner and the `failOn` severity gate, optionally `onlyFixed`; `vex` documents applied to every scan |
+| `vulnerabilities` | Scanner and the `failOn` severity gate, optionally `onlyFixed`; `vex` documents applied to every scan: a statement whose product is an image (`pkg:oci/…`, by digest, `repository_url`, or bare name) applies to that image only, one whose product is a package wherever the package is ([below](#what-gets-attached-to-a-pushed-image)) |
 | `policy` | Non-root, required labels, TOFU, allowed download hosts (tools, package files, and apk repositories) and registries (each entry covers itself and the paths below it, by whole segment: `ghcr.io/acme` covers `ghcr.io/acme/app`, not `ghcr.io/acme-evil/app`), signed stacks, and `requireOfflineBuildTools` (`from: build` scripts run with no network) |
 | `mirrors` | URL prefix rewrites for every download (`from: https://snapshot.debian.org/`, `to: https://artifactory.acme/debian-snapshot/`); checksums still pin the content |
 
@@ -523,13 +523,30 @@ it names the first differing layer and the files that differ.
 | Signature | index and each platform image | cosign (`sign --recursive`) |
 | Recipe (`…/recipe/v1`) | index | Containerfile, effective manifest, lock, staged context files, BuildKit digest, epoch, platforms, digests |
 | SBOM (CycloneDX) | each platform image | syft scan merged with components declared by the lock (purls, hashes, download URLs, verification method) |
-| Vulnerabilities (`cosign …/vuln/v1`) | each platform image | grype results with VEX applied |
+| Vulnerabilities (`cosign …/vuln/v1`) | each platform image | grype results with VEX applied; `metadata.vex` lists every statement the scan was given |
 | Rebase record (`…/rebase/v1`) | index of a rebased image (instead of a recipe) | the image that was rebased, each platform's old base, the new base; enough to repeat the rebase |
 | Reproduction (`…/reproduction/v1`) | index, once reproduced (`verify --image --attest`) | how (`recipe-rebuild` or `rebase-repeat`), the digest it gave, the recipe or rebase record it started from, factory and BuildKit versions, the run and machine, when |
 | SLSA provenance | index | from the CI platform (see [`images.yml`](.github/workflows/images.yml), and [`fleet.yml`](.github/workflows/fleet.yml) for rebased images) |
 
 Unsigned copies of all of these are written to `out/<name>/attestations/`, and
 `out/<name>/result.json` summarizes the build for CI.
+
+**VEX statements are applied per image.** grype, scanning an SBOM, applies
+only statements whose product is a package, and applies them to every
+image; a statement whose product is an image (an OpenVEX `pkg:oci/…`
+product) it ignores. So before each scan, factory selects the statements
+whose product names the image being scanned (`pkg:oci/NAME@sha256:…` by the
+index's or the platform image's digest; `pkg:oci/NAME?repository_url=…` by
+the image's repository; `pkg:oci/NAME` by the repository's last path
+element), rewrites each as a statement about the packages its
+`subcomponents` name (every package in the SBOM when it names none), and
+passes grype that document; statements whose product is a package are
+passed as they are. A statement about another image never reaches the
+scan. The vulnerability attestation's `metadata.vex.statements` lists every
+statement passed (`document`, `vulnerability`, `status`, `justification`,
+`product` as written, `scope`: `image` or `package`, and `packages`), so a
+suppression is visible there, never silent; `metadata.vex.documents` lists
+documents that aren't OpenVEX, passed to grype unchanged.
 
 **Tags move last.** `build --push` and `rebase --push` push the image by
 digest, sign it, and attach every attestation above before any tag moves, so
