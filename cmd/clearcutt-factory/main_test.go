@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"os"
 	"strings"
 	"testing"
 )
@@ -42,6 +43,8 @@ func TestUsageErrors(t *testing.T) {
 		{[]string{"frobnicate"}, `unknown command "frobnicate"`},
 		{[]string{"stack", "pull"}, "stack takes the subcommand push"},
 		{[]string{"render", "extra"}, "unexpected arguments: extra"},
+		{[]string{"affected", "image.yaml"}, "affected needs --changed FILE"},
+		{[]string{"affected", "--changed", "-"}, "affected needs the manifests to choose from"},
 		{nil, ""},
 	} {
 		var out, errOut bytes.Buffer
@@ -64,6 +67,27 @@ func TestUsageErrors(t *testing.T) {
 		if out.Len() != 0 {
 			t.Errorf("%q: wrote to stdout: %s", c.args, out.String())
 		}
+	}
+}
+
+// TestAffectedTakesManifests: affected, unlike the other commands, takes
+// arguments after its flags: the manifests to choose from.
+func TestAffectedTakesManifests(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile("changed", nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll("a", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("a/image.yaml", []byte("apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Image\nmetadata: {name: a}\nspec: {base: cgr.dev/chainguard/wolfi-base:latest}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GITHUB_OUTPUT", "")
+	var out, errOut bytes.Buffer
+	if err := run(context.Background(), []string{"affected", "--changed", "changed", "a/image.yaml"}, &out, &errOut); err != nil || out.Len() != 0 {
+		t.Errorf("affected: %v, stdout %q, stderr %q", err, out.String(), errOut.String())
 	}
 }
 

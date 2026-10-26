@@ -33,6 +33,8 @@ type Manifest struct {
 
 	// Path is the absolute path of the top-level manifest file.
 	Path string `yaml:"-" json:"-"`
+	// Chain is Path and every file it extends, nearest first.
+	Chain []string `yaml:"-" json:"-"`
 	// Stack is the loaded stack of an App (set by ApplyOrg).
 	Stack *Stack `yaml:"-" json:"-"`
 	// StackFrom is set when spec.stack names a registry artifact: the
@@ -270,6 +272,7 @@ func loadChain(path string, seen []string) (*Manifest, error) {
 	for _, v := range m.Spec.VEX {
 		m.Spec.VEXFiles = append(m.Spec.VEXFiles, filepath.Join(dir, v))
 	}
+	m.Chain = []string{path}
 	if m.Extends == "" {
 		return m, nil
 	}
@@ -281,6 +284,7 @@ func loadChain(path string, seen []string) (*Manifest, error) {
 		return nil, fmt.Errorf("%s: extends a %s; a %s can only extend a %s", path, parent.Kind, m.Kind, m.Kind)
 	}
 	merged := merge(parent, m)
+	merged.Chain = append([]string{path}, parent.Chain...)
 	return merged, nil
 }
 

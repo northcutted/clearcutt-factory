@@ -159,6 +159,21 @@ instructions a plain input gives, with each value unchanged.
 
 ### Added
 
+**`clearcutt-factory affected`: which manifests a change touches.**
+`clearcutt-factory affected --changed FILE MANIFEST…` reads `git diff
+--name-status` (or `--name-only`, with or without `-z`) output and prints
+the manifests the changed files affect, one per line, writing
+`manifests=` (a JSON array, `[]` for none) to `$GITHUB_OUTPUT`. A manifest
+owns the files under its directory (its lock and Containerfile among
+them), the files it extends, its `vex:` documents, its `files:` sources
+and an app's source directory wherever they are, and, for an app, its
+stack file and the manifests (and what they extend) of the stack's build
+and run images; a `factory.org.yaml` is owned by every manifest below it.
+A changed file no manifest owns (a shared profile, the trust policy or
+VEX documents a profile names, a workflow, a README) affects every
+manifest, since nothing says it doesn't; a deleted one affects none. A
+rename counts as its old path deleted and its new one changed.
+
 **The bot's pull requests can merge by themselves: `auto-merge`.**
 `fleet.yml` and `update-locks.yml` take an `auto-merge` input naming the
 kinds of pull request to turn GitHub auto-merge on for (a merge commit),

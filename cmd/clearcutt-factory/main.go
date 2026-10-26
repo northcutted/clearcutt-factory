@@ -53,6 +53,11 @@ Usage:
   clearcutt-factory rebase  [-f app.yaml] [--update-lock] [--no-test] [same flags]
       Rebase the app's published image onto its stack's run image and smoke-test
       it; --update-lock then pins the lock to that base.
+  clearcutt-factory affected --changed FILE MANIFEST…
+      Print which of the manifests the changed files affect (FILE: git diff
+      --name-only or --name-status output; - for stdin), and write manifests=
+      to $GITHUB_OUTPUT, for a pull request that builds only what it changed.
+      A changed file no manifest owns affects every manifest.
   clearcutt-factory roles   [-f image.yaml] [--dir .]
       Print what the stacks under --dir make of the image, one per line: build
       (a stack's spec.build names its manifest) and/or run (spec.run); nothing
@@ -220,6 +225,20 @@ var commands = []command{
 		fs.StringVar(&io.ExtendsKey, "extends-key", "", "the public key that signs the shared profile instead of an identity")
 		return func(ctx context.Context) error { return factory.Init(ctx, *opts, io) }
 	}},
+	{"affected", func(fs *flag.FlagSet, opts *factory.Options) func(context.Context) error {
+		var ao factory.AffectedOptions
+		fs.StringVar(&ao.Changed, "changed", "", "a file listing the changed paths (git diff --name-only or --name-status output; - for stdin)")
+		return func(ctx context.Context) error {
+			if ao.Changed == "" {
+				return usageError{errors.New("affected needs --changed FILE")}
+			}
+			ao.Manifests = fs.Args()
+			if len(ao.Manifests) == 0 {
+				return usageError{errors.New("affected needs the manifests to choose from")}
+			}
+			return factory.Affected(ctx, *opts, ao)
+		}
+	}},
 	{"roles", func(fs *flag.FlagSet, opts *factory.Options) func(context.Context) error {
 		var ro factory.RolesOptions
 		fs.StringVar(&ro.Dir, "dir", ".", "where to look for stacks (every kind Stack file below it)")
@@ -335,8 +354,12 @@ func (l *listFlag) Set(v string) error {
 	return nil
 }
 
+// takesArgs lists the commands that take arguments after their flags.
+var takesArgs = map[string]bool{"affected": true}
+
 // parse parses args into fs. A flag that doesn't exist, or a bad value, is
-// a usage error; -h is flag.ErrHelp.
+// a usage error, as are arguments after the flags, for a command that
+// takes none; -h is flag.ErrHelp.
 func parse(fs *flag.FlagSet, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -344,7 +367,7 @@ func parse(fs *flag.FlagSet, args []string) error {
 		}
 		return usageError{err}
 	}
-	if fs.NArg() > 0 {
+	if fs.NArg() > 0 && !takesArgs[fs.Name()] {
 		return usageError{fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))}
 	}
 	// Without -f, use app.yaml when there is no image.yaml.
