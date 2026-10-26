@@ -7,19 +7,19 @@
 # (moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea):
 #   buildctl build --frontend dockerfile.v0 --local context=. --local dockerfile=. \
 #     --opt platform=linux/amd64,linux/arm64 \
-#     --opt build-arg:SOURCE_DATE_EPOCH=1791504000 \
+#     --opt build-arg:SOURCE_DATE_EPOCH=1792886400 \
 #     --output type=oci,dest=image.tar,rewrite-timestamp=true,$ANNOTATIONS
 # from a context staged with `clearcutt-factory render --context-dir`, where
 # $ANNOTATIONS (comma-separated) records the base for `clearcutt-factory rebase`:
 #   annotation-manifest[linux/amd64].org.opencontainers.image.base.name=cgr.dev/chainguard/static:latest
-#   annotation-manifest[linux/amd64].org.opencontainers.image.base.digest=sha256:a40219f3b0c2719e4e4220310e80a2230a4b95881644292c130e3a8e8287fc6c
+#   annotation-manifest[linux/amd64].org.opencontainers.image.base.digest=sha256:60d9b68a12ac3d1b359a63b0186ae3e09d362ba47e5a182fcc398769d8417530
 #   annotation-manifest[linux/arm64].org.opencontainers.image.base.name=cgr.dev/chainguard/static:latest
-#   annotation-manifest[linux/arm64].org.opencontainers.image.base.digest=sha256:daed076c904e5dc26f5ff87d77aa4cea8b7ca76e906b561915dafe5b086377dc
+#   annotation-manifest[linux/arm64].org.opencontainers.image.base.digest=sha256:ffdfb250a2cd14d6fea5e334fb97a0b5ad92634c3e2506aa7d92ec89f818a2a1
 
 ARG TARGETARCH
 
 # ---- build: stack go ----
-FROM --platform=$BUILDPLATFORM golang:1@sha256:e432b43af23a9328d56a7c499be0476810aa344acbcf65fc7c455d4ff5a40602 AS build
+FROM --platform=$BUILDPLATFORM golang:1@sha256:f20d83a83e18dbd2a4714b8ffd4b30b287b6243962dd75608e86abcc63ba4efc AS build
 # never shipped; root so the steps can write /out, /src, and the caches
 USER 0
 ARG TARGETOS TARGETARCH SOURCE_DATE_EPOCH
@@ -39,7 +39,7 @@ GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -buildid=" 
 FACTORY_EOF
 
 # ---- app ----
-FROM cgr.dev/chainguard/static:latest@sha256:fe55470f22d3259488d9d3739168d8f04da67755f0b69382bc26eda4a7d3d327
+FROM cgr.dev/chainguard/static:latest@sha256:c12f0107f8afb0bbc1b0eff96ff8675e85a10c6083d039b777c51fef5c27420f
 COPY --link --from=build /out/ /app/
 ENV PORT="8080"
 LABEL "org.opencontainers.image.description"="A tiny HTTP service built on the go stack"
