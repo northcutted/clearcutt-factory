@@ -19,7 +19,11 @@
 # enterprise.
 #
 # Output: published, what the run newly published (see the published job).
-# notify.yml takes it to wake the repositories that build on those images.
+# notify.yml takes it to wake the repositories that build on those images;
+# each image carries its roles (build, run, both, or none: what the stacks
+# in this repository make of it), so notify.yml can announce a build image
+# as clearcutt.build-image-published and a run image as
+# clearcutt.run-image-published.
 #
 # A job that calls this workflow ends, and its outputs arrive, only when
 # every job here has, the second-runner reproduction included. To start
@@ -90,7 +94,7 @@ on:
         required: false
     outputs:
       published:
-        description: 'What the run newly published, a JSON array of {manifest, kind (image or app), image (repository@digest), repository, digest, tags}; [] on pull requests and when nothing changed'
+        description: 'What the run newly published, a JSON array of {manifest, kind (image or app), image (repository@digest), repository, digest, tags, roles (an image: build and/or run, as the stacks here name its manifest; [] when none does)}; [] on pull requests and when nothing changed'
         value: ${{ jobs.published.outputs.published || '[]' }}
 permissions:
   contents: read
@@ -324,14 +328,28 @@ jobs:
             echo "::error::no result.json for $DIGEST"
             exit 1
           fi
+          # What the stacks in this repository make of an image: build (a
+          # stack's spec.build names its manifest), run (spec.run), both, or
+          # nothing. notify.yml announces a build image as
+          # clearcutt.build-image-published, so apps rebuild on it in
+          # minutes. A stack that doesn't load costs the roles, not the
+          # publish: the image is announced as a run image, as before.
+          roles='[]'
+          if [ "${kind:-image}" = image ]; then
+            if ! roles=$(clearcutt-factory roles -f "$MANIFEST" 2> "$RUNNER_TEMP/roles.err" | jq -R -s -c 'split("\n") | map(select(. != ""))'); then
+              echo "::warning::could not tell what the stacks make of $MANIFEST; announcing it as a run image: $(tr '\n' ' ' < "$RUNNER_TEMP/roles.err")"
+              roles='[]'
+            fi
+          fi
           mkdir -p "$RUNNER_TEMP/published"
-          jq -c --arg manifest "$MANIFEST" --arg kind "${kind:-image}" --arg image "$IMAGE" --arg repository "$REPOSITORY" --arg digest "$DIGEST" \
+          jq -c --arg manifest "$MANIFEST" --arg kind "${kind:-image}" --arg image "$IMAGE" --arg repository "$REPOSITORY" --arg digest "$DIGEST" --argjson roles "$roles" \
             '(.rebased // "") as $rebased
              | {manifest: $manifest, kind: $kind,
                 image: (if $rebased != "" then $rebased else $image end),
                 repository: $repository,
                 digest: (if $rebased != "" then ($rebased | split("@")[1]) else $digest end),
-                tags: (.tags // [])}' "$result" \
+                tags: (.tags // []),
+                roles: $roles}' "$result" \
             | tee "$RUNNER_TEMP/published/published.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ !cancelled() && steps.record.outcome == 'success' }}
@@ -341,8 +359,8 @@ jobs:
 
   # The workflow's published output: every image and app this run newly
   # published, as a JSON array of {manifest, kind, image, repository, digest,
-  # tags}. Images that were already published (only their tags moved) are
-  # not in it.
+  # tags, roles}. Images that were already published (only their tags moved)
+  # are not in it.
   published:
     needs: [manifests, build]
     if: ${{ !cancelled() && needs.manifests.outputs.publish == 'true' && needs.build.result != 'skipped' }}

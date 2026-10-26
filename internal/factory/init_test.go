@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -62,9 +63,10 @@ func TestInit(t *testing.T) {
 		"reproduce: false",
 		"published: ${{ needs.images.outputs.published }}",
 		// Dependents of a platform repository are woken by its notify job.
-		"types: [clearcutt.run-image-published, clearcutt.stack-published, clearcutt.profile-published]",
+		"types: [clearcutt.run-image-published, clearcutt.build-image-published, clearcutt.stack-published, clearcutt.profile-published]",
 		"github.event.action == 'clearcutt.profile-published'",
 		"github.event.action == 'clearcutt.run-image-published'",
+		"github.event.action == 'clearcutt.build-image-published'",
 		"github.event.action == 'clearcutt.stack-published'",
 	} {
 		if !strings.Contains(string(wf), want) {
@@ -211,5 +213,66 @@ func TestInitNotifiesBeforeReproducing(t *testing.T) {
 		if needs := wf.Jobs[job].Needs; needs != "images" {
 			t.Errorf("%s needs %v, want images alone", job, needs)
 		}
+	}
+}
+
+// TestInitAnswersBuildImagePublished: the workflow answers a platform's
+// clearcutt.build-image-published (and stack-published, and the daily
+// run) with update-locks.yml's stack update, the rebuild pull request,
+// and everything else with the full update.
+func TestInitAnswersBuildImagePublished(t *testing.T) {
+	dir := t.TempDir()
+	var out bytes.Buffer
+	if err := Init(context.Background(), Options{Version: "v1.2.3", Stdout: &out, Stderr: &out}, InitOptions{Dir: dir, Repo: "acme/platform"}); err != nil {
+		t.Fatal(err)
+	}
+	var wf struct {
+		On struct {
+			RepositoryDispatch struct {
+				Types []string `yaml:"types"`
+			} `yaml:"repository_dispatch"`
+			Schedule []struct {
+				Cron string `yaml:"cron"`
+			} `yaml:"schedule"`
+		} `yaml:"on"`
+		Jobs map[string]struct {
+			If   string            `yaml:"if"`
+			With map[string]string `yaml:"with"`
+		} `yaml:"jobs"`
+	}
+	b, err := os.ReadFile(filepath.Join(dir, ".github/workflows/clearcutt-factory.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(b, &wf); err != nil {
+		t.Fatal(err)
+	}
+	const build, stack = "clearcutt.build-image-published", "clearcutt.stack-published"
+	if !slices.Contains(wf.On.RepositoryDispatch.Types, build) {
+		t.Errorf("repository_dispatch types %v lack %s", wf.On.RepositoryDispatch.Types, build)
+	}
+	daily := ""
+	for _, s := range wf.On.Schedule {
+		if strings.HasPrefix(s.Cron, "41 ") {
+			daily = s.Cron
+		}
+	}
+	if daily == "" {
+		t.Fatalf("no daily schedule in %v", wf.On.Schedule)
+	}
+	job := wf.Jobs["update-locks"]
+	for _, want := range []string{build, stack, "github.event_name == 'schedule'"} {
+		if !strings.Contains(job.If, want) {
+			t.Errorf("update-locks runs on %q, which lacks %s", job.If, want)
+		}
+	}
+	update := job.With["update"]
+	for _, want := range []string{build, stack, daily, "'stack'", "'all'"} {
+		if !strings.Contains(update, want) {
+			t.Errorf("update-locks passes update: %q, which lacks %s", update, want)
+		}
+	}
+	if fleet := wf.Jobs["fleet"].If; strings.Contains(fleet, build) {
+		t.Errorf("fleet runs on %s too (%q); update-locks proposes the rebuild", build, fleet)
 	}
 }

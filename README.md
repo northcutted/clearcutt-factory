@@ -293,6 +293,9 @@ image was built. If the rebase is refused, the command fails and the lock
 moves anyway, for the rebuild that is the fix: to the new run image, and to
 the stack's newest build image (a registry stack to its newest version), so
 the app links against the libraries the new run image has.
+`clearcutt-factory lock --update-stack` moves the lock the same way on
+demand, keeping every other pin: what `update-locks.yml` proposes when the
+platform publishes a build image.
 
 Before rebasing, `clearcutt-factory` checks each platform (`--check` stops
 there and changes nothing, so it doesn't take `--update-lock`):
@@ -373,17 +376,27 @@ The intended split, and the automation that keeps it current:
   As soon as the platform repository publishes (before the second-runner
   reproduction finishes), its `notify` job sends
   `repository_dispatch` to the owner's repositories with the topic
-  `clearcutt-app`: `clearcutt.run-image-published` for each new image,
-  `clearcutt.stack-published` for each new stack, and
-  `clearcutt.profile-published` for a new shared profile, with
-  `{image, digest, …}`. `init`'s workflow answers the first with the fleet
-  job and the others with the lock-update job, so a patched run image reaches every app in minutes,
-  not at its next daily run. The payload is only a hint: the receivers
-  re-resolve tags from the registry and verify signatures, as they do on
-  their schedules ([adopting](docs/adopting.md#waking-the-apps-when-the-platform-publishes)).
+  `clearcutt-app`: `clearcutt.run-image-published` for each new run image
+  (or image no stack names), `clearcutt.build-image-published` for each new
+  build image (what the stacks in the platform repository make of it:
+  `clearcutt-factory roles`), `clearcutt.stack-published` for each new
+  stack, and `clearcutt.profile-published` for a new shared profile, with
+  `{image, digest, roles, …}`. `init`'s workflow answers the first with the
+  fleet job and the others with the lock-update job, so a patched run image
+  reaches every app in minutes, not at its next daily run. The payload is
+  only a hint: the receivers re-resolve tags from the registry and verify
+  signatures, as they do on their schedules
+  ([adopting](docs/adopting.md#waking-the-apps-when-the-platform-publishes)).
 * **Toolchain and stack changes** rebuild rather than rebase (the app's own
-  layer changes): the weekly job's pull request per app does it, tested by
-  each app's CI.
+  layer changes). `update-locks.yml` with `update: stack` runs
+  `clearcutt-factory lock --update-stack` on each app, which moves its lock
+  to the stack's newest version and build and run images and nothing else,
+  and opens a pull request titled "Rebuild … on the newest build image" (or
+  stack), tested by the app's CI. `init`'s workflow runs it when the
+  platform announces a build image or stack, and daily, so a toolchain fix
+  (a CVE in Go's standard library, say) reaches the apps in minutes, or a
+  day without the dispatch, not at the weekly update, whose pull request
+  carries everything else too.
 * **Distribution upgrades** (Debian 13 to 14, say) are refused by rebase on
   purpose. Publish a new run image and stack version beside the old ones;
   apps move with a one-line change and a rebuild.
@@ -617,7 +630,8 @@ the signed recipe alone and attests the match; runs on any other ref, such
 as a `workflow_dispatch` from a branch, publish nothing. `fleet.yml` and
 `update-locks.yml` push and open pull requests only there too. Its `published` output lists
 what the run newly published (a JSON array of `{manifest, kind, image,
-repository, digest, tags}`). A calling job gets it only when the whole
+repository, digest, tags, roles}`; `roles` is what the stacks make of an
+image: `build`, `run`, both, or none). A calling job gets it only when the whole
 workflow is done, reproduction included, so `init`'s workflow calls it with
 `reproduce: false`, then again with that call's `published` output, which
 only reproduces (signed by `images.yml`, as before). `notify` and `fleet`

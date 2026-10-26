@@ -159,6 +159,39 @@ instructions a plain input gives, with each value unchanged.
 
 ### Added
 
+**A rebuilt build image reaches the apps in minutes:
+`clearcutt.build-image-published`.** `notify.yml` announced every published
+image as `clearcutt.run-image-published`, which apps answer by rebasing,
+so a toolchain fix (a CVE in Go's standard library, say, in the build
+image) reached them only at their weekly lock update. `images.yml`'s
+`published` output now records each image's `roles`: `build` when a stack
+in the repository names its manifest as `spec.build`, `run` when one names
+it as `spec.run`, both, or none (the new `clearcutt-factory roles -f
+image.yaml [--dir .]` prints them and writes `roles=` to `$GITHUB_OUTPUT`;
+there is no new field to fill in). `notify.yml` sends
+`clearcutt.build-image-published` for a build image and
+`clearcutt.run-image-published` for a run image or an image no stack names
+(an image that is both gets both), with `roles` in the payload: `{image,
+repository, digest, tags, roles, source}`. A build image that no stack
+names as a run image is no longer announced as one. `update-locks.yml`
+takes `update: stack`: for each app (images are skipped) it runs the new
+`clearcutt-factory lock --update-stack`, which moves the lock to the
+stack's newest version and its build and run images and nothing else (the
+path a refused rebase already takes), and opens a pull request on
+`factory/rebuild/<dir>` titled "Rebuild <dir> on the newest build image"
+(or "… stack", "… build and run images", by what moved). The weekly
+`update: all` pull request is unchanged, carries the same images with
+everything else, and merging either lets the other close at its next run.
+`init`'s workflow answers `build-image-published` and `stack-published`
+with `update: stack` (`stack-published` used to get the full update), and
+runs it daily beside the fleet, so a missed dispatch costs a day, not a
+week. Existing callers: add `clearcutt.build-image-published` to the
+`repository_dispatch` types and pass `update` as
+[docs/adopting.md](docs/adopting.md#waking-the-apps-when-the-platform-publishes)
+shows; a platform repository's `images.yml` call needs no change.
+`fleet.yml` is unchanged: a refused rebase still opens its "Rebuild … on
+the newest run and build images" pull request.
+
 **VEX statements scoped to an image apply to that image only, and every
 statement a scan was given is recorded.** factory scanned with `grype
 sbom:FILE --vex DOC`, and given an SBOM grype ignores statements whose

@@ -186,9 +186,18 @@ To have it happen minutes after the platform publishes:
 ```
 platform: images.yml ─┬▶ notify.yml ─repository_dispatch─▶ each repository with the topic clearcutt-app
                       └▶ images.yml with published: reproduce on a second runner, meanwhile
-  clearcutt.run-image-published ─▶ fleet.yml: rebase onto the new run image, then the pin pull request
-  clearcutt.stack-published     ─▶ update-locks.yml: a pull request moving the lock to the new stack
+  clearcutt.run-image-published   ─▶ fleet.yml: rebase onto the new run image, then the pin pull request
+  clearcutt.build-image-published ─▶ update-locks.yml (update: stack): a pull request rebuilding the app
+  clearcutt.stack-published       ─▶   on the stack's newest build (and run) image, "Rebuild … on the newest build image"
+  clearcutt.profile-published     ─▶ update-locks.yml (update: all): a pull request moving the lock to the new profile
 ```
+
+A published image is a build image or a run image by what the platform
+repository's stacks make of it (`spec.build` or `spec.run` naming its
+manifest; `clearcutt-factory roles -f image.yaml` prints it, and
+`images.yml` records it as `roles` in its `published` output); an image no
+stack names is announced as a run image, and one that is both gets both
+events.
 
 1. **Tag the app repositories** with the topic `clearcutt-app` (the
    repository's About settings). `notify.yml`'s `topic` and `owner` inputs
@@ -200,8 +209,9 @@ platform: images.yml ─┬▶ notify.yml ─repository_dispatch─▶ each repo
    `GITHUB_TOKEN` can't dispatch to other repositories.
 3. **That's all for images and apps:** `init`'s workflow has the `notify`
    job (sending, for the images `images.yml` reports in its `published`
-   output) and answers both events (receiving). The payload,
-   `{image, repository, digest, tags, source}`, is advisory: the jobs it
+   output) and answers every event (receiving). The payload,
+   `{image, repository, digest, tags, roles, source}` (`roles` for images:
+   `build` and/or `run`), is advisory: the jobs it
    starts re-resolve tags from the registry and verify signatures as they do
    on their schedules, so a stale or forged dispatch starts a run that
    changes nothing. That is also why `notify` needn't wait for the
@@ -234,6 +244,30 @@ platform: images.yml ─┬▶ notify.yml ─repository_dispatch─▶ each repo
     permissions: {contents: read}
     with:
       published: ${{ needs.images.outputs.published }}
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+```
+
+   On the receiving side, a workflow of your own answers
+   `clearcutt.build-image-published` and `clearcutt.stack-published` with
+   `update-locks.yml`'s stack update, which proposes the rebuild and nothing
+   else, and runs it daily too, so a dispatch that was missed costs a day
+   rather than a week (the weekly `update: all` pull request carries the
+   same images with everything else; merging either lets the other close at
+   its next run):
+
+```yaml
+on:
+  repository_dispatch:
+    types: [clearcutt.run-image-published, clearcutt.build-image-published, clearcutt.stack-published, clearcutt.profile-published]
+jobs:
+  update-locks:
+    if: github.event_name == 'schedule' || github.event.action == 'clearcutt.build-image-published' || github.event.action == 'clearcutt.stack-published' || github.event.action == 'clearcutt.profile-published'
+    uses: northcutted/clearcutt-factory/.github/workflows/update-locks.yml@v0.3.0
+    permissions: {contents: write, pull-requests: write}
+    with:
+      update: ${{ (github.event.schedule == '41 5 * * *' || github.event.action == 'clearcutt.build-image-published' || github.event.action == 'clearcutt.stack-published') && 'stack' || 'all' }}
     secrets:
       CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
       CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
@@ -623,7 +657,7 @@ output start right after the images are published
 | Workflow | Inputs | Secrets | Caller permissions |
 |---|---|---|---|
 | `images.yml` | `manifests` (globs, default `**/image.yaml **/app.yaml`), `registry`, `provenance`, `reproduce` (default `true`), `published` (only reproduce this) | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write`, `attestations: write` |
-| `update-locks.yml` | `manifests`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: write`, `pull-requests: write` |
+| `update-locks.yml` | `manifests`, `update` (`all`, default, or `stack`: apps only, the stack and its build and run images, as a rebuild pull request), `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: write`, `pull-requests: write` |
 | `fleet.yml` | `apps` (default `**/app.yaml`), `registry`, `provenance`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: write`, `pull-requests: write`, `packages: write`, `id-token: write`, `attestations: write` |
 | `notify.yml` | `published` (required), `topic` (default `clearcutt-app`), `owner`, `repositories`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: read` |
 

@@ -14,7 +14,9 @@
 # that also moves its stack's build image (building it is the fix) and its
 # job fails. If a newer publish takes the app's tag during the rebase, the
 # tag stays there and the result is pushed by digest only; the next run
-# rebases the new image.
+# rebases the new image. A rebuilt build image (a toolchain fix) is not a
+# rebase: update-locks.yml with update: stack proposes the rebuild, on
+# clearcutt.build-image-published and daily.
 #
 # The pull requests are opened as a GitHub App, CLEARCUTT_BOT_TOKEN, or the
 # workflow's GITHUB_TOKEN, as update-locks.yml describes. Other repositories

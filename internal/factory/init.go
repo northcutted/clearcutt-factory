@@ -327,8 +327,9 @@ const workflowTemplate = `# Builds, publishes, and maintains this repository's i
 #
 # Across repositories: a platform repository's notify job wakes the
 # repositories with the topic clearcutt-app when it publishes run images,
-# stacks, or a shared org profile; theirs then rebase onto the new run image,
-# or propose the new stack or profile.
+# build images, stacks, or a shared org profile; theirs then rebase onto the
+# new run image, propose a rebuild on the new build image or stack, or
+# propose the new profile.
 name: clearcutt-factory
 on:
   push:
@@ -336,12 +337,12 @@ on:
   pull_request:
   schedule:
     - cron: "23 6 * * 1" # weekly: re-resolve every input, one pull request per manifest
-    - cron: "41 5 * * *" # daily: rebase apps onto the newest build of their run image
+    - cron: "41 5 * * *" # daily: rebase apps onto the newest build of their run image, and propose a rebuild on their stack's newest build image
   workflow_dispatch:
   # From a platform repository's notify job. The payload is only a hint: the
   # jobs re-resolve everything from the registry and verify it.
   repository_dispatch:
-    types: [clearcutt.run-image-published, clearcutt.stack-published, clearcutt.profile-published]
+    types: [clearcutt.run-image-published, clearcutt.build-image-published, clearcutt.stack-published, clearcutt.profile-published]
 permissions:
   contents: read
 jobs:
@@ -369,10 +370,17 @@ jobs:
       REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
       REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
 
+  # Weekly, on a new shared profile, and by hand: every input, one pull
+  # request per manifest. Daily, and when the platform publishes a build
+  # image or a stack: only each app's stack and its build and run images, as
+  # a pull request to rebuild the app on them, so a toolchain fix reaches
+  # the apps in minutes (the daily run catches a dispatch that was missed).
   update-locks:
-    if: github.event.schedule == '23 6 * * 1' || github.event_name == 'workflow_dispatch' || github.event.action == 'clearcutt.stack-published' || github.event.action == 'clearcutt.profile-published'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.action == 'clearcutt.build-image-published' || github.event.action == 'clearcutt.stack-published' || github.event.action == 'clearcutt.profile-published'
     uses: northcutted/clearcutt-factory/.github/workflows/update-locks.yml@{{ref}}
     permissions: {contents: write, pull-requests: write}
+    with:
+      update: ${{ (github.event.schedule == '41 5 * * *' || github.event.action == 'clearcutt.build-image-published' || github.event.action == 'clearcutt.stack-published') && 'stack' || 'all' }}
     secrets:
       CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
       CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
