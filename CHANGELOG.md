@@ -119,6 +119,14 @@ but `image` and `stack`; it now loads a policy with `estate` signers and
 leaves them out of what it checks images and stacks against. A role it
 doesn't know is still refused.
 
+**Every flag has a help string, and a bad command line prints the usage
+once.** `clearcutt-factory <command> -h` lists the command's flags with what
+each does. A flag that doesn't exist, a stray argument, or an unknown
+command printed the usage twice (once from the flag package, once from
+main); it now prints what was wrong and the usage, once, and exits 2. The
+`cmd/` package and `internal/diff` (which explains why a reproduction
+differs) have tests.
+
 **CI publishes with the real cosign.** Every cosign interaction in the
 tests was a fake. A `cosign` job now publishes a two-platform image to a
 `registry:3` service through factory's publish path, signed with a key and

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"runtime/debug"
@@ -74,194 +75,233 @@ Common flags:
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	if err := run(ctx, os.Args[1:]); err != nil {
-		var ue usageError
-		if errors.As(err, &ue) {
-			fmt.Fprint(os.Stderr, usage)
-			os.Exit(2)
-		}
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
-	}
+	os.Exit(exit(run(ctx, os.Args[1:], os.Stdout, os.Stderr), os.Stderr))
 }
 
-type usageError struct{}
+// exit reports err on stderr and returns the exit code: 2 with the usage
+// (once) for a usage error, 1 for any other.
+func exit(err error, stderr io.Writer) int {
+	if err == nil {
+		return 0
+	}
+	var ue usageError
+	if errors.As(err, &ue) {
+		if ue.err != nil {
+			fmt.Fprintln(stderr, "error:", ue.err)
+			fmt.Fprintln(stderr)
+		}
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	fmt.Fprintln(stderr, "error:", err)
+	return 1
+}
 
-func (usageError) Error() string { return "usage" }
+// usageError is a command line the program can't act on; err says what
+// was wrong with it, if anything beyond its shape.
+type usageError struct{ err error }
 
-func run(ctx context.Context, args []string) error {
+func (u usageError) Error() string {
+	if u.err != nil {
+		return u.err.Error()
+	}
+	return "usage"
+}
+
+// command is one subcommand: define adds its flags to fs (every flag with
+// a help string, shown by -h) and returns what runs it.
+type command struct {
+	name   string
+	define func(fs *flag.FlagSet, opts *factory.Options) func(ctx context.Context) error
+}
+
+// commands lists the subcommands that take flags; version and help are
+// handled in run.
+var commands = []command{
+	{"lock", func(fs *flag.FlagSet, opts *factory.Options) func(context.Context) error {
+		var lo factory.LockOptions
+		fs.BoolVar(&lo.Update, "update", false, "re-resolve every input instead of keeping unchanged pins")
+		fs.BoolVar(&lo.UpdateBase, "update-base", false, "re-resolve only the base (an app's run image) and what depends on it")
+		fs.Var((*listFlag)(&lo.UpdatePackages), "update-package", "re-resolve only these distro packages (NAME[,NAME…], repeatable) and what their new versions need")
+		return func(ctx context.Context) error { return factory.Lock(ctx, *opts, lo) }
+	}},
+	{"render", func(fs *flag.FlagSet, opts *factory.Options) func(context.Context) error {
+		check := fs.Bool("check", false, "fail if the Containerfile is out of date instead of writing it")
+		ctxDir := fs.String("context-dir", "", "also stage a self-contained build context in this directory")
+		return func(ctx context.Context) error { return factory.Render(ctx, *opts, *check, *ctxDir) }
+	}},
+	{"build", func(fs *flag.FlagSet, opts *factory.Options) func(context.Context) error {
+		var bo factory.BuildOptions
+		fs.BoolVar(&bo.Push, "push", false, "push the image by digest, sign and attest it, then move its tags")
+		fs.StringVar(&bo.OutDir, "out", "out", "directory for the build's outputs (result.json, attestations, logs)")
+		fs.BoolVar(&bo.NoScan, "no-scan", false, "skip the syft SBOM scan and the grype vulnerability scan (refused with --push under a shared profile)")
+		fs.BoolVar(&bo.NoSign, "no-sign", false, "push without signing or attesting")
+		fs.BoolVar(&bo.NoCache, "no-cache", false, "build without BuildKit's cache")
+		fs.BoolVar(&bo.NoTest, "no-test", false, "skip the smoke test")
+		fs.BoolVar(&bo.ForceTags, "force-tags", false, "move the tags even to an image older than the one they hold (a rollback), and never rebase first")
+		return func(ctx context.Context) error { return factory.Build(ctx, *opts, bo) }
+	}},
+	{"verify", func(fs *flag.FlagSet, opts *factory.Options) func(context.Context) error {
+		var vo factory.VerifyOptions
+		var key, identity, identityRegexp, issuer, workflowRepo string
+		var noTlog bool
+		fs.BoolVar(&noTlog, "insecure-ignore-tlog", false, "with --key: accept a signature without a transparency log entry")
+		fs.StringVar(&vo.Image, "image", "", "a published image (repo@sha256:…) to rebuild from its signed recipe, or whose rebase to repeat")
+		fs.StringVar(&vo.Digest, "digest", "", "the digest a rebuild from source must give (sha256:…)")
+		fs.StringVar(&vo.OutDir, "out", "out", "directory for the rebuild's outputs")
+		fs.StringVar(&key, "key", "", "verify the recipe with this public key (a file or KMS URI) instead of the org profile's signers")
+		fs.StringVar(&identity, "certificate-identity", "", "verify the recipe against this exact certificate identity")
+		fs.StringVar(&identityRegexp, "certificate-identity-regexp", "", "verify the recipe against a certificate identity matching this regexp")
+		fs.StringVar(&issuer, "certificate-oidc-issuer", "", "the OIDC issuer of the certificate identity")
+		fs.StringVar(&workflowRepo, "certificate-github-workflow-repository", "", "require the signing run to be in this GitHub repository (OWNER/REPO)")
+		fs.BoolVar(&vo.Attest, "attest", false, "sign and attach a reproduction attestation to --image when it reproduces")
+		return func(ctx context.Context) error {
+			// With an image and no explicit manifest, trust the signed recipe.
+			vo.FromSource = vo.Image == "" || flagSet(fs, "f")
+			if noTlog && key == "" {
+				return errors.New("--insecure-ignore-tlog applies to --key: a keyless certificate is only valid with a transparency log entry")
+			}
+			if key != "" {
+				vo.VerifyArgs = append(vo.VerifyArgs, "--key", key)
+			}
+			if noTlog {
+				vo.VerifyArgs = append(vo.VerifyArgs, "--insecure-ignore-tlog=true")
+			}
+			if identity != "" {
+				vo.VerifyArgs = append(vo.VerifyArgs, "--certificate-identity", identity)
+			}
+			if identityRegexp != "" {
+				vo.VerifyArgs = append(vo.VerifyArgs, "--certificate-identity-regexp", identityRegexp)
+			}
+			if issuer != "" {
+				vo.VerifyArgs = append(vo.VerifyArgs, "--certificate-oidc-issuer", issuer)
+			}
+			if workflowRepo != "" {
+				vo.VerifyArgs = append(vo.VerifyArgs, "--certificate-github-workflow-repository", workflowRepo)
+			}
+			return factory.Verify(ctx, *opts, vo)
+		}
+	}},
+	{"rebase", func(fs *flag.FlagSet, opts *factory.Options) func(context.Context) error {
+		var ro factory.RebaseOptions
+		fs.StringVar(&ro.Image, "image", "", "the image to rebase (repo[:tag|@sha256:…]); default: the app manifest's published image")
+		fs.StringVar(&ro.Onto, "onto", "", "the new base; default: the base the image names, resolved again")
+		fs.StringVar(&ro.From, "from", "", "the old base, for an image without base annotations")
+		fs.BoolVar(&ro.Check, "check", false, "only report whether the rebase is safe; change nothing")
+		fs.BoolVar(&ro.Force, "force", false, "rebase despite compatibility breaks (never despite violations)")
+		fs.BoolVar(&ro.Push, "push", false, "push the result by digest, sign and attest it, then move the tag")
+		fs.Func("tag", "also move this tag to the result (repeatable)", func(s string) error { ro.Tags = append(ro.Tags, s); return nil })
+		fs.BoolVar(&ro.ForceTags, "force-tags", false, "move the tags even if another publish took them meanwhile, or they hold a newer image")
+		fs.StringVar(&ro.OutDir, "out", "out", "directory for the rebase's outputs")
+		fs.BoolVar(&ro.NoScan, "no-scan", false, "skip the SBOM and vulnerability scans (refused with --push under a shared profile)")
+		fs.BoolVar(&ro.NoSign, "no-sign", false, "push without signing or attesting")
+		fs.BoolVar(&ro.NoTest, "no-test", false, "skip the app's smoke test")
+		fs.BoolVar(&ro.UpdateLock, "update-lock", false, "with -f: then pin the app's lock to the base the image is on")
+		return func(ctx context.Context) error { return factory.Rebase(ctx, *opts, ro) }
+	}},
+	{"init", func(fs *flag.FlagSet, opts *factory.Options) func(context.Context) error {
+		var io factory.InitOptions
+		fs.StringVar(&io.Dir, "dir", ".", "the repository to set up")
+		fs.StringVar(&io.Repo, "repo", "", "the GitHub repository (OWNER/NAME); default: the origin remote")
+		fs.StringVar(&io.Registry, "registry", "", "where images go; default: ghcr.io/<owner>")
+		fs.StringVar(&io.Branch, "default-branch", "", "the branch that publishes (the signer's sourceRef); default: the origin remote's, else main")
+		fs.BoolVar(&io.Force, "force", false, "overwrite files that exist")
+		fs.StringVar(&io.Extends, "extends", "", "a shared org profile (published with profile push) for the org profile to extend")
+		fs.StringVar(&io.ExtendsIdentity, "extends-identity", "", "the certificate identity that signs the shared profile")
+		fs.StringVar(&io.ExtendsIssuer, "extends-issuer", "", "its OIDC issuer (default: GitHub Actions)")
+		fs.StringVar(&io.ExtendsKey, "extends-key", "", "the public key that signs the shared profile instead of an identity")
+		return func(ctx context.Context) error { return factory.Init(ctx, *opts, io) }
+	}},
+	{"stack push", func(fs *flag.FlagSet, opts *factory.Options) func(context.Context) error {
+		var so factory.StackPushOptions
+		fs.StringVar(&so.Ref, "ref", "", "where to publish the stack (REGISTRY/REPOSITORY:TAG)")
+		fs.StringVar(&so.Key, "key", "", "sign with this key (a file or KMS URI) instead of the org profile's settings")
+		fs.BoolVar(&so.NoSign, "no-sign", false, "publish without signing")
+		return func(ctx context.Context) error {
+			file := "stack.yaml"
+			if flagSet(fs, "f") {
+				file = opts.ManifestPath
+			}
+			if so.Ref == "" {
+				return errors.New("stack push needs --ref REGISTRY/REPOSITORY:TAG")
+			}
+			return factory.StackPushWith(ctx, *opts, file, so)
+		}
+	}},
+	{"profile push", func(fs *flag.FlagSet, opts *factory.Options) func(context.Context) error {
+		var po factory.ProfilePushOptions
+		fs.StringVar(&po.Ref, "ref", "", "where to publish the profile (REGISTRY/REPOSITORY:TAG)")
+		fs.StringVar(&po.Key, "key", "", "sign with this key (a file or KMS URI) instead of the org profile's settings")
+		fs.BoolVar(&po.NoSign, "no-sign", false, "publish without signing")
+		return func(ctx context.Context) error {
+			file := "factory.org.yaml"
+			if flagSet(fs, "f") {
+				file = opts.ManifestPath
+			}
+			if po.Ref == "" {
+				return errors.New("profile push needs --ref REGISTRY/REPOSITORY:TAG")
+			}
+			return factory.ProfilePush(ctx, *opts, file, po)
+		}
+	}},
+}
+
+// flagsFor returns the flag set of cmd, with the common flags and the
+// command's own (every one with a help string), and what runs it; nil for
+// a command that doesn't exist.
+func flagsFor(cmd string, stdout, stderr io.Writer) (*flag.FlagSet, *factory.Options, func(context.Context) error) {
+	for _, c := range commands {
+		if c.name != cmd {
+			continue
+		}
+		fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
+		// The flag package would print the error and the usage itself; run
+		// reports both once, through exit.
+		fs.SetOutput(io.Discard)
+		fs.Usage = func() {}
+		opts := &factory.Options{Version: versionString(), Stdout: stdout, Stderr: stderr}
+		fs.StringVar(&opts.ManifestPath, "f", "image.yaml", "the manifest, kind Image or App (app.yaml when there is no image.yaml)")
+		fs.StringVar(&opts.OrgPath, "org", "", "the org profile (default: the nearest factory.org.yaml above the manifest, or above the current directory for rebase and verify --image)")
+		fs.BoolVar(&opts.Verbose, "v", false, "stream BuildKit output")
+		fs.BoolVar(&opts.Reverify, "reverify", false, "check a shared profile's signature even if this machine checked it in the last 24 hours")
+		return fs, opts, c.define(fs, opts)
+	}
+	return nil, nil, nil
+}
+
+func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return usageError{}
 	}
 	cmd, args := args[0], args[1:]
-	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
-	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
-	opts := factory.Options{Version: versionString(), Stdout: os.Stdout, Stderr: os.Stderr}
-	fs.StringVar(&opts.ManifestPath, "f", "image.yaml", "")
-	fs.StringVar(&opts.OrgPath, "org", "", "")
-	fs.BoolVar(&opts.Verbose, "v", false, "")
-	fs.BoolVar(&opts.Reverify, "reverify", false, "")
-
 	switch cmd {
-	case "lock":
-		var lo factory.LockOptions
-		fs.BoolVar(&lo.Update, "update", false, "")
-		fs.BoolVar(&lo.UpdateBase, "update-base", false, "")
-		fs.Var((*listFlag)(&lo.UpdatePackages), "update-package", "")
-		if err := parse(fs, args); err != nil {
-			return err
-		}
-		return factory.Lock(ctx, opts, lo)
-
-	case "render":
-		check := fs.Bool("check", false, "")
-		ctxDir := fs.String("context-dir", "", "")
-		if err := parse(fs, args); err != nil {
-			return err
-		}
-		return factory.Render(ctx, opts, *check, *ctxDir)
-
-	case "build":
-		var bo factory.BuildOptions
-		fs.BoolVar(&bo.Push, "push", false, "")
-		fs.StringVar(&bo.OutDir, "out", "out", "")
-		fs.BoolVar(&bo.NoScan, "no-scan", false, "")
-		fs.BoolVar(&bo.NoSign, "no-sign", false, "")
-		fs.BoolVar(&bo.NoCache, "no-cache", false, "")
-		fs.BoolVar(&bo.NoTest, "no-test", false, "")
-		fs.BoolVar(&bo.ForceTags, "force-tags", false, "")
-		if err := parse(fs, args); err != nil {
-			return err
-		}
-		return factory.Build(ctx, opts, bo)
-
-	case "verify":
-		var vo factory.VerifyOptions
-		var key, identity, identityRegexp, issuer, workflowRepo string
-		var noTlog bool
-		fs.BoolVar(&noTlog, "insecure-ignore-tlog", false, "")
-		fs.StringVar(&vo.Image, "image", "", "")
-		fs.StringVar(&vo.Digest, "digest", "", "")
-		fs.StringVar(&vo.OutDir, "out", "out", "")
-		fs.StringVar(&key, "key", "", "")
-		fs.StringVar(&identity, "certificate-identity", "", "")
-		fs.StringVar(&identityRegexp, "certificate-identity-regexp", "", "")
-		fs.StringVar(&issuer, "certificate-oidc-issuer", "", "")
-		fs.StringVar(&workflowRepo, "certificate-github-workflow-repository", "", "")
-		fs.BoolVar(&vo.Attest, "attest", false, "")
-		if err := parse(fs, args); err != nil {
-			return err
-		}
-		// With an image and no explicit manifest, trust the signed recipe.
-		vo.FromSource = vo.Image == "" || flagSet(fs, "f")
-		if noTlog && key == "" {
-			return errors.New("--insecure-ignore-tlog applies to --key: a keyless certificate is only valid with a transparency log entry")
-		}
-		if key != "" {
-			vo.VerifyArgs = append(vo.VerifyArgs, "--key", key)
-		}
-		if noTlog {
-			vo.VerifyArgs = append(vo.VerifyArgs, "--insecure-ignore-tlog=true")
-		}
-		if identity != "" {
-			vo.VerifyArgs = append(vo.VerifyArgs, "--certificate-identity", identity)
-		}
-		if identityRegexp != "" {
-			vo.VerifyArgs = append(vo.VerifyArgs, "--certificate-identity-regexp", identityRegexp)
-		}
-		if issuer != "" {
-			vo.VerifyArgs = append(vo.VerifyArgs, "--certificate-oidc-issuer", issuer)
-		}
-		if workflowRepo != "" {
-			vo.VerifyArgs = append(vo.VerifyArgs, "--certificate-github-workflow-repository", workflowRepo)
-		}
-		return factory.Verify(ctx, opts, vo)
-
-	case "rebase":
-		var ro factory.RebaseOptions
-		fs.StringVar(&ro.Image, "image", "", "")
-		fs.StringVar(&ro.Onto, "onto", "", "")
-		fs.StringVar(&ro.From, "from", "", "")
-		fs.BoolVar(&ro.Check, "check", false, "")
-		fs.BoolVar(&ro.Force, "force", false, "")
-		fs.BoolVar(&ro.Push, "push", false, "")
-		fs.Func("tag", "", func(s string) error { ro.Tags = append(ro.Tags, s); return nil })
-		fs.BoolVar(&ro.ForceTags, "force-tags", false, "")
-		fs.StringVar(&ro.OutDir, "out", "out", "")
-		fs.BoolVar(&ro.NoScan, "no-scan", false, "")
-		fs.BoolVar(&ro.NoSign, "no-sign", false, "")
-		fs.BoolVar(&ro.NoTest, "no-test", false, "")
-		fs.BoolVar(&ro.UpdateLock, "update-lock", false, "")
-		if err := parse(fs, args); err != nil {
-			return err
-		}
-		return factory.Rebase(ctx, opts, ro)
-
-	case "init":
-		var io factory.InitOptions
-		fs.StringVar(&io.Dir, "dir", ".", "")
-		fs.StringVar(&io.Repo, "repo", "", "")
-		fs.StringVar(&io.Registry, "registry", "", "")
-		fs.StringVar(&io.Branch, "default-branch", "", "")
-		fs.BoolVar(&io.Force, "force", false, "")
-		fs.StringVar(&io.Extends, "extends", "", "")
-		fs.StringVar(&io.ExtendsIdentity, "extends-identity", "", "")
-		fs.StringVar(&io.ExtendsIssuer, "extends-issuer", "", "")
-		fs.StringVar(&io.ExtendsKey, "extends-key", "", "")
-		if err := parse(fs, args); err != nil {
-			return err
-		}
-		return factory.Init(ctx, opts, io)
-
-	case "stack":
-		if len(args) == 0 || args[0] != "push" {
-			return usageError{}
-		}
-		var so factory.StackPushOptions
-		fs.StringVar(&so.Ref, "ref", "", "")
-		fs.StringVar(&so.Key, "key", "", "")
-		fs.BoolVar(&so.NoSign, "no-sign", false, "")
-		if err := parse(fs, args[1:]); err != nil {
-			return err
-		}
-		file := "stack.yaml"
-		if flagSet(fs, "f") {
-			file = opts.ManifestPath
-		}
-		if so.Ref == "" {
-			return errors.New("stack push needs --ref REGISTRY/REPOSITORY:TAG")
-		}
-		return factory.StackPushWith(ctx, opts, file, so)
-
-	case "profile":
-		if len(args) == 0 || args[0] != "push" {
-			return usageError{}
-		}
-		var po factory.ProfilePushOptions
-		fs.StringVar(&po.Ref, "ref", "", "")
-		fs.StringVar(&po.Key, "key", "", "")
-		fs.BoolVar(&po.NoSign, "no-sign", false, "")
-		if err := parse(fs, args[1:]); err != nil {
-			return err
-		}
-		file := "factory.org.yaml"
-		if flagSet(fs, "f") {
-			file = opts.ManifestPath
-		}
-		if po.Ref == "" {
-			return errors.New("profile push needs --ref REGISTRY/REPOSITORY:TAG")
-		}
-		return factory.ProfilePush(ctx, opts, file, po)
-
 	case "version", "--version":
-		fmt.Println(versionString())
+		fmt.Fprintln(stdout, versionString())
 		return nil
-
 	case "help", "-h", "--help":
-		fmt.Print(usage)
+		fmt.Fprint(stdout, usage)
 		return nil
+	case "stack", "profile":
+		if len(args) == 0 || args[0] != "push" {
+			return usageError{fmt.Errorf("%s takes the subcommand push", cmd)}
+		}
+		cmd, args = cmd+" push", args[1:]
 	}
-	return usageError{}
+	fs, _, exec := flagsFor(cmd, stdout, stderr)
+	if fs == nil {
+		return usageError{fmt.Errorf("unknown command %q", cmd)}
+	}
+	if err := parse(fs, args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprint(stdout, usage)
+			fmt.Fprintf(stdout, "\nFlags of %s:\n", cmd)
+			fs.SetOutput(stdout)
+			fs.PrintDefaults()
+			return nil
+		}
+		return err
+	}
+	return exec(ctx)
 }
 
 // listFlag collects a repeatable flag whose values may also be
@@ -282,15 +322,17 @@ func (l *listFlag) Set(v string) error {
 	return nil
 }
 
+// parse parses args into fs. A flag that doesn't exist, or a bad value, is
+// a usage error; -h is flag.ErrHelp.
 func parse(fs *flag.FlagSet, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			os.Exit(0)
+			return err
 		}
-		return usageError{}
+		return usageError{err}
 	}
 	if fs.NArg() > 0 {
-		return fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
+		return usageError{fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))}
 	}
 	// Without -f, use app.yaml when there is no image.yaml.
 	if f := fs.Lookup("f"); f != nil && !flagSet(fs, "f") {
