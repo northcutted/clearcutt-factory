@@ -60,18 +60,34 @@ func TestContentDigest(t *testing.T) {
 			t.Errorf("%s edited: IsEdited %v %v: %v", name, edited, missing, err)
 		}
 	}
-	// No digest at all: an older lock, or one whose line was removed.
-	lines := strings.Split(string(written), "\n")
-	var kept []string
-	for _, ln := range lines {
-		if !strings.HasPrefix(ln, "contentDigest:") {
-			kept = append(kept, ln)
+	// Without the lines that start with these prefixes.
+	without := func(prefixes ...string) string {
+		var kept []string
+		for _, ln := range strings.Split(string(written), "\n") {
+			drop := false
+			for _, p := range prefixes {
+				drop = drop || strings.HasPrefix(ln, p)
+			}
+			if !drop {
+				kept = append(kept, ln)
+			}
 		}
+		return strings.Join(kept, "\n")
 	}
-	if err := os.WriteFile(path, []byte(strings.Join(kept, "\n")), 0o644); err != nil {
+	// The digest removed, the generator kept: every release that writes
+	// a generator writes a digest, so this lock was edited.
+	if err := os.WriteFile(path, []byte(without("contentDigest:")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got, err := Read(path)
+	if edited, missing := IsEdited(err); !edited || missing || got == nil || !strings.Contains(err.Error(), "edited by hand") {
+		t.Errorf("digest removed: %v (lock %v)", err, got != nil)
+	}
+	// Neither: an older release's lock.
+	if err := os.WriteFile(path, []byte(without("contentDigest:", "generator:")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err = Read(path)
 	if edited, missing := IsEdited(err); !edited || !missing || got == nil || !strings.Contains(err.Error(), "has no contentDigest") {
 		t.Errorf("no digest: %v (lock %v)", err, got != nil)
 	}

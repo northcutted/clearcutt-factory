@@ -233,7 +233,7 @@ type NewerError struct {
 }
 
 func (e *NewerError) Error() string {
-	msg := fmt.Sprintf("%s was written by %s, newer than this clearcutt-factory (%s); upgrade clearcutt-factory, or re-lock with this version", filepath.Base(e.Path), e.Generator, e.Version)
+	msg := fmt.Sprintf("%s was written by %s, newer than this clearcutt-factory (%s); upgrade clearcutt-factory to that release or later (to lock with this one instead, delete the lock and run clearcutt-factory lock, which resolves every input again)", filepath.Base(e.Path), e.Generator, e.Version)
 	if e.Cause != nil {
 		msg += fmt.Sprintf(" (%v)", e.Cause)
 	}
@@ -277,9 +277,13 @@ func ReadFor(path, version string) (*Lock, error) {
 		return nil, fmt.Errorf("%s: expected apiVersion %q and kind %q", path, manifest.APIVersion, Kind)
 	}
 	switch {
-	case l.ContentDigest == "":
+	case l.ContentDigest == "" && l.Generator == "":
+		// Written before locks had either: an older release's.
 		return &l, &EditedError{Path: path, Missing: true}
 	case l.ContentDigest != l.contentDigest():
+		// Also a lock that names its generator and has no digest: every
+		// release that writes one writes the other, so the digest was
+		// removed.
 		return &l, &EditedError{Path: path}
 	}
 	return &l, nil
@@ -376,6 +380,11 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 		return clean(err)
 	}
 	if err := tmp.Chmod(perm); err != nil {
+		return clean(err)
+	}
+	// On disk before the rename makes it the file, so a crash can't
+	// leave the name on an empty file.
+	if err := tmp.Sync(); err != nil {
 		return clean(err)
 	}
 	if err := tmp.Close(); err != nil {

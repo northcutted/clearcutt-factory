@@ -106,6 +106,13 @@ func TestHelp(t *testing.T) {
 	if strings.Count(s, "Usage:") != 1 || errOut.Len() != 0 {
 		t.Errorf("build -h: usage %d times, stderr %q", strings.Count(s, "Usage:"), errOut.String())
 	}
+	// stack push and profile push read another file than a manifest.
+	for cmd, want := range map[string]string{"stack": "the stack file (default \"stack.yaml\")", "profile": "the org profile to publish (default \"factory.org.yaml\")"} {
+		out.Reset()
+		if err := run(context.Background(), []string{cmd, "push", "-h"}, &out, &errOut); err != nil || !strings.Contains(out.String(), want) || strings.Contains(out.String()[strings.Index(out.String(), "Flags of"):], "kind Image or App") {
+			t.Errorf("%s push -h: %v\n%s", cmd, err, out.String())
+		}
+	}
 	out.Reset()
 	if err := run(context.Background(), []string{"help"}, &out, &errOut); err != nil || !strings.Contains(out.String(), "Usage:") {
 		t.Errorf("help: %v\n%s", err, out.String())

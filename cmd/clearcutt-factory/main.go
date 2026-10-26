@@ -249,6 +249,7 @@ var commands = []command{
 		fs.StringVar(&so.Ref, "ref", "", "where to publish the stack (REGISTRY/REPOSITORY:TAG)")
 		fs.StringVar(&so.Key, "key", "", "sign with this key (a file or KMS URI) instead of the org profile's settings")
 		fs.BoolVar(&so.NoSign, "no-sign", false, "publish without signing")
+		describeFile(fs, "the stack file", "stack.yaml")
 		return func(ctx context.Context) error {
 			file := "stack.yaml"
 			if flagSet(fs, "f") {
@@ -265,6 +266,7 @@ var commands = []command{
 		fs.StringVar(&po.Ref, "ref", "", "where to publish the profile (REGISTRY/REPOSITORY:TAG)")
 		fs.StringVar(&po.Key, "key", "", "sign with this key (a file or KMS URI) instead of the org profile's settings")
 		fs.BoolVar(&po.NoSign, "no-sign", false, "publish without signing")
+		describeFile(fs, "the org profile to publish", "factory.org.yaml")
 		return func(ctx context.Context) error {
 			file := "factory.org.yaml"
 			if flagSet(fs, "f") {
@@ -276,6 +278,14 @@ var commands = []command{
 			return factory.ProfilePush(ctx, *opts, file, po)
 		}
 	}},
+}
+
+// describeFile sets what -h says of -f, for a command whose -f is not a
+// manifest: its help string and the default the command uses.
+func describeFile(fs *flag.FlagSet, usage, def string) {
+	if f := fs.Lookup("f"); f != nil {
+		f.Usage, f.DefValue = usage, def
+	}
 }
 
 // flagsFor returns the flag set of cmd, with the common flags and the

@@ -351,6 +351,26 @@ func TestRebaseApp(t *testing.T) {
 
 	opts := Options{ManifestPath: filepath.Join(dir, "hello", "app.yaml"), Version: "test", Stdout: &out, Stderr: &out}
 	ro := RebaseOptions{OutDir: filepath.Join(dir, "out"), Push: true, NoScan: true, UpdateLock: true}
+
+	// --update-lock on a lock edited by hand is refused before anything
+	// is pushed.
+	lockPath := filepath.Join(dir, "hello", "app.lock.yaml")
+	intact, _ := os.ReadFile(lockPath)
+	if err := os.WriteFile(lockPath, []byte(strings.Replace(string(intact), "sourceDateEpoch: 1700000000", "sourceDateEpoch: 1700000001", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := registry.Digest(ctx, host+"/apps/hello:latest")
+	out.Reset()
+	if err := Rebase(ctx, opts, ro); err == nil || !strings.Contains(err.Error(), "--update-lock: app.lock.yaml was edited by hand") || strings.Contains(out.String(), "pushed") {
+		t.Fatalf("rebase --update-lock of an edited lock: %v\n%s", err, out.String())
+	}
+	if after, _ := registry.Digest(ctx, host+"/apps/hello:latest"); after != before {
+		t.Fatal("the tag moved")
+	}
+	if err := os.WriteFile(lockPath, intact, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
 	if err := Rebase(ctx, opts, ro); err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}

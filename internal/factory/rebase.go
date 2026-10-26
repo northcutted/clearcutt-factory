@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"strings"
 
@@ -96,6 +97,16 @@ func Rebase(ctx context.Context, opts Options, ro RebaseOptions) error {
 		tag = m.Metadata.Tags[0]
 	}
 	ro.Image = m.Metadata.Ref + ":" + tag
+	if ro.UpdateLock {
+		// The lock it will update must be one lock can update (intact, or
+		// an older release's without a digest, and not a newer release's),
+		// before anything is pushed.
+		if _, err := lock.ReadFor(m.LockPath(), opts.Version); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			if edited, missing := lock.IsEdited(err); !edited || !missing {
+				return fmt.Errorf("--update-lock: %w", err)
+			}
+		}
+	}
 	if ro.Onto == "" {
 		ro.Onto = m.Spec.Base
 	} else if ro.UpdateLock && ro.Onto != m.Spec.Base {

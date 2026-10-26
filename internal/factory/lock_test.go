@@ -111,10 +111,10 @@ func TestEditedLockRefused(t *testing.T) {
 		t.Errorf("--update should show the edit undone:\n%s", w.out.String())
 	}
 
-	// No content digest: an older lock.
+	// No content digest or generator: an older release's lock.
 	var kept []string
 	for _, ln := range strings.Split(good, "\n") {
-		if !strings.HasPrefix(ln, "contentDigest:") {
+		if !strings.HasPrefix(ln, "contentDigest:") && !strings.HasPrefix(ln, "generator:") {
 			kept = append(kept, ln)
 		}
 	}
