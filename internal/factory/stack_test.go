@@ -267,6 +267,23 @@ func TestStackPinsBuildImage(t *testing.T) {
 	if s := out.String(); !strings.Contains(s, "build image: "+host+"/platform/build-go:1@"+buildOne+" → "+host+"/platform/build-go:1@"+buildTwo) || !strings.Contains(s, "stack "+host+"/stacks/go:1: ") {
 		t.Errorf("lock --update should list the build image and the stack:\n%s", s)
 	}
+	// The tag moves again, and no stack names the new image yet: the app
+	// follows the stack's digest, not the tag, under --update and
+	// --update-stack alike.
+	push(t, host+"/platform/build-go:1", image("unpublished stack"))
+	buildThree := digestOf(host + "/platform/build-go:1")
+	if buildThree == buildTwo {
+		t.Fatal("the tag didn't move")
+	}
+	for _, lo := range []LockOptions{{Update: true}, {UpdateStack: true}} {
+		out.Reset()
+		if err := Lock(ctx, opts, lo); err != nil {
+			t.Fatal(err)
+		}
+		if l, _ = lock.Read(filepath.Join(dir, "team/svc/app.lock.yaml")); l.App.Build.Digest != buildTwo || l.App.StackArtifact.Digest != stackTwo {
+			t.Errorf("%+v after the tag moved without a new stack: build %+v, stack %+v\n%s", lo, l.App.Build, l.App.StackArtifact, out.String())
+		}
+	}
 
 	// A stack published by an earlier release names the build image by
 	// tag alone: it loads, and the lock pins what the tag holds.
@@ -277,8 +294,8 @@ func TestStackPinsBuildImage(t *testing.T) {
 	if err := Lock(ctx, opts, LockOptions{Update: true}); err != nil {
 		t.Fatalf("lock --update on a stack by tag: %v\n%s", err, out.String())
 	}
-	if l, _ = lock.Read(filepath.Join(dir, "team/svc/app.lock.yaml")); l.App.Build.Ref != host+"/platform/build-go:1" || l.App.Build.Digest != buildTwo {
-		t.Errorf("old stack: build %+v", l.App.Build)
+	if l, _ = lock.Read(filepath.Join(dir, "team/svc/app.lock.yaml")); l.App.Build.Ref != host+"/platform/build-go:1" || l.App.Build.Digest != buildThree {
+		t.Errorf("old stack: build %+v, want what the tag holds, %s", l.App.Build, buildThree)
 	}
 
 	// A build image not published yet can't be pinned: the push says so.
