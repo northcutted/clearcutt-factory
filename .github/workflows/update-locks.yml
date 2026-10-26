@@ -14,7 +14,8 @@
 # run images", by what moved): the toolchain fast path. Call it so when a
 # platform repository's notify.yml sends clearcutt.build-image-published
 # or clearcutt.stack-published, and daily to catch a missed dispatch, as
-# init's workflow does. The weekly pull request (update: all, branch
+# init's workflow does. When only the run image moved, it proposes
+# nothing: fleet.yml follows run images. The weekly pull request (update: all, branch
 # factory/update/<dir>) carries the same images and everything else;
 # merging either lets the other close itself at its next run.
 #
@@ -49,7 +50,7 @@
 #       uses: northcutted/clearcutt-factory/.github/workflows/update-locks.yml@v0.3.0
 #       permissions: {contents: write, pull-requests: write}
 #       with:
-#         update: ${{ github.event.action == 'clearcutt.build-image-published' && 'stack' || 'all' }}
+#         update: ${{ (github.event.schedule == '41 5 * * *' || github.event.action == 'clearcutt.build-image-published' || github.event.action == 'clearcutt.stack-published') && 'stack' || 'all' }}
 #       secrets:
 #         CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
 #         CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
@@ -270,6 +271,14 @@ jobs:
             if grep -q '^  build image[ :]' "$RUNNER_TEMP/lock.out"; then build=true; fi
             if grep -q '^  base[ :]' "$RUNNER_TEMP/lock.out"; then run=true; fi
             if grep -q '^  stack[ :]' "$RUNNER_TEMP/lock.out"; then stack=true; fi
+            if $run && ! $build && ! $stack; then
+              # The run image alone: fleet.yml's to follow, by rebasing and
+              # pinning (or its own rebuild pull request when the rebase is
+              # refused). A rebuild here would duplicate that pull request;
+              # an open one of ours closes.
+              echo "only the run image moved: fleet.yml rebases onto it; no rebuild proposed"
+              git checkout -q -- "${paths[@]}"
+            fi
             if $build && $run; then on="build and run images"
             elif $build; then on="build image"
             elif $stack; then on="stack"

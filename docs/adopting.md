@@ -98,8 +98,11 @@ Push, then in the repository (or organization) settings:
    and use the App or token from step 1, since `GITHUB_TOKEN`'s pull
    requests get no CI and would never merge. When auto-merge can't be
    turned on, the job warns and leaves the pull request open; it never
-   fails for that. A reasonable start: `pin` and `rebuild` on the fleet,
-   `update` and `rebuild` on the weekly job once you trust its gate.
+   fails for that. A pull request the job updates into a kind not listed
+   (the fleet's pin, refused at its next run, becomes a rebuild on the same
+   branch) has auto-merge turned off. A reasonable start: `pin` and
+   `rebuild` on the fleet, `update` and `rebuild` on the weekly job once
+   you trust its gate.
 
 On `main`, each changed image is pushed, signed keylessly, attested (SBOM,
 vulnerabilities, recipe, SLSA provenance), and rebuilt on a second runner from
@@ -248,6 +251,16 @@ manifest; `clearcutt-factory roles -f image.yaml` prints it, and
 stack names is announced as a run image, and one that is both gets both
 events.
 
+Which event moves an app to a rebuilt build image depends on how its stack
+names it. A stack published with `stack push` pins its build image by
+digest, so an app on it moves when the stack does: the
+`clearcutt.stack-published` that follows the platform's next `stack push`
+(push stacks after the images, as below), not the
+`clearcutt.build-image-published` before it, which finds the app's stack
+unchanged and proposes nothing. An app whose own stack file names the
+build image by reference (`build: ghcr.io/acme/build-go:1`) moves on
+`clearcutt.build-image-published` itself.
+
 1. **Tag the app repositories** with the topic `clearcutt-app` (the
    repository's About settings). `notify.yml`'s `topic` and `owner` inputs
    change the search, and `repositories` names dependents outright (topic
@@ -309,11 +322,15 @@ events.
 
 ```yaml
 on:
+  schedule:
+    - cron: "23 6 * * 1" # weekly: every input
+    - cron: "41 5 * * *" # daily: the stack and its images, in case a dispatch was missed
+  workflow_dispatch:
   repository_dispatch:
     types: [clearcutt.run-image-published, clearcutt.build-image-published, clearcutt.stack-published, clearcutt.profile-published]
 jobs:
   update-locks:
-    if: github.event_name == 'schedule' || github.event.action == 'clearcutt.build-image-published' || github.event.action == 'clearcutt.stack-published' || github.event.action == 'clearcutt.profile-published'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.action == 'clearcutt.build-image-published' || github.event.action == 'clearcutt.stack-published' || github.event.action == 'clearcutt.profile-published'
     uses: northcutted/clearcutt-factory/.github/workflows/update-locks.yml@v0.3.0
     permissions: {contents: write, pull-requests: write}
     with:
@@ -323,14 +340,17 @@ jobs:
       CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
 ```
 
-4. **Stacks** are pushed by a job of your own, so hand `notify.yml` what it
-   pushed (`stack push` writes `image`, `repository`, `digest`, and
-   `published` to `$GITHUB_OUTPUT`; `published` is `false` when the stack was
-   unchanged and only its tag moved):
+4. **Stacks** are pushed by a job of your own, after the images (a stack
+   pins its build image by the digest the tag holds when it is pushed, so
+   before the images job has published it would pin the old one), so hand
+   `notify.yml` what it pushed (`stack push` writes `image`, `repository`,
+   `digest`, and `published` to `$GITHUB_OUTPUT`; `published` is `false`
+   when the stack was unchanged and only its tag moved):
 
 ```yaml
   stacks:
-    if: github.event_name == 'push'
+    needs: images # the build images it pins are published
+    if: ${{ !cancelled() && needs.images.result != 'skipped' && github.event_name == 'push' }}
     runs-on: ubuntu-latest
     permissions: {contents: read, packages: write, id-token: write}
     outputs:

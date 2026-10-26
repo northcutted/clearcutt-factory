@@ -49,7 +49,7 @@ if ! grep -qx 'any=true' "$tmp/output"; then
   fail=1
 fi
 # Each line is a complete dispatch body.
-if ! jq -e 'has("event_type") and (.client_payload | has("image") and has("digest") and has("source"))' "$tmp/events" > /dev/null; then
+if ! jq -s -e 'length > 0 and all(has("event_type") and (.client_payload | has("image") and has("digest") and has("source")))' "$tmp/events" > /dev/null; then
   echo "FAIL: a dispatch body lacks a field"
   fail=1
 fi

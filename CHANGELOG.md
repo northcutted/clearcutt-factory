@@ -87,7 +87,9 @@ build image changes the stack's content, the next `stack push` publishes a
 new stack, and the apps' lock-update job takes it. The first push after
 upgrading publishes a new stack for the same reason. `stack push` needs
 the build image in the registry: push stacks after the images workflow
-has published (as `init`'s and the showcase's workflows do). The run image
+has published (`needs: images`, as the stacks job in
+[docs/adopting.md](docs/adopting.md#waking-the-apps-when-the-platform-publishes)
+does). The run image
 stays a tag: apps follow it by rebasing, and their locks pin what it
 held. Stacks published before, naming the build image by tag, still load,
 and an app's lock pins what the tag holds, as before. Build images given
@@ -100,10 +102,13 @@ lock now records `contentDigest`, the sha256 of the rest of the file, and
 `generator`, the clearcutt-factory that last wrote it. A lock whose digest
 doesn't match is refused by every command that reads it, including `lock`
 (nothing in it is reused; `lock --update` resolves every input again, and
-shows the edit as a change). A lock without a digest, written by an
-earlier release, is refused by `render`, `build`, `verify`, and `rebase`
-until `clearcutt-factory lock` rewrites it, which keeps its pins: run it
-once per manifest after upgrading (the examples are re-locked here). A
+shows the edit as a change) and `rebase --update-lock` (before it pushes
+anything); so is one that names its generator and has no digest, since
+every release that writes one writes the other. A lock with neither,
+written by an earlier release, is refused by `render`, `build`, and
+`verify` until `clearcutt-factory lock` rewrites it, which keeps its pins:
+run it once per manifest after upgrading (the examples are re-locked
+here). A
 lock a newer minor release wrote is refused with a message naming both
 versions, as is one this release can't decode when any newer release
 wrote it, instead of a `field … not found` error.
@@ -202,8 +207,14 @@ in the repository settings, branch protection with required status checks
 (without them a pull request is mergeable at once and GitHub refuses to
 auto-merge it, so nothing would gate the change), and an opener whose pull
 requests get CI (the App or `CLEARCUTT_BOT_TOKEN`; `GITHUB_TOKEN`'s never
-merge). When it can't be turned on, the job warns and leaves the pull
-request open; it never fails for that (`open-pr_test.sh`).
+merge). It is turned on with GitHub's `enablePullRequestAutoMerge`, which
+refuses a pull request that is mergeable already, never with `gh pr merge
+--auto`, which would merge such a pull request at once, before any CI.
+When it can't be turned on, the job warns and leaves the pull request
+open; it never fails for that. A pull request the job updates into a kind
+not listed (the fleet's pin becomes a rebuild on the same branch when the
+next rebase is refused) has auto-merge turned off, so it doesn't merge
+what nobody asked to merge by itself (`open-pr_test.sh`).
 
 **A rebuilt build image reaches the apps in minutes:
 `clearcutt.build-image-published`.** `notify.yml` announced every published
@@ -225,7 +236,13 @@ takes `update: stack`: for each app (images are skipped) it runs the new
 stack's newest version and its build and run images and nothing else (the
 path a refused rebase already takes), and opens a pull request on
 `factory/rebuild/<dir>` titled "Rebuild <dir> on the newest build image"
-(or "… stack", "… build and run images", by what moved). The weekly
+(or "… stack", "… build and run images", by what moved); when only the
+run image moved it proposes nothing, since the fleet follows run images.
+An app on a registry stack moves when the stack does: `stack push` pins
+the build image by digest, so the `stack-published` after the platform's
+next `stack push` moves it, and the `build-image-published` before it
+finds nothing to do; an app whose own stack file names the build image by
+reference moves on `build-image-published`. The weekly
 `update: all` pull request is unchanged, carries the same images with
 everything else, and merging either lets the other close at its next run.
 `init`'s workflow answers `build-image-published` and `stack-published`

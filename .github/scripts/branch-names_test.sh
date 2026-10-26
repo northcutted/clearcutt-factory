@@ -3,7 +3,8 @@
 # workflows have them, with open-pr.sh stubbed, and checks the branch, title,
 # and paths each manifest gets: valid branch names for manifests at the
 # repository root (#51), and only those manifests' own files; and that a
-# stack update (update: stack) gets its own branch, titled by what moved.
+# stack update (update: stack) gets its own branch, titled by what moved,
+# and proposes nothing when only the run image moved.
 #
 # Usage: .github/scripts/branch-names_test.sh (needs bash, git, and yq v4)
 set -euo pipefail
@@ -98,8 +99,15 @@ moved "  stack r/stacks/go:1: sha256:aa → sha256:bb" "  build image: r/build:1
 check update examples/hello-app/app.yaml "factory/rebuild/examples-hello-app|Rebuild examples/hello-app on the newest build image|examples/hello-app|rebuild"
 moved "  stack r/stacks/go:1: sha256:aa → sha256:bb"
 check update examples/hello-app/app.yaml "factory/rebuild/examples-hello-app|Rebuild examples/hello-app on the newest stack|examples/hello-app|rebuild"
+# Only the run image moved: fleet.yml's to follow. The lock is left as it
+# was, so open-pr.sh finds nothing to propose (and closes an open rebuild).
 moved "  base r/run:latest: sha256:aa → sha256:bb"
+echo "moved" >> "$repo/examples/hello-app/app.yaml"
 check update examples/hello-app/app.yaml "factory/rebuild/examples-hello-app|Rebuild examples/hello-app on the newest run image|examples/hello-app|rebuild"
+if ! git -C "$repo" diff --quiet -- examples/hello-app; then
+  echo "FAIL: only the run image moved, and the lock was proposed"
+  failures=$((failures + 1))
+fi
 moved "examples/hello-app/app.lock.yaml is up to date"
 check update examples/hello-app/app.yaml "factory/rebuild/examples-hello-app|Rebuild examples/hello-app on the newest stack images|examples/hello-app|rebuild"
 UPDATE=all
