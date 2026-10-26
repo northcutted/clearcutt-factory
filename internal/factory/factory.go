@@ -127,9 +127,12 @@ type LockOptions struct {
 	// UpdateBase re-resolves only the base (an app's run image) and what
 	// depends on it, e.g. after the published image was rebased.
 	UpdateBase bool
-	// UpdateStack is UpdateBase that also re-resolves an app's build image,
-	// for a rebuild on a new run image. To move a registry stack, load the
-	// manifest fresh.
+	// UpdateStack is UpdateBase that also re-resolves an app's stack (a
+	// registry stack to where its reference points now) and its build
+	// image, keeping every other pin: a rebuild on the stack's newest
+	// images, as the platform team rebuilt them (a toolchain fix, say).
+	// Lock loads the manifest with the stack fresh for it; lockManifest
+	// expects its caller to have.
 	UpdateStack bool
 	// BaseDigest pins the base to this digest instead of resolving its tag.
 	BaseDigest string
@@ -142,9 +145,17 @@ type LockOptions struct {
 // Lock resolves the manifest and writes the lockfile and Containerfile,
 // printing what changed.
 func Lock(ctx context.Context, opts Options, lo LockOptions) error {
-	m, org, err := load(ctx, opts, lo.Update)
+	if lo.UpdateStack && (lo.Update || lo.UpdateBase) {
+		return errors.New("--update-stack moves the stack and its images; it doesn't go with --update or --update-base")
+	}
+	// --update-stack moves a registry stack to its newest version, and
+	// keeps the shared profile's pin.
+	m, org, err := loadWith(ctx, opts, lo.Update || lo.UpdateStack, lo.Update)
 	if err != nil {
 		return err
+	}
+	if lo.UpdateStack && m.Kind != manifest.KindApp {
+		return fmt.Errorf("%s is a %s: --update-stack moves an app's stack and its images; --update-base moves an image's base", rel(m.Path), m.Kind)
 	}
 	return lockManifest(ctx, opts, m, org, lo)
 }

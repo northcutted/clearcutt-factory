@@ -26,9 +26,11 @@ Usage:
       Set up a repository: an org profile, an example image, and a GitHub
       Actions workflow that publishes, updates, and rebases with ClearCutt Factory.
       --extends makes the org profile extend a shared one, signed by that identity or key.
-  clearcutt-factory lock    [-f image.yaml] [--update | --update-base | --update-package NAME[,NAME…]…]
+  clearcutt-factory lock    [-f image.yaml] [--update | --update-base | --update-stack | --update-package NAME[,NAME…]…]
       Pin every input and write the lock and Containerfile. --update re-resolves
-      all of them; --update-base only the base; --update-package only the named
+      all of them; --update-base only the base; --update-stack an app's stack
+      (a registry stack to its newest version), build image, and run image, for
+      a rebuild on the platform's newest images; --update-package only the named
       distro packages (and what they now need), keeping every other package pin.
   clearcutt-factory render  [-f image.yaml] [--check] [--context-dir DIR]
       Regenerate (or check) the Containerfile.
@@ -127,6 +129,7 @@ var commands = []command{
 		var lo factory.LockOptions
 		fs.BoolVar(&lo.Update, "update", false, "re-resolve every input instead of keeping unchanged pins")
 		fs.BoolVar(&lo.UpdateBase, "update-base", false, "re-resolve only the base (an app's run image) and what depends on it")
+		fs.BoolVar(&lo.UpdateStack, "update-stack", false, "re-resolve only an app's stack (a registry stack to its newest version), its build image, and its run image, for a rebuild on the platform's newest images")
 		fs.Var((*listFlag)(&lo.UpdatePackages), "update-package", "re-resolve only these distro packages (NAME[,NAME…], repeatable) and what their new versions need")
 		return func(ctx context.Context) error { return factory.Lock(ctx, *opts, lo) }
 	}},
