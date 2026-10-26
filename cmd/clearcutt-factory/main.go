@@ -51,6 +51,11 @@ Usage:
   clearcutt-factory rebase  [-f app.yaml] [--update-lock] [--no-test] [same flags]
       Rebase the app's published image onto its stack's run image and smoke-test
       it; --update-lock then pins the lock to that base.
+  clearcutt-factory roles   [-f image.yaml] [--dir .]
+      Print what the stacks under --dir make of the image, one per line: build
+      (a stack's spec.build names its manifest) and/or run (spec.run); nothing
+      when no stack names it. images.yml records them so notify.yml can announce
+      a build image as clearcutt.build-image-published.
   clearcutt-factory stack push [-f stack.yaml] --ref REGISTRY/REPOSITORY:TAG [--key K | --no-sign]
       Publish a stack so apps in any repository can name it (spec.stack: REF),
       and sign it (with --key K, signing.stackKey, or as images are signed).
@@ -211,6 +216,11 @@ var commands = []command{
 		fs.StringVar(&io.ExtendsIssuer, "extends-issuer", "", "its OIDC issuer (default: GitHub Actions)")
 		fs.StringVar(&io.ExtendsKey, "extends-key", "", "the public key that signs the shared profile instead of an identity")
 		return func(ctx context.Context) error { return factory.Init(ctx, *opts, io) }
+	}},
+	{"roles", func(fs *flag.FlagSet, opts *factory.Options) func(context.Context) error {
+		var ro factory.RolesOptions
+		fs.StringVar(&ro.Dir, "dir", ".", "where to look for stacks (every kind Stack file below it)")
+		return func(ctx context.Context) error { return factory.Roles(ctx, *opts, ro) }
 	}},
 	{"stack push", func(fs *flag.FlagSet, opts *factory.Options) func(context.Context) error {
 		var so factory.StackPushOptions
