@@ -101,12 +101,12 @@ func TestAffectedManifests(t *testing.T) {
 		{"a workflow, with a lock", []change{mod(".github/workflows/clearcutt.yml"), mod("images/run-go/image.lock.yaml")}, all, ".github/workflows/clearcutt.yml"},
 		{"a README", []change{mod("README.md")}, all, "README.md"},
 		{"a new file nobody owns", []change{mod("images/new/notes.txt")}, all, "images/new/notes.txt"},
-		{"a deleted image nobody owns now", []change{del("images/old/image.yaml"), del("images/old/image.lock.yaml")}, nil, ""},
+		{"a deleted image nobody owns now", []change{del("images/old/image.yaml"), del("images/old/image.lock.yaml")}, all, "images/old/image.yaml"},
 		{"a deleted file with an owner", []change{del("images/run-go/image.lock.yaml")}, []string{runGo}, ""},
-		{"a deleted stray and an app's source", []change{del("old.txt"), mod("apps/svc/main.go")}, []string{svc}, ""},
+		{"a deleted stray and an app's source", []change{del("old.txt"), mod("apps/svc/main.go")}, all, "old.txt"},
 		{"a rename within an app", []change{del("apps/svc/old.go"), mod("apps/svc/new.go")}, []string{svc}, ""},
 		{"a rename from one image to another", []change{del("images/run-go/motd"), mod("images/tools/motd")}, []string{runGo, tools}, ""},
-		{"a rename into an app from nowhere", []change{del("docs/x.go"), mod("apps/svc/x.go")}, []string{svc}, ""},
+		{"a rename into an app from nowhere", []change{del("docs/x.go"), mod("apps/svc/x.go")}, all, "docs/x.go"},
 		{"a rename out of an app to nowhere", []change{del("apps/svc/x.go"), mod("misc/x.go")}, all, "misc/x.go"},
 	} {
 		got, gotAll, err := affectedManifests(manifests, c.changed)
@@ -118,12 +118,18 @@ func TestAffectedManifests(t *testing.T) {
 		}
 	}
 
-	// A manifest at the root owns everything.
+	// A root manifest is selected for its directory, but cannot swallow shared changes.
 	if err := os.WriteFile("app.yaml", []byte("apiVersion: factory.clearcutt.dev/v1alpha1\nkind: App\nmetadata: {name: root}\nspec: {stack: stacks/go.yaml}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if got, gotAll, err := affectedManifests([]string{"app.yaml", runGo}, []change{mod("images/run-go/image.lock.yaml")}); err != nil || gotAll != "" || !reflect.DeepEqual(got, []string{"app.yaml", runGo}) {
 		t.Errorf("root manifest: %v (all: %q), %v", got, gotAll, err)
+	}
+	for _, shared := range []string{".github/workflows/clearcutt.yml", "org/profile.yaml", "org/trust.yaml"} {
+		got, _, err := affectedManifests([]string{"app.yaml", runGo}, []change{mod(shared)})
+		if err != nil || !reflect.DeepEqual(got, []string{"app.yaml", runGo}) {
+			t.Errorf("root swallowed %s: %v %v", shared, got, err)
+		}
 	}
 	// A manifest (or its stack) that doesn't load is an error: the
 	// workflow then builds everything.
@@ -200,16 +206,39 @@ func TestAffected(t *testing.T) {
 		b, _ := os.ReadFile(gho)
 		return out.String(), errOut.String(), string(b)
 	}
-	out, errOut, gh := run("M\timages/run-go/image.lock.yaml\nD\tgone.txt\nR100\tapps/svc/old.go\tapps/svc/new.go\nassets/motd\n")
+	out, errOut, gh := run("M\timages/run-go/image.lock.yaml\nR100\tapps/svc/old.go\tapps/svc/new.go\nassets/motd\n")
 	if out != "images/run-go/image.yaml\nimages/tools/image.yaml\napps/svc/app.yaml\n" || gh != `manifests=["images/run-go/image.yaml","images/tools/image.yaml","apps/svc/app.yaml"]`+"\n" || errOut != "" {
 		t.Errorf("stdout %q, GITHUB_OUTPUT %q, stderr %q", out, gh, errOut)
 	}
-	out, errOut, gh = run("D\tgone.txt\n")
+	out, errOut, gh = run("")
 	if out != "" || gh != "manifests=[]\n" || errOut != "" {
 		t.Errorf("nothing: stdout %q, GITHUB_OUTPUT %q, stderr %q", out, gh, errOut)
 	}
 	out, errOut, gh = run("README.md\n")
 	if strings.Count(out, "\n") != len(manifests) || !strings.HasPrefix(gh, `manifests=["images/build-go/image.yaml",`) || !strings.Contains(errOut, "README.md changed, which no manifest owns") {
 		t.Errorf("README: stdout %q, GITHUB_OUTPUT %q, stderr %q", out, gh, errOut)
+	}
+}
+
+func TestAffectedOrgReferences(t *testing.T) {
+	manifests := affectedRepo(t)
+	if err := os.WriteFile("images/factory.org.yaml", []byte("apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nextends: {path: ../org/profile.yaml}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The shared VEX lives inside one image's directory but serves all
+	// manifests using the root profile, including apps elsewhere.
+	if err := os.WriteFile("factory.org.yaml", []byte("apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nextends: {path: org/profile.yaml}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("org/profile.yaml", []byte("apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nsigning: {trustPolicy: trust.yaml}\nvulnerabilities: {vex: [../images/build-go/shared-vex.json]}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"org/profile.yaml", "org/trust.yaml", "images/build-go/shared-vex.json"} {
+		for _, deleted := range []bool{false, true} {
+			got, _, err := affectedManifests(manifests, []change{{path: p, deleted: deleted}})
+			if err != nil || !reflect.DeepEqual(got, manifests) {
+				t.Errorf("%s deleted=%v: %v %v", p, deleted, got, err)
+			}
+		}
 	}
 }

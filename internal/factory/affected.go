@@ -4,8 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+
+	"go.yaml.in/yaml/v3"
 	"os"
 	"path/filepath"
 	"slices"
@@ -31,7 +35,7 @@ type AffectedOptions struct {
 // pull request that builds only what it changed. A changed file that no
 // manifest owns (an org profile's shared profile, a VEX document, a
 // workflow) affects every manifest, since nothing says it doesn't; a
-// deleted file that none owns affects none. See affectedManifests.
+// deleted file that none owns affects every surviving manifest. See affectedManifests.
 func Affected(ctx context.Context, opts Options, ao AffectedOptions) error {
 	changes, err := readChanges(ao.Changed)
 	if err != nil {
@@ -201,8 +205,8 @@ func cleanRel(p string) string {
 // manifest below its directory. A changed file no manifest owns affects
 // every manifest (all names it, the first such), since nothing says it
 // doesn't: the shared profile and the trust policy and VEX documents it
-// names, a workflow. A deleted file no manifest owns affects none: nothing
-// left can read it.
+// names, a workflow. Unowned deletions also affect every manifest: the
+// deleted file may have been an input to the previous configuration.
 func affectedManifests(manifests []string, changes []change) (affected []string, all string, err error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -249,6 +253,13 @@ func affectedManifests(manifests []string, changes []change) (affected []string,
 				o.files = append(o.files, rel(f))
 			}
 		}
+		orgFiles, err := affectedOrgFiles(filepath.Dir(m.Path))
+		if err != nil {
+			return nil, "", err
+		}
+		for _, f := range orgFiles {
+			o.files = append(o.files, rel(f))
+		}
 		owners[i] = o
 	}
 	under := func(p, dir string) bool {
@@ -267,10 +278,20 @@ func affectedManifests(manifests []string, changes []change) (affected []string,
 				owns = owns || under(o.dirs[0], cleanRel(filepath.Dir(p)))
 			}
 			if owns {
-				picked[i], owned = true, true
+				picked[i] = true
+				// A root manifest's broad directory covers every path,
+				// but cannot prove an input is private to that image.
+				specific := slices.Contains(o.files, p)
+				for _, d := range o.dirs {
+					specific = specific || (d != "." && under(p, d))
+				}
+				if filepath.Base(p) == manifest.OrgFileName {
+					specific = specific || under(o.dirs[0], cleanRel(filepath.Dir(p)))
+				}
+				owned = owned || specific
 			}
 		}
-		if !owned && !c.deleted && all == "" {
+		if !owned && all == "" {
 			all = p
 		}
 	}
@@ -318,4 +339,68 @@ func jsonStrings(ss []string) string {
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(ss)
 	return strings.TrimSuffix(b.String(), "\n")
+}
+
+// affectedOrgFiles reads local profile wiring without resolving registry
+// artifacts or opening the files it names. Deleted trust/VEX files still
+// belong to every manifest using that profile. A malformed profile fails
+// discovery, causing the workflow to build everything.
+func affectedOrgFiles(start string) ([]string, error) {
+	dir, err := filepath.Abs(start)
+	if err != nil {
+		return nil, err
+	}
+	var profile string
+	for {
+		p := filepath.Join(dir, manifest.OrgFileName)
+		if _, err := os.Stat(p); err == nil {
+			profile = p
+			break
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
+		next := filepath.Dir(dir)
+		if next == dir {
+			return nil, nil
+		}
+		dir = next
+	}
+	var files []string
+	seen := map[string]bool{}
+	var read func(string) error
+	read = func(p string) error {
+		p = filepath.Clean(p)
+		if seen[p] {
+			return fmt.Errorf("org profile cycle at %s", p)
+		}
+		seen[p] = true
+		files = append(files, p)
+		b, err := os.ReadFile(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var org manifest.Org
+		if err := yaml.Unmarshal(b, &org); err != nil {
+			return fmt.Errorf("%s: %w", p, err)
+		}
+		base := filepath.Dir(p)
+		add := func(f string) {
+			if f != "" {
+				files = append(files, filepath.Join(base, f))
+			}
+		}
+		add(org.Signing.TrustPolicy)
+		for _, f := range org.Vulnerabilities.VEX {
+			add(f)
+		}
+		if org.Extends != nil && org.Extends.Path != "" {
+			return read(filepath.Join(base, org.Extends.Path))
+		}
+		return nil
+	}
+	err = read(profile)
+	return files, err
 }

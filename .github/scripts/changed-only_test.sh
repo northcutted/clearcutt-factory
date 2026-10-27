@@ -4,7 +4,7 @@
 # the base branch, as GitHub makes it), with clearcutt-factory built from
 # this source, and checks which manifests a pull request builds under
 # changed-only: those its changes affect, every one when it changes a file
-# no manifest owns or when that can't be told, none when it only deletes
+# no manifest owns or when that can't be told, every one when it deletes
 # such a file; and every one without changed-only.
 #
 # Usage: .github/scripts/changed-only_test.sh (needs bash, git, go, jq, and yq v4)
@@ -79,15 +79,18 @@ check "reproducing what was published" true "$tmp/bin" '["images/b/image.yaml"]'
 
 pr two 'echo new > images/b/image.lock.yaml; git mv images/c/image.lock.yaml images/a/moved.yaml'
 check "two images and a rename between them" true "$tmp/bin" "$all"
+if grep -q "::warning::" "$tmp/log"; then echo "FAIL: rename fell back to all"; fail=1; fi
 pr readme 'echo new > README.md'
 check "a file no manifest owns" true "$tmp/bin" "$all"
+if grep -q "::warning::" "$tmp/log"; then echo "FAIL: shared file fell back to all"; fail=1; fi
 grep -q 'README.md changed, which no manifest owns' "$tmp/log" || { echo "FAIL: the file that made it every manifest is not named"; fail=1; }
 pr org 'echo "# x" >> factory.org.yaml'
 check "the org profile" true "$tmp/bin" "$all"
+if grep -q "::warning::" "$tmp/log"; then echo "FAIL: org profile fell back to all"; fail=1; fi
 pr gone 'git rm -q stray.txt'
-check "a deleted file no manifest owns" true "$tmp/bin" '[]'
+check "a deleted file no manifest owns" true "$tmp/bin" "$all"
 pr gone-image 'git rm -q -r images/c; echo new > images/b/image.lock.yaml'
-check "a deleted image and a lock" true "$tmp/bin" '["images/b/image.yaml"]'
+check "a deleted image and a lock" true "$tmp/bin" '["images/a/image.yaml","images/b/image.yaml"]'
 
 git checkout -q --detach lock
 check "not a merge commit" true "$tmp/bin" "$all"
