@@ -39,21 +39,21 @@
 #
 #   jobs:
 #     images:
-#       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.4.0
+#       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.4.1
 #       permissions: {contents: read, packages: write, id-token: write, attestations: write}
 #       with:
 #         reproduce: false
 #     reproduce:
 #       needs: images
 #       if: ${{ !cancelled() && needs.images.outputs.published != '[]' && needs.images.outputs.published != '' }}
-#       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.4.0
+#       uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.4.1
 #       permissions: {contents: read, packages: write, id-token: write, attestations: write}
 #       with:
 #         published: ${{ needs.images.outputs.published }}
 #     notify:
 #       needs: images
 #       if: ${{ !cancelled() && github.event_name == 'push' && needs.images.outputs.published != '[]' }}
-#       uses: northcutted/clearcutt-factory/.github/workflows/notify.yml@v0.4.0
+#       uses: northcutted/clearcutt-factory/.github/workflows/notify.yml@v0.4.1
 #       permissions: {contents: read}
 #       with:
 #         published: ${{ needs.images.outputs.published }}

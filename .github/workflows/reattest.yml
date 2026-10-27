@@ -36,7 +36,7 @@
 #       - cron: "37 4 * * *"
 #   jobs:
 #     reattest:
-#       uses: northcutted/clearcutt-factory/.github/workflows/reattest.yml@v0.4.0
+#       uses: northcutted/clearcutt-factory/.github/workflows/reattest.yml@v0.4.1
 #       permissions: {contents: read, packages: write, id-token: write}
 name: reattest
 on:
@@ -68,7 +68,7 @@ on:
       factory-version:
         description: clearcutt-factory release to use
         type: string
-        default: v0.4.0
+        default: v0.4.1
     secrets:
       REGISTRY_USERNAME:
         description: Registry user, for a registry other than ghcr.io
