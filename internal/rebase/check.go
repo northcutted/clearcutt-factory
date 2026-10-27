@@ -77,15 +77,23 @@ func Analyze(in Layers) (*Report, error) {
 	}
 
 	r := &Report{}
-	var modified, shadowed, deleted, through, pkgs []string
+	var modified, shadowed, deleted, hidden, through, pkgs []string
 	for _, e := range app {
+		// A whiteout deletes what the layers below hold at that path: a
+		// file of the old base, which the app's layers may not touch, or,
+		// once rebased, a file of the new base, which would vanish from
+		// the result (the app's layers can delete only what they added).
 		if e.whiteout != "" {
 			if e.whiteout == opaque {
 				if oldFS.hasUnder(e.path) {
 					deleted = append(deleted, "/"+e.path+"/ (all of it)")
+				} else if newFS.hasUnder(e.path) {
+					hidden = append(hidden, "/"+e.path+"/ (all of it)")
 				}
 			} else if oldFS.has(e.whiteout) {
 				deleted = append(deleted, "/"+e.whiteout)
+			} else if newFS.has(e.whiteout) || newFS.hasUnder(e.whiteout) {
+				hidden = append(hidden, "/"+e.whiteout)
 			}
 			continue
 		}
@@ -114,6 +122,7 @@ func Analyze(in Layers) (*Report, error) {
 	add(modified, "app layers replace files of the old base")
 	add(shadowed, "app layers would hide files of the new base")
 	add(deleted, "app layers delete files of the old base")
+	add(hidden, "app layers would delete files of the new base")
 	add(through, "app layers write through base symlinks")
 
 	oldRel, newRel := oldFS.osRelease(), newFS.osRelease()

@@ -14,10 +14,14 @@
 # that also moves its stack's build image (building it is the fix) and its
 # job fails. If a newer publish takes the app's tag during the rebase, the
 # tag stays there and the result is pushed by digest only; the next run
-# rebases the new image.
+# rebases the new image. A rebuilt build image (a toolchain fix) is not a
+# rebase: update-locks.yml with update: stack proposes the rebuild, on
+# clearcutt.build-image-published and daily.
 #
 # The pull requests are opened as a GitHub App, CLEARCUTT_BOT_TOKEN, or the
-# workflow's GITHUB_TOKEN, as update-locks.yml describes. Other repositories
+# workflow's GITHUB_TOKEN, as update-locks.yml describes, and with the
+# auto-merge input (pin, rebuild, or all) each merges by itself once the
+# base branch's required checks pass. Other repositories
 # call it from their own schedule (see docs/adopting.md), passing secrets by
 # name (secrets: inherit reaches only workflows in the caller's organization
 # or enterprise):
@@ -66,6 +70,10 @@ on:
         default: ""
       publish-ref:
         description: 'A ref (or bash glob, e.g. refs/heads/release/*) that publishes too, besides the default branch. Runs on any other ref (workflow_dispatch from a branch, say) build and check without publishing'
+        type: string
+        default: ""
+      auto-merge:
+        description: 'Turn on GitHub auto-merge (merge commit) for the pull requests of these kinds, space-separated, so each merges by itself once the base branch''s required checks pass: pin (the lock pinned to the run image the app was rebased onto), rebuild (the rebase was refused; the lock moves to the newest run and build images), or all. Default none. Needs "Allow auto-merge" in the repository settings, branch protection with required status checks, and pull requests from a GitHub App or CLEARCUTT_BOT_TOKEN (GITHUB_TOKEN''s get no CI). When it can''t be turned on, the pull request stays open with a warning'
         type: string
         default: ""
     secrets:
@@ -293,6 +301,7 @@ jobs:
           IMAGE: ${{ steps.rebase.outputs.image }}
           REPEAT: ${{ steps.repeat.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          AUTO_MERGE: ${{ inputs.auto-merge }}
         # Branch and files as in update-locks.yml: one branch per directory
         # (factory/rebase/examples-hello-app for examples/hello-app), and for
         # an app at the repository root, a branch named after its file
@@ -320,10 +329,10 @@ jobs:
           # new toolchain), so it mustn't look like a routine pin in a list.
           # Same branch either way, so a later safe rebase takes it over.
           if [ "$FAILED" = true ]; then
-            title="Rebuild $what on the newest run and build images"
+            kind=rebuild title="Rebuild $what on the newest run and build images"
             intro="The published image could not be rebased. This moves the lock to the newest run image and the stack's newest build image, so merging rebuilds the app from source with the toolchain made for that run image."
           else
-            title="Pin $what to the newest run image"
+            kind=pin title="Pin $what to the newest run image"
             intro="The published image is on the newest run image. This pins the lock to the same base, so the next build from source doesn't move it back."
           fi
           {
@@ -337,7 +346,7 @@ jobs:
               echo; echo "Repeating the rebase:"; echo; echo '```'; cat "$RUNNER_TEMP/repeat.out"; echo '```'
             fi
           } > "$RUNNER_TEMP/body.md"
-          "$FACTORY_DIR/.github/scripts/open-pr.sh" "factory/rebase/$name" "$title" "$RUNNER_TEMP/body.md" "${paths[@]}"
+          PR_KIND=$kind "$FACTORY_DIR/.github/scripts/open-pr.sh" "factory/rebase/$name" "$title" "$RUNNER_TEMP/body.md" "${paths[@]}"
 
       - name: Fail if the app must be rebuilt
         if: steps.rebase.outputs.failed == 'true'

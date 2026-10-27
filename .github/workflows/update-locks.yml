@@ -6,6 +6,19 @@
 # pull request builds, smoke-tests, scans, and gates the change; merging it
 # publishes the rebuilt image.
 #
+# With update: stack it re-resolves only each app's stack (a registry
+# stack to its newest version) and the stack's build and run images
+# (clearcutt-factory lock --update-stack; images are skipped), and opens a
+# pull request on a branch of its own, factory/rebuild/<dir>, titled
+# "Rebuild <dir> on the newest build image" (or "… stack", "… build and
+# run images", by what moved): the toolchain fast path. Call it so when a
+# platform repository's notify.yml sends clearcutt.build-image-published
+# or clearcutt.stack-published, and daily to catch a missed dispatch, as
+# init's workflow does. When only the run image moved, it proposes
+# nothing: fleet.yml follows run images. The weekly pull request (update: all, branch
+# factory/update/<dir>) carries the same images and everything else;
+# merging either lets the other close itself at its next run.
+#
 # Who opens the pull requests decides whether CI starts on them. In order:
 #
 #   1. A GitHub App, when the app-id input (or a CLEARCUTT_APP_ID variable)
@@ -20,6 +33,14 @@
 #      a maintainer approves them (the runs show as action_required). Allow
 #      Actions to create pull requests in the repository settings.
 #
+# With the auto-merge input (update, rebuild, or all), each pull request of
+# those kinds gets GitHub auto-merge (merge commit), so it merges by itself
+# once the base branch's required checks pass: that needs "Allow auto-merge"
+# in the repository settings, branch protection with required status checks
+# (without them nothing gates the change), and an opener whose pull requests
+# get CI (1 or 2 above). When it can't be turned on, the pull request stays
+# open with a warning; the job doesn't fail.
+#
 # Other repositories call it (see docs/adopting.md). Pass secrets by name:
 # secrets: inherit reaches only workflows in the caller's own organization or
 # enterprise.
@@ -28,6 +49,8 @@
 #     update:
 #       uses: northcutted/clearcutt-factory/.github/workflows/update-locks.yml@v0.3.0
 #       permissions: {contents: write, pull-requests: write}
+#       with:
+#         update: ${{ (github.event.schedule == '41 5 * * *' || github.event.action == 'clearcutt.build-image-published' || github.event.action == 'clearcutt.stack-published') && 'stack' || 'all' }}
 #       secrets:
 #         CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
 #         CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
@@ -42,6 +65,10 @@ on:
         description: Manifest globs, space-separated (bash globstar)
         type: string
         default: "**/image.yaml **/app.yaml"
+      update:
+        description: 'What to re-resolve: all (every input of every manifest; a pull request per manifest, "Update the pinned inputs of …") or stack (apps only: the stack, its build image, and its run image; a pull request per app on a branch of its own, "Rebuild … on the newest build image", for a build image or stack the platform published)'
+        type: string
+        default: all
       factory-version:
         description: clearcutt-factory release to use
         type: string
@@ -54,6 +81,10 @@ on:
         description: 'A ref (or bash glob, e.g. refs/heads/release/*) that opens pull requests too, besides the default branch. Runs on any other ref (workflow_dispatch from a branch, say) only report what would move'
         type: string
         default: ""
+      auto-merge:
+        description: 'Turn on GitHub auto-merge (merge commit) for the pull requests of these kinds, space-separated, so each merges by itself once the base branch''s required checks pass: update (every input, update: all), rebuild (the stack and its images, update: stack), or all. Default none. Needs "Allow auto-merge" in the repository settings, branch protection with required status checks, and pull requests from a GitHub App or CLEARCUTT_BOT_TOKEN (GITHUB_TOKEN''s get no CI). When it can''t be turned on, the pull request stays open with a warning'
+        type: string
+        default: ""
     secrets:
       CLEARCUTT_APP_PRIVATE_KEY:
         description: Private key of the GitHub App named by app-id or CLEARCUTT_APP_ID
@@ -63,15 +94,16 @@ on:
         required: false
 permissions:
   contents: read
-# One run at a time per ref (and manifests). Runs wait rather than cancel, so
-# none stops halfway through its pull requests; a newer run replaces any
-# still waiting, and does the same work.
+# One run at a time per ref (and manifests, and what is updated). Runs wait
+# rather than cancel, so none stops halfway through its pull requests; a
+# newer run replaces any still waiting, and does the same work.
 concurrency:
-  group: clearcutt-factory-update-locks-${{ github.ref }}-${{ inputs.manifests }}
+  group: clearcutt-factory-update-locks-${{ github.ref }}-${{ inputs.manifests }}-${{ inputs.update || 'all' }}
   cancel-in-progress: false
 env:
   FACTORY_VERSION: ${{ inputs.factory-version || 'source' }}
   MANIFESTS: ${{ inputs.manifests || 'examples/*/image.yaml examples/*/app.yaml' }}
+  UPDATE: ${{ inputs.update || 'all' }}
 jobs:
   manifests:
     runs-on: ubuntu-latest
@@ -115,12 +147,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # With update: stack, only apps: an image has no stack (its base moves
+      # with update: all).
       - id: find
         shell: bash
         run: |
+          case "$UPDATE" in
+            all | stack) ;;
+            *) echo "::error::update must be all or stack, not '$UPDATE'"; exit 1 ;;
+          esac
           shopt -s globstar nullglob
           found=()
-          for pattern in $MANIFESTS; do for f in $pattern; do found+=("$f"); done; done
+          for pattern in $MANIFESTS; do for f in $pattern; do
+            if [ "$UPDATE" = stack ]; then
+              kind=$(sed -n "s/^kind:[[:space:]]*[\"']\{0,1\}\([A-Za-z]*\).*/\1/p" "$f" | head -n 1 | tr '[:upper:]' '[:lower:]')
+              if [ "$kind" != app ]; then continue; fi
+            fi
+            found+=("$f")
+          done; done
           echo "manifests=$(printf '%s\n' "${found[@]}" | sort -u | jq -R -s -c 'split("\n") | map(select(. != ""))')" >> "$GITHUB_OUTPUT"
 
   update:
@@ -183,11 +227,14 @@ jobs:
           # The privileged binfmt image, pinned (update: crane digest tonistiigi/binfmt:<tag>).
           image: docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
 
-      - name: Re-resolve every input
+      - name: Re-resolve every input (update all), or the stack and its images (update stack)
         env:
           GITHUB_TOKEN: ${{ github.token }} # GitHub API lookups (release digests, nixpkgs revisions) without the anonymous rate limit
           MANIFEST: ${{ matrix.manifest }}
-        run: clearcutt-factory lock -f "$MANIFEST" --update | tee "$RUNNER_TEMP/lock.out"
+        run: |
+          flag=--update
+          if [ "$UPDATE" = stack ]; then flag=--update-stack; fi
+          clearcutt-factory lock -f "$MANIFEST" "$flag" | tee "$RUNNER_TEMP/lock.out"
 
       # Only a publishing ref proposes: a pull request from another branch
       # would carry that branch's commits.
@@ -196,12 +243,16 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || secrets.CLEARCUTT_BOT_TOKEN || github.token }}
           MANIFEST: ${{ matrix.manifest }}
+          AUTO_MERGE: ${{ inputs.auto-merge }}
         # One branch per directory (factory/update/examples-hello-app for
         # examples/hello-app), with the files there. At the repository root,
         # "." is neither a branch name nor a path to commit (it is the whole
         # checkout), so a manifest there gets a branch named after its file
         # (app.yaml: root-app), and only its own files are committed.
-        # fleet.yml's pin step does the same.
+        # fleet.yml's pin step does the same. A stack update gets a branch of
+        # its own (factory/rebuild/…), titled by what moved, so the toolchain
+        # fix isn't mistaken for a routine update, and the weekly pull
+        # request (which carries it too) neither replaces nor closes it.
         run: |
           manifest=${MANIFEST#./}
           dir=$(dirname "$manifest")
@@ -214,13 +265,40 @@ jobs:
           fi
           # What git refuses in a branch name (a leading dot, "..", a space, ~^:?*[\, "@{", a trailing "." or ".lock").
           name=$(printf '%s' "$name" | LC_ALL=C sed -E 's/[[:space:][:cntrl:]~^:?*[\]+/-/g; s/@\{/-{/g; s/\.\.+/./g; s/^\.+//; s/(\.lock|\.)$//')
+          if [ "$UPDATE" = stack ]; then
+            build=false run=false stack=false
+            # lock prints "  build image REF: a → b", or "  build image: REF → REF (b)" when the reference changed.
+            if grep -q '^  build image[ :]' "$RUNNER_TEMP/lock.out"; then build=true; fi
+            if grep -q '^  base[ :]' "$RUNNER_TEMP/lock.out"; then run=true; fi
+            if grep -q '^  stack[ :]' "$RUNNER_TEMP/lock.out"; then stack=true; fi
+            if $run && ! $build && ! $stack; then
+              # The run image alone: fleet.yml's to follow, by rebasing and
+              # pinning (or its own rebuild pull request when the rebase is
+              # refused). A rebuild here would duplicate that pull request;
+              # an open one of ours closes.
+              echo "only the run image moved: fleet.yml rebases onto it; no rebuild proposed"
+              git checkout -q -- "${paths[@]}" || echo "::warning::could not restore ${paths[*]} (not committed yet?); proposing it as it is"
+            fi
+            if $build && $run; then on="build and run images"
+            elif $build; then on="build image"
+            elif $stack; then on="stack"
+            elif $run; then on="run image"
+            else on="stack images"; fi
+            kind=rebuild branch=factory/rebuild/$name title="Rebuild $what on the newest $on"
+            intro="The platform published a new build image or stack. \`clearcutt-factory lock --update-stack\` of \`$MANIFEST\` moves the lock to the stack's newest images, and nothing else:"
+            outro="CI builds, smoke-tests, scans, and gates this change. Merging rebuilds the app on them and publishes it. The weekly update pull request carries the same images with everything else; merging either lets the other close itself at its next run."
+          else
+            kind=update branch=factory/update/$name title="Update the pinned inputs of $what"
+            intro="Weekly \`clearcutt-factory lock --update\` of \`$MANIFEST\`:"
+            outro="CI builds, smoke-tests, scans, and gates this change. Merging publishes the rebuilt image."
+          fi
           {
-            echo "Weekly \`clearcutt-factory lock --update\` of \`$MANIFEST\`:"
+            echo "$intro"
             echo
             echo '```'
             grep '^  ' "$RUNNER_TEMP/lock.out" || true
             echo '```'
             echo
-            echo "CI builds, smoke-tests, scans, and gates this change. Merging publishes the rebuilt image."
+            echo "$outro"
           } > "$RUNNER_TEMP/body.md"
-          "$FACTORY_DIR/.github/scripts/open-pr.sh" "factory/update/$name" "Update the pinned inputs of $what" "$RUNNER_TEMP/body.md" "${paths[@]}"
+          PR_KIND=$kind "$FACTORY_DIR/.github/scripts/open-pr.sh" "$branch" "$title" "$RUNNER_TEMP/body.md" "${paths[@]}"

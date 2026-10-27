@@ -121,7 +121,7 @@ spec:
   labels: {org.opencontainers.image.source: https://github.com/acme/images}
   user: "65532"
   entrypoint: [/bin/bash]
-  vex: [vex/triaged.openvex.json] # OpenVEX statements applied to scans
+  vex: [vex/triaged.openvex.json] # OpenVEX statements applied to scans (for this image, or a package anywhere)
   test:                          # smoke test, run in every platform image before pushing
     command: [/usr/local/bin/kubectl, version, --client]   # must exit 0
     # http: {port: 8080, path: /healthz}   # or: start the image, expect a non-error answer
@@ -249,7 +249,12 @@ properties are what make it safe to rebase.
 **Stacks in a registry.** A platform team publishes a stack once
 (`clearcutt-factory stack push -f stacks/go.yaml --ref ghcr.io/acme/stacks/go:1`,
 which resolves manifest paths to image references and signs it), and apps in
-any repository name it: `stack: ghcr.io/acme/stacks/go:1`. The app's lock pins
+any repository name it: `stack: ghcr.io/acme/stacks/go:1`. A build image
+given as a manifest is pinned by the digest its tag holds when the stack is
+pushed (`ghcr.io/acme/build-go:1@sha256:…`, the tag kept for readers), so a
+rebuilt build image changes the stack's content: pushing the stack again
+publishes a new one, and `notify.yml` announces it. The run image stays a
+tag: apps follow it by rebasing. The app's lock pins
 the stack's digest until `lock --update` moves it, and
 `policy.requireSignedStacks` accepts only stacks signed by the org's stack
 signer (`signing.stacks`). Every command that uses the stack checks the
@@ -288,6 +293,9 @@ image was built. If the rebase is refused, the command fails and the lock
 moves anyway, for the rebuild that is the fix: to the new run image, and to
 the stack's newest build image (a registry stack to its newest version), so
 the app links against the libraries the new run image has.
+`clearcutt-factory lock --update-stack` moves the lock the same way on
+demand, keeping every other pin: what `update-locks.yml` proposes when the
+platform publishes a build image.
 
 Before rebasing, `clearcutt-factory` checks each platform (`--check` stops
 there and changes nothing, so it doesn't take `--update-lock`):
@@ -368,17 +376,27 @@ The intended split, and the automation that keeps it current:
   As soon as the platform repository publishes (before the second-runner
   reproduction finishes), its `notify` job sends
   `repository_dispatch` to the owner's repositories with the topic
-  `clearcutt-app`: `clearcutt.run-image-published` for each new image,
-  `clearcutt.stack-published` for each new stack, and
-  `clearcutt.profile-published` for a new shared profile, with
-  `{image, digest, …}`. `init`'s workflow answers the first with the fleet
-  job and the others with the lock-update job, so a patched run image reaches every app in minutes,
-  not at its next daily run. The payload is only a hint: the receivers
-  re-resolve tags from the registry and verify signatures, as they do on
-  their schedules ([adopting](docs/adopting.md#waking-the-apps-when-the-platform-publishes)).
+  `clearcutt-app`: `clearcutt.run-image-published` for each new run image
+  (or image no stack names), `clearcutt.build-image-published` for each new
+  build image (what the stacks in the platform repository make of it:
+  `clearcutt-factory roles`), `clearcutt.stack-published` for each new
+  stack, and `clearcutt.profile-published` for a new shared profile, with
+  `{image, digest, roles, …}`. `init`'s workflow answers the first with the
+  fleet job and the others with the lock-update job, so a patched run image
+  reaches every app in minutes, not at its next daily run. The payload is
+  only a hint: the receivers re-resolve tags from the registry and verify
+  signatures, as they do on their schedules
+  ([adopting](docs/adopting.md#waking-the-apps-when-the-platform-publishes)).
 * **Toolchain and stack changes** rebuild rather than rebase (the app's own
-  layer changes): the weekly job's pull request per app does it, tested by
-  each app's CI.
+  layer changes). `update-locks.yml` with `update: stack` runs
+  `clearcutt-factory lock --update-stack` on each app, which moves its lock
+  to the stack's newest version and build and run images and nothing else,
+  and opens a pull request titled "Rebuild … on the newest build image" (or
+  stack), tested by the app's CI. `init`'s workflow runs it when the
+  platform announces a build image or stack, and daily, so a toolchain fix
+  (a CVE in Go's standard library, say) reaches the apps in minutes, or a
+  day without the dispatch, not at the weekly update, whose pull request
+  carries everything else too.
 * **Distribution upgrades** (Debian 13 to 14, say) are refused by rebase on
   purpose. Publish a new run image and stack version beside the old ones;
   apps move with a one-line change and a rebuild.
@@ -393,6 +411,19 @@ which each job mints a token that expires within the hour and reaches only
 its repository's contents and pull requests; or a `CLEARCUTT_BOT_TOKEN` secret
 (a fine-grained token with contents and pull-requests write). The App wins
 when both are set ([adopting](docs/adopting.md#a-github-app-for-the-automation)).
+
+**Merging by itself.** The `auto-merge` input of `fleet.yml` (`pin`,
+`rebuild`) and `update-locks.yml` (`update`, `rebuild`; or `all`) turns on
+GitHub auto-merge, as a merge commit, for the pull requests of those kinds,
+so each merges once the base branch's required checks pass and the fleet
+runs without a person: a patched run image reaches every app, a rebuilt
+build image rebuilds every app. It needs **Allow auto-merge** in the
+repository settings, branch protection (or a ruleset) with required status
+checks on the base branch (without them nothing gates the change: a pull
+request is mergeable at once, and auto-merge is refused), and pull requests
+from the App or token above, since `GITHUB_TOKEN`'s get no CI. When it
+can't be turned on, the pull request stays open with a warning
+([adopting](docs/adopting.md#4-turn-on-the-automation)).
 
 Deploy by digest and let GitOps follow the tags; keep old run images (a
 rebase needs the old base's manifest) and old app digests (rollback).
@@ -435,7 +466,7 @@ found by walking up from the manifest (or `--org`). See
 | `signing` | `keyless` (Sigstore OIDC), `key` (file or any cosign KMS URI; `stackKey` signs stacks with a key of their own), or `none`; extra cosign args (a signing config for a private Sigstore, or for signing [without a transparency log](docs/adopting.md#who-signs-and-binding-signatures-to-your-repository)); who signs this repository's images (`verify`, bound to the workflow run's repository with `sourceRepository`) and its stacks (`stacks`), or a shared ClearCutt `trustPolicy` file ([adopting](docs/adopting.md#who-signs-and-binding-signatures-to-your-repository)) |
 | `sbom` | Whether to add a syft scan to the declared SBOM |
 | `extends` | A shared org profile to build on, and who may sign it ([below](#one-profile-for-every-repository)) |
-| `vulnerabilities` | Scanner and the `failOn` severity gate, optionally `onlyFixed`; `vex` documents applied to every scan |
+| `vulnerabilities` | Scanner and the `failOn` severity gate, optionally `onlyFixed`; `vex` documents applied to every scan: a statement whose product is an image (`pkg:oci/…` by digest or `repository_url`, or a reference) applies to that image only, one whose product is a package wherever the package is ([below](#what-gets-attached-to-a-pushed-image)) |
 | `policy` | Non-root, required labels, TOFU, allowed download hosts (tools, package files, and apk repositories) and registries (each entry covers itself and the paths below it, by whole segment: `ghcr.io/acme` covers `ghcr.io/acme/app`, not `ghcr.io/acme-evil/app`), signed stacks, and `requireOfflineBuildTools` (`from: build` scripts run with no network) |
 | `mirrors` | URL prefix rewrites for every download (`from: https://snapshot.debian.org/`, `to: https://artifactory.acme/debian-snapshot/`); checksums still pin the content |
 
@@ -490,7 +521,14 @@ rules and with no signer, since it is its own file; its locks pin the digest
   checked against apk's database after install; apt/dnf: the file's sha256,
   checked before); every download
   by sha256; Go modules by version (sumdb-checked); Nix store paths by their
-  signed hashes.
+  signed hashes. The lock also records which release wrote it (`generator`)
+  and a digest of its own content (`contentDigest`): a lock edited by hand
+  is refused wherever it is read (`lock --update` resolves it again), and a
+  lock a newer release wrote says so instead of failing to decode.
+  This digest detects accidental edits, not deliberate tampering: removing
+  both fields makes a lock appear legacy. Review locks like code. Every
+  legacy read warns that its pins are taken as written; review them before
+  running `clearcutt-factory lock` to stamp the digest.
 * **Pinned BuildKit**: builds run `moby/buildkit@sha256:…` in a container, so
   every machine uses the same builder.
 * **Clamped timestamps**: `SOURCE_DATE_EPOCH` comes from the lock (midnight
@@ -515,13 +553,50 @@ it names the first differing layer and the files that differ.
 | Signature | index and each platform image | cosign (`sign --recursive`) |
 | Recipe (`…/recipe/v1`) | index | Containerfile, effective manifest, lock, staged context files, BuildKit digest, epoch, platforms, digests |
 | SBOM (CycloneDX) | each platform image | syft scan merged with components declared by the lock (purls, hashes, download URLs, verification method) |
-| Vulnerabilities (`cosign …/vuln/v1`) | each platform image | grype results with VEX applied |
+| Vulnerabilities (`cosign …/vuln/v1`) | each platform image | grype results with VEX applied; `metadata.vex` lists every statement the scan was given |
 | Rebase record (`…/rebase/v1`) | index of a rebased image (instead of a recipe) | the image that was rebased, each platform's old base, the new base; enough to repeat the rebase |
 | Reproduction (`…/reproduction/v1`) | index, once reproduced (`verify --image --attest`) | how (`recipe-rebuild` or `rebase-repeat`), the digest it gave, the recipe or rebase record it started from, factory and BuildKit versions, the run and machine, when |
 | SLSA provenance | index | from the CI platform (see [`images.yml`](.github/workflows/images.yml), and [`fleet.yml`](.github/workflows/fleet.yml) for rebased images) |
 
 Unsigned copies of all of these are written to `out/<name>/attestations/`, and
 `out/<name>/result.json` summarizes the build for CI.
+
+**VEX statements are applied per image.** grype, scanning an SBOM, applies
+only statements whose product is a package, and applies them to every
+image; a statement whose product is an image it ignores. So before each
+scan (at build, rebase, and `reattest`), factory selects the statements
+that name the image being scanned, by the rule clearcutt-verify applies to
+its rescans:
+
+* a product that is an image purl (`pkg:oci/…` or `pkg:docker/…`) names the
+  image by its version, when that (percent-decoded) is the index's or the
+  platform image's digest, or, with no version, by its `repository_url`
+  qualifier (the image's repository; and its `tag` qualifier, if any, one
+  of the image's tags). A bare `pkg:oci/NAME` names no image: it would name
+  every repository called NAME;
+* a product that isn't a purl names the image when it is the image's
+  repository, `repository:tag`, `repository@digest`, or one of its digests;
+* any other purl is a package, passed as a product containing only its `@id`; it
+  applies wherever the package is, in every image.
+
+A statement about the image is rewritten as one about the packages its
+`subcomponents` name (by `@id` or `identifiers.purl`; an OpenVEX 0.0.1
+document's statement-level `subcomponents` count), or every package in the
+SBOM when it names none; subcomponents none of which can be read leave the
+statement out, never widened to every package. A statement about another
+image never reaches the scan. The vulnerability attestation's
+`metadata.vex.statements` lists every statement passed (`document`,
+`vulnerability`, `status`, `justification`, `product` as written, `scope`:
+`image` or `package`, and `packages`), `metadata.vex.suppressed` each
+finding grype left out for a VEX statement (`vulnerability`, `package`,
+`version`, `purl`, and the statement's `document`, `product`, `status`, and
+`justification`, empty when it matches none passed), so a suppression is
+visible there. Vulnerability publication uses the full predicate URI so
+Cosign retains VEX metadata and the source SBOM identity. Non-OpenVEX documents and malformed fields are refused before
+scanning. OpenVEX 0.0.1 is converted: string vulnerabilities become `name`,
+string products/subcomponents become `@id`, and statement-level
+subcomponents move to products that have none. Package products retain
+only `@id`, so alternate identifiers cannot broaden their scope.
 
 **Tags move last.** `build --push` and `rebase --push` push the image by
 digest, sign it, and attach every attestation above before any tag moves, so
@@ -582,17 +657,57 @@ attestation to that run's workflow and repository; it shows the image
 rebuilt on a fresh machine, not who else could rebuild it. For that,
 rebuild it yourself with `verify --image`.
 
+### Renewing the evidence
+
+A vulnerability report says what grype found the day it ran, and the next
+CVE comes out after it. `clearcutt-factory reattest [-f image.yaml | --image
+REF] [--older-than 7d]` renews it without rebuilding: for each platform
+image, it reads the SBOM attestation the org's image signer made (never an
+SBOM nobody vouched for), updates grype's database, scans the SBOM, and
+attaches the new vulnerability report to the same digest, signed with the
+org's `signing` settings, beside the reports already there. The report's
+`metadata.rescan.sbom` names the SBOM attestation it scanned (its predicate
+type and statement digest), and `metadata.scanFinishedOn` says when;
+clearcutt-verify reads the newest verified report. With `--older-than`, a
+platform whose newest verified report is younger is left alone. The gate
+doesn't fail a re-attestation (the image is out; the report says what it
+holds, and `reattest` lists what the gate would block); `update-locks.yml`
+proposes the fix. It also reports whether the image carries a verified
+reproduction attestation (`reproduced=` in `$GITHUB_OUTPUT`), and writes
+what it did to `out/<name>-reattest/reattest.json`. No tag moves.
+
+[`.github/workflows/reattest.yml`](.github/workflows/reattest.yml) runs it
+for every manifest on a schedule, on the default branch only, and
+reproduces, on its own runner, each image without a verified reproduction
+attestation (`verify --image … --attest`): one whose second-runner
+reproduction failed, or ran before reproductions were attested. `init`'s
+workflow calls it daily with `older-than: 6d`, so each image's report is
+renewed about weekly and a missed run costs a day; for a tighter
+`maxScanAgeDays` in clearcutt-verify, lower `older-than`. Its signatures name
+`reattest.yml`, so the image signer must accept it beside `images.yml` and
+`fleet.yml` (`init` writes `(images|fleet|reattest)`); a report signed by an
+identity the signer doesn't accept makes re-attestation fail with a trust
+configuration message. The command checks that the exact newly attached
+predicate verifies, so an older trusted report cannot satisfy this check.
+Existing adopters must add `reattest` to the image signer's regexp before
+enabling the schedule.
+
 ## CI
 
 [`.github/workflows/images.yml`](.github/workflows/images.yml) is a complete
-pipeline. On pull requests it builds, scans, and gates. On the default branch
+pipeline. On pull requests it builds, scans, and gates; with `changed-only:
+true` (as `init`'s workflow sets it), only the manifests the pull request
+affects, so one image's lock update isn't failed by another image's old
+lock ([adopting](docs/adopting.md#pull-requests-build-what-they-change)).
+On the default branch
 (and the ref its `publish-ref` input names, if any) it also pushes, signs
 keylessly, adds SLSA provenance, and then rebuilds on a second runner from
 the signed recipe alone and attests the match; runs on any other ref, such
 as a `workflow_dispatch` from a branch, publish nothing. `fleet.yml` and
 `update-locks.yml` push and open pull requests only there too. Its `published` output lists
 what the run newly published (a JSON array of `{manifest, kind, image,
-repository, digest, tags}`). A calling job gets it only when the whole
+repository, digest, tags, roles}`; `roles` is what the stacks make of an
+image: `build`, `run`, both, or none). A calling job gets it only when the whole
 workflow is done, reproduction included, so `init`'s workflow calls it with
 `reproduce: false`, then again with that call's `published` output, which
 only reproduces (signed by `images.yml`, as before). `notify` and `fleet`
@@ -603,7 +718,9 @@ failed reproduction still fails the run. `clearcutt-factory build`, `rebase`,
 [`update-locks.yml`](.github/workflows/update-locks.yml),
 [`fleet.yml`](.github/workflows/fleet.yml), and
 [`notify.yml`](.github/workflows/notify.yml) keep the fleet current (see
-[Running a fleet](#running-a-fleet)). Other CI systems call the same commands;
+[Running a fleet](#running-a-fleet)), and
+[`reattest.yml`](.github/workflows/reattest.yml) its evidence
+([Renewing the evidence](#renewing-the-evidence)). Other CI systems call the same commands;
 nothing is GitHub-specific.
 
 ## Limitations
@@ -621,8 +738,9 @@ nothing is GitHub-specific.
   images), and scanners cover Nix less thoroughly than distro packages.
 * `from: build` steps are only as reproducible as the script; `verify` will tell you.
 * SLSA provenance must come from the build platform, not from `clearcutt-factory`.
-* Vulnerability reports describe the day they were made. Rescanning and
-  re-attesting on a schedule is not built in yet.
+* Vulnerability reports describe the day they were made. `reattest.yml`
+  renews them on a schedule ([Renewing the evidence](#renewing-the-evidence));
+  between its runs, the newest report is as old as the last one.
 * The local BuildKit cache volume is shared, so run one build at a time per machine.
 * Rebase checks are file-level: they catch replaced files, missing libraries
   and interpreters, and a changed distribution release, not every behavior

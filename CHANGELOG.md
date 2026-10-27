@@ -5,6 +5,27 @@ what may change between releases.
 
 ## Unreleased
 
+### Phase B review fixes
+
+- Reject malformed VEX scopes and non-OpenVEX input instead of passing them
+  to the scanner. Package products are reduced to `@id`; OpenVEX 0.0.1
+  string identifiers and statement subcomponents are converted explicitly.
+- Shared-profile references affect every manifest using that profile,
+  including deletions and references inside a sibling image directory.
+  Root manifests cannot hide shared changes. Unowned deletions build all
+  surviving manifests.
+- Disable auto-merge for an unlisted kind before pushing the branch. If it
+  cannot be checked or disabled, leave that branch unchanged and warn.
+  With the feature off, preserve auto-merge enabled by a person. A failed
+  PR lookup warns without crashing.
+- Vulnerability attestations use the full predicate URI so Cosign
+  preserves VEX metadata and the source SBOM identity.
+- Re-attestation checks the exact new predicate against the org's image
+  signers and fails visibly when its signer is not trusted.
+- Every legacy-lock read warns that pins are taken as written. The digest
+  detects accidental edits, not deliberate removal of both metadata fields.
+
+
 ### Breaking
 
 **Tags move only to a signed, fully attested image, and never back.**
@@ -75,6 +96,58 @@ architecture. A lock without checksums can't be rendered; `lock --update`
 writes them. Every apk image's Containerfile changes, so it builds a new
 digest once: re-render (`clearcutt-factory render`) and commit.
 
+**A published stack pins its build image by digest.** `stack push`
+resolved a build image given as a factory manifest to its tag
+(`ghcr.io/acme/build-go:1`), so a rebuilt build image with the same tag
+(a toolchain fix) left every published stack unchanged: no
+`clearcutt.stack-published` reached the apps, and they rebuilt with the new
+toolchain only at their weekly update. The build image is now pinned by
+the digest the tag holds when the stack is pushed
+(`ghcr.io/acme/build-go:1@sha256:…`, the tag kept for readers), so a rebuilt
+build image changes the stack's content, the next `stack push` publishes a
+new stack, and the apps' lock-update job takes it. The first push after
+upgrading publishes a new stack for the same reason. `stack push` needs
+the build image in the registry: push stacks after the images workflow
+has published (`needs: images`, as the stacks job in
+[docs/adopting.md](docs/adopting.md#waking-the-apps-when-the-platform-publishes)
+does). The run image
+stays a tag: apps follow it by rebasing, and their locks pin what it
+held. Stacks published before, naming the build image by tag, still load,
+and an app's lock pins what the tag holds, as before. Build images given
+as plain references (`golang:1`) are published as written.
+
+**Locks carry a content digest and the release that wrote them.** A lock
+edited by hand (a digest, URL, checksum, or version changed) was read as it
+was: `loadLocked` checked only that the manifest's inputs matched. Every
+lock now records `contentDigest`, the sha256 of the rest of the file, and
+`generator`, the clearcutt-factory that last wrote it. A lock whose digest
+doesn't match is refused by every command that reads it, including `lock`
+(nothing in it is reused; `lock --update` resolves every input again, and
+shows the edit as a change) and `rebase --update-lock` (before it pushes
+anything); so is one that names its generator and has no digest, since
+every release that writes one writes the other. A lock with neither,
+written by an earlier release, is refused by `render`, `build`, and
+`verify` until `clearcutt-factory lock` rewrites it, which keeps its pins:
+run it once per manifest after upgrading (the examples are re-locked
+here). A
+lock a newer minor release wrote is refused with a message naming both
+versions, as is one this release can't decode when any newer release
+wrote it, instead of a `field … not found` error.
+
+**The lock is written only once its Containerfile renders, and both are
+written atomically.** `lock` wrote the lock, then rendered, so a resolution
+the Containerfile can't hold left a lock on disk that `render` and `build`
+refused. It now renders first, and writes each file to a temporary file
+beside it that is renamed over the old one, so a failed write leaves the
+previous lock and Containerfile intact.
+
+**A rebase refuses an app whose layers would delete files of the new
+base.** The check read whiteouts against the old base only, so an app
+layer that deleted a path the old base lacked and the new base has (an
+opaque directory, say) was rebased, and the result lacked the new base's
+files. Such whiteouts are a violation now ("app layers would delete files
+of the new base"), like the files an app layer would hide.
+
 **`policy.allowedHosts` covers apk repositories, and `allowedRegistries`
 matches whole path segments.** apk packages have no URL of their own, so
 the repositories they come from went unchecked; they are checked now, so
@@ -111,6 +184,169 @@ checks with BuildKit's own parser that the Containerfile has exactly the
 instructions a plain input gives, with each value unchanged.
 
 ### Added
+
+**Published images' evidence is renewed on a schedule: `reattest`.** A
+vulnerability report described the day the image was built, and nothing
+renewed it, so a verifier's scan was as old as the image; an image whose
+second-runner reproduction failed stayed without one. `clearcutt-factory
+reattest [-f image.yaml | --image REF] [--older-than 7d] [--out DIR]
+[--no-sign]` reads each platform image's SBOM attestation that the org's
+image signer made (it refuses an image the signer didn't sign, and
+rescans no SBOM it didn't attest), runs `grype db update`, scans the SBOM
+with the image's VEX statements, and attaches the new vulnerability report
+to the same digest with the org's `signing` settings, beside the reports
+already there. The report's `metadata.rescan.sbom` (`predicateType`,
+`digest.sha256` of the SBOM's in-toto statement) names the SBOM it scanned.
+`--older-than` leaves a platform whose newest verified report is younger.
+The gate doesn't fail it (the image is out; the findings the gate would
+block are listed). It writes `image=`, `rescanned=` (platform images), and
+`reproduced=` (a verified reproduction attestation exists) to
+`$GITHUB_OUTPUT`, and `out/<name>-reattest/reattest.json`. It never
+rebuilds or moves a tag. The new reusable `reattest.yml` (inputs
+`manifests`, `registry`, `older-than` default `6d`, `reproduce` default
+`true`, `publish-ref`, `factory-version`) runs it for every manifest on the
+default branch, then reproduces each image without a verified
+reproduction attestation on its own runner (`verify --image … --attest`).
+`init`'s workflow calls it daily; existing callers add the job
+([docs/adopting.md](docs/adopting.md#the-reusable-workflows)). Its
+signatures name `reattest.yml`: `init` now writes
+`(images|fleet|reattest)` into `certificateIdentityRegexp`, and existing
+org profiles and trust policies must add `reattest` for its reports and
+reproductions to verify (until then they are ignored, never trusted).
+
+**A pull request builds only the manifests it changes: `changed-only`.**
+`update-locks.yml` opens one pull request per image, and `images.yml`
+built every manifest on each, so when a gate failure spanned images (a
+fixable Critical in a package all six of a platform's images ship) no
+single pull request could pass: each failed on the other images' old
+locks. `images.yml` takes `changed-only` (default `false`): on a
+`pull_request`, it builds only the manifests the pull request affects,
+from the diff between GitHub's merge commit and the base branch; every
+other event (push, schedule, dispatch, `merge_group`) builds every
+manifest, as does a pull request whose affected set can't be told (with a
+warning). `init`'s workflow passes `changed-only: true`; existing callers
+add it to their `images.yml` call. A new `result` job passes when every
+manifest the run built passed, and when there was nothing to build: under
+`changed-only` the per-manifest checks differ between pull requests, so
+branch protection (which `auto-merge` needs) should require
+`<job> / result` instead ([docs/adopting.md](docs/adopting.md#pull-requests-build-what-they-change)).
+The new `clearcutt-factory affected --changed FILE MANIFEST…` does the
+choosing: it reads `git diff --name-status` (or `--name-only`, with or
+without `-z`) output, prints the affected manifests, and writes
+`manifests=` (a JSON array, `[]` for none) to `$GITHUB_OUTPUT`. A manifest
+owns the files under its directory (its lock and Containerfile among
+them), the files it extends, its `vex:` documents, its `files:` sources
+and an app's source directory wherever they are, and, for an app, its
+stack file and the manifests (and what they extend) of the stack's build
+and run images; a `factory.org.yaml` is owned by every manifest below it.
+A changed file no manifest owns (a shared profile, the trust policy or
+VEX documents a profile names, a workflow, a README) affects every
+manifest, since nothing says it doesn't; a deleted one affects every surviving manifest. A
+rename counts as its old path deleted and its new one changed.
+
+**The bot's pull requests can merge by themselves: `auto-merge`.**
+`fleet.yml` and `update-locks.yml` take an `auto-merge` input naming the
+kinds of pull request to turn GitHub auto-merge on for (a merge commit),
+space-separated: `pin` (the lock pinned to the run image the fleet
+rebased onto) and `rebuild` (the rebase was refused) on `fleet.yml`;
+`update` (every input) and `rebuild` (the stack and its images, `update:
+stack`) on `update-locks.yml`; or `all`. Off by default. A pull request of
+a listed kind merges once the base branch's required checks pass, so with
+a GitHub App the fleet runs without a person. It needs "Allow auto-merge"
+in the repository settings, branch protection with required status checks
+(without them a pull request is mergeable at once and GitHub refuses to
+auto-merge it, so nothing would gate the change), and an opener whose pull
+requests get CI (the App or `CLEARCUTT_BOT_TOKEN`; `GITHUB_TOKEN`'s never
+merge). It is turned on with GitHub's `enablePullRequestAutoMerge`, which
+refuses a pull request that is mergeable already, never with `gh pr merge
+--auto`, which would merge such a pull request at once, before any CI.
+When it can't be turned on, the job warns and leaves the pull request
+open; it never fails for that. A pull request the job updates into a kind
+not listed (the fleet's pin becomes a rebuild on the same branch when the
+next rebase is refused) has auto-merge turned off, so it doesn't merge
+what nobody asked to merge by itself (`open-pr_test.sh`).
+
+**A rebuilt build image reaches the apps in minutes:
+`clearcutt.build-image-published`.** `notify.yml` announced every published
+image as `clearcutt.run-image-published`, which apps answer by rebasing,
+so a toolchain fix (a CVE in Go's standard library, say, in the build
+image) reached them only at their weekly lock update. `images.yml`'s
+`published` output now records each image's `roles`: `build` when a stack
+in the repository names its manifest as `spec.build`, `run` when one names
+it as `spec.run`, both, or none (the new `clearcutt-factory roles -f
+image.yaml [--dir .]` prints them and writes `roles=` to `$GITHUB_OUTPUT`;
+there is no new field to fill in). `notify.yml` sends
+`clearcutt.build-image-published` for a build image and
+`clearcutt.run-image-published` for a run image or an image no stack names
+(an image that is both gets both), with `roles` in the payload: `{image,
+repository, digest, tags, roles, source}`. A build image that no stack
+names as a run image is no longer announced as one. `update-locks.yml`
+takes `update: stack`: for each app (images are skipped) it runs the new
+`clearcutt-factory lock --update-stack`, which moves the lock to the
+stack's newest version and its build and run images and nothing else (the
+path a refused rebase already takes), and opens a pull request on
+`factory/rebuild/<dir>` titled "Rebuild <dir> on the newest build image"
+(or "… stack", "… build and run images", by what moved); when only the
+run image moved it proposes nothing, since the fleet follows run images.
+An app on a registry stack moves when the stack does: `stack push` pins
+the build image by digest, so the `stack-published` after the platform's
+next `stack push` moves it, and the `build-image-published` before it
+finds nothing to do; an app whose own stack file names the build image by
+reference moves on `build-image-published`. The weekly
+`update: all` pull request is unchanged, carries the same images with
+everything else, and merging either lets the other close at its next run.
+`init`'s workflow answers `build-image-published` and `stack-published`
+with `update: stack` (`stack-published` used to get the full update), and
+runs it daily beside the fleet, so a missed dispatch costs a day, not a
+week. Existing callers: add `clearcutt.build-image-published` to the
+`repository_dispatch` types and pass `update` as
+[docs/adopting.md](docs/adopting.md#waking-the-apps-when-the-platform-publishes)
+shows; a platform repository's `images.yml` call needs no change.
+`fleet.yml` is unchanged: a refused rebase still opens its "Rebuild … on
+the newest run and build images" pull request.
+
+**VEX statements scoped to an image apply to that image only, and every
+suppression is recorded with its statement.** factory scanned with `grype
+sbom:FILE --vex DOC`, and given an SBOM grype ignores statements whose
+product is an image (`pkg:oci/…`) and applies statements whose product is
+a package to every image, so a suppression couldn't be limited to one
+image: a `not_affected` for the catalog service's Python applied to
+every image with that package, or, written as an image product, to none.
+Before each scan (build, rebase, heal, `reattest`), factory now selects the
+statements that name the image being scanned, by the rule clearcutt-verify
+applies to its rescans: an image purl (`pkg:oci/…`, `pkg:docker/…`) by its
+version (the index's or platform image's digest) or by `repository_url`
+(and `tag`, if given); a product that isn't a purl by repository,
+`repository:tag`, `repository@digest`, or digest. A bare `pkg:oci/NAME`
+names no image. It rewrites each as a statement about the packages its
+`subcomponents` name (by `@id` or `identifiers.purl`; an OpenVEX 0.0.1
+statement's own `subcomponents` count), or every package in the SBOM when
+it names none; unreadable subcomponents leave the statement out rather
+than widen it. Statements whose product is a package retain only its `@id`; statements about other images are left out. The vulnerability
+attestation records what was passed in `metadata.vex.statements`
+(`document`, `vulnerability`, `status`, `justification`, `product` as
+written, `scope` of `image` or `package`, and `packages`), what grype left
+out for a VEX statement in `metadata.vex.suppressed` (`vulnerability`,
+`package`, `version`, `purl`, and the statement's `document`, `product`,
+`status`, `justification`). Non-OpenVEX documents and malformed fields are
+refused before scanning. A rebase (and the heal of an image
+already on the newest base) now scans with the app manifest's VEX too, as
+its build did, so a suppression isn't lost when the fleet rebases.
+
+**A trust policy may name `estate` signers.** clearcutt-verify's trust
+policy gains a signer role `estate` (who signs estate report bundles). The
+same file is factory's `signing.trustPolicy`, and factory refused any role
+but `image` and `stack`; it now loads a policy with `estate` signers and
+leaves them out of what it checks images and stacks against. A role it
+doesn't know is still refused.
+
+**Every flag has a help string, and a bad command line prints the usage
+once.** `clearcutt-factory <command> -h` lists the command's flags with what
+each does. A flag that doesn't exist, a stray argument, or an unknown
+command printed the usage twice (once from the flag package, once from
+main); it now prints what was wrong and the usage, once, and exits 2. The
+`cmd/` package and `internal/diff` (which explains why a reproduction
+differs) have tests.
 
 **CI publishes with the real cosign.** Every cosign interaction in the
 tests was a fake. A `cosign` job now publishes a two-platform image to a

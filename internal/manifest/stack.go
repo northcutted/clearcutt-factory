@@ -41,7 +41,10 @@ type StackMetadata struct {
 type StackSpec struct {
 	// Build is the image the steps run in, and Run the image apps ship on:
 	// each an image reference, or the path of a factory manifest
-	// (image.yaml) whose published image to use.
+	// (image.yaml) whose published image to use. stack push resolves a
+	// manifest to the image's reference and first tag, and pins the build
+	// image by the digest the tag holds (ref:tag@sha256:…), so the stack
+	// changes when the build image is rebuilt.
 	Build     string   `yaml:"build" json:"build"`
 	Run       string   `yaml:"run" json:"run"`
 	Platforms []string `yaml:"platforms,omitempty" json:"platforms,omitempty"`
@@ -95,15 +98,29 @@ func IsStackFile(s string) bool {
 	return strings.HasSuffix(s, ".yaml") || strings.HasSuffix(s, ".yml")
 }
 
-// Resolved returns the stack with its build and run images as references
-// (factory manifest paths resolved through the org), ready to publish.
-func (s *Stack) Resolved(o *Org) (*Stack, error) {
+// Resolved returns the stack with its build and run images as references,
+// ready to publish: a factory manifest path becomes that image's published
+// reference and first tag. A build image given that way is also pinned by
+// the digest pin returns for the tag (ref:tag@sha256:…, the tag kept for
+// readers), so a rebuilt build image changes the stack's content and a
+// new stack is published; apps' locks pin that digest until the next
+// stack. The run image stays a tag: apps follow it by rebasing, which the
+// fleet does on every rebuild of it, and their locks pin what it held.
+func (s *Stack) Resolved(o *Org, pin func(ref string) (string, error)) (*Stack, error) {
 	out := *s
-	var err error
-	if out.Spec.Build, err = s.imageRef(s.Spec.Build, o); err != nil {
+	build, fromManifest, err := s.imageRef(s.Spec.Build, o)
+	if err != nil {
 		return nil, err
 	}
-	if out.Spec.Run, err = s.imageRef(s.Spec.Run, o); err != nil {
+	if fromManifest && pin != nil {
+		d, err := pin(build)
+		if err != nil {
+			return nil, fmt.Errorf("spec.build %s: the published image %s can't be resolved (%w); publish it before the stack, which pins it by digest", s.Spec.Build, build, err)
+		}
+		build += "@" + d
+	}
+	out.Spec.Build = build
+	if out.Spec.Run, _, err = s.imageRef(s.Spec.Run, o); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -182,27 +199,28 @@ func LoadStack(p string) (*Stack, error) {
 	return s, nil
 }
 
-// imageRef resolves a stack's build or run image: an image reference as is,
-// or a factory manifest's published reference and first tag.
-func (s *Stack) imageRef(v string, o *Org) (string, error) {
-	if !strings.HasSuffix(v, ".yaml") && !strings.HasSuffix(v, ".yml") {
-		return v, nil
+// imageRef resolves a stack's build or run image: an image reference as is
+// (which a published stack may pin by digest, ref:tag@sha256:…), or a
+// factory manifest's published reference and first tag (fromManifest).
+func (s *Stack) imageRef(v string, o *Org) (ref string, fromManifest bool, err error) {
+	if !IsStackFile(v) {
+		return v, false, nil
 	}
 	m, err := Load(filepath.Join(filepath.Dir(s.Path), v))
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if m.Kind != KindImage {
-		return "", fmt.Errorf("%s is a %s; a stack's images must be kind %s", v, m.Kind, KindImage)
+		return "", false, fmt.Errorf("%s is a %s; a stack's images must be kind %s", v, m.Kind, KindImage)
 	}
 	if err := m.ApplyOrg(o); err != nil {
-		return "", fmt.Errorf("%s: %w", v, err)
+		return "", false, fmt.Errorf("%s: %w", v, err)
 	}
 	tag := "latest"
 	if len(m.Metadata.Tags) > 0 {
 		tag = m.Metadata.Tags[0]
 	}
-	return m.Metadata.Ref + ":" + tag, nil
+	return m.Metadata.Ref + ":" + tag, true, nil
 }
 
 // applyStack loads the app's stack and fills the app's base and defaults
@@ -224,10 +242,10 @@ func (m *Manifest) applyStack(o *Org) error {
 	if m.StackFrom != nil && (IsStackFile(st.Spec.Build) || IsStackFile(st.Spec.Run)) {
 		return fmt.Errorf("stack %s names manifest files for its images; publish it with clearcutt-factory stack push, which resolves them", m.Spec.Stack)
 	}
-	if st.RunRef, err = st.imageRef(st.Spec.Run, o); err != nil {
+	if st.RunRef, _, err = st.imageRef(st.Spec.Run, o); err != nil {
 		return err
 	}
-	if st.BuildRef, err = st.imageRef(st.Spec.Build, o); err != nil {
+	if st.BuildRef, _, err = st.imageRef(st.Spec.Build, o); err != nil {
 		return err
 	}
 	m.Stack = st

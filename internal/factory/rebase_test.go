@@ -285,9 +285,11 @@ func TestRebaseApp(t *testing.T) {
 		return "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: Stack\nmetadata: {name: s}\nspec:\n  build: " + host + "/" + build + "\n  run: " + host + "/run:latest\n  platforms: [linux/amd64, linux/arm64]\n  steps: [{run: make}]\n"
 	}
 	files := map[string]string{
-		"factory.org.yaml":    "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nregistry: " + host + "/apps\nsigning: {mode: none}\n",
-		"stack.yaml":          stack("build:1"),
-		"hello/app.yaml":      "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: App\nmetadata: {name: hello}\nspec: {stack: ../stack.yaml}\n",
+		"factory.org.yaml": "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nregistry: " + host + "/apps\nsigning: {mode: none}\nsbom: {scan: false}\n",
+		"stack.yaml":       stack("build:1"),
+		"hello/app.yaml":   "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: App\nmetadata: {name: hello}\nspec: {stack: ../stack.yaml, vex: [hello.openvex.json]}\n",
+		"hello/hello.openvex.json": `{"@context":"https://openvex.dev/ns/v0.2.0","@id":"hello-vex","statements":[{"vulnerability":{"name":"CVE-2026-42"},` +
+			`"products":[{"@id":"pkg:oci/hello?repository_url=` + host + `/apps/hello"}],"status":"not_affected","justification":"component_not_present"}]}`,
 		"bad/app.yaml":        "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: App\nmetadata: {name: bad}\nspec: {stack: ../stack.yaml}\n",
 		"badreg/app.yaml":     "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: App\nmetadata: {name: badreg}\nspec: {stack: " + host + "/stacks/s:1}\n",
 		"platform/stack.yaml": stack("build:1"),
@@ -351,9 +353,42 @@ func TestRebaseApp(t *testing.T) {
 
 	opts := Options{ManifestPath: filepath.Join(dir, "hello", "app.yaml"), Version: "test", Stdout: &out, Stderr: &out}
 	ro := RebaseOptions{OutDir: filepath.Join(dir, "out"), Push: true, NoScan: true, UpdateLock: true}
+
+	// The rebased image is scanned with the app's VEX statements, as a
+	// build of it would be (a stand-in grype keeps the document it got).
+	grypeDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(grypeDir, "grype"), []byte("#!/bin/sh\nwhile [ $# -gt 0 ]; do [ \"$1\" = --vex ] && cp \"$2\" \"$0.vex\"; shift; done\necho '{\"matches\":[],\"descriptor\":{\"name\":\"grype\",\"version\":\"0.120.1\"}}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", grypeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ro.NoScan = false
+
+	// --update-lock on a lock edited by hand is refused before anything
+	// is pushed.
+	lockPath := filepath.Join(dir, "hello", "app.lock.yaml")
+	intact, _ := os.ReadFile(lockPath)
+	if err := os.WriteFile(lockPath, []byte(strings.Replace(string(intact), "sourceDateEpoch: 1700000000", "sourceDateEpoch: 1700000001", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := registry.Digest(ctx, host+"/apps/hello:latest")
+	out.Reset()
+	if err := Rebase(ctx, opts, ro); err == nil || !strings.Contains(err.Error(), "--update-lock: app.lock.yaml was edited by hand") || strings.Contains(out.String(), "pushed") {
+		t.Fatalf("rebase --update-lock of an edited lock: %v\n%s", err, out.String())
+	}
+	if after, _ := registry.Digest(ctx, host+"/apps/hello:latest"); after != before {
+		t.Fatal("the tag moved")
+	}
+	if err := os.WriteFile(lockPath, intact, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
 	if err := Rebase(ctx, opts, ro); err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
+	if b, err := os.ReadFile(filepath.Join(grypeDir, "grype.vex")); err != nil || !strings.Contains(string(b), "CVE-2026-42") || !strings.Contains(string(b), "hello-vex") {
+		t.Errorf("the rebased image wasn't scanned with the app's VEX: %v\n%s", err, b)
+	}
+	ro.NoScan = true
 	l, err := lock.Read(filepath.Join(dir, "hello", "app.lock.yaml"))
 	if err != nil {
 		t.Fatal(err)

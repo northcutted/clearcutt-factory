@@ -82,7 +82,7 @@ func healCurrent(ctx context.Context, opts Options, org *manifest.Org, ro Rebase
 				return "", err
 			}
 		}
-		po, err := sbomAndScan(ctx, org, declared[p.Platform], nil, p, work, ro.NoScan)
+		po, err := sbomAndScan(ctx, org, declared[p.Platform], ro.vex, ro.scanImage(plan.repo, art.Digest, p.Digest), p, work, ro.NoScan)
 		if err != nil {
 			return "", err
 		}

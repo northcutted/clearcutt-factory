@@ -2,15 +2,20 @@
 # so its apps catch up in minutes instead of at their next scheduled run.
 #
 # For each newly published image (kind image) it sends repository_dispatch
-# clearcutt.run-image-published, for each stack (kind stack)
-# clearcutt.stack-published, and for a shared org profile (kind profile)
-# clearcutt.profile-published, with the client payload
-# {image (repository@digest), repository, digest, tags, source (this
-# repository)}. Apps (kind app) have no dependents and are skipped. Payloads
-# are advisory: receivers re-resolve tags from the registry and verify
-# signatures themselves (init's workflow runs fleet.yml and update-locks.yml
-# on these events), so a stale or forged dispatch can at most start a run
-# that changes nothing.
+# clearcutt.build-image-published when the image is a build image (its
+# roles, from images.yml's published output, hold build: a stack's
+# spec.build names its manifest) and clearcutt.run-image-published when it
+# is a run image (roles hold run) or no stack names it (roles empty or
+# absent, as from an older images.yml); an image that is both gets both.
+# For each stack (kind stack) it sends clearcutt.stack-published, and for a
+# shared org profile (kind profile) clearcutt.profile-published. The client
+# payload is {image (repository@digest), repository, digest, tags, roles
+# (images only), source (this repository)}. Apps (kind app) have no
+# dependents and are skipped. Payloads are advisory: receivers re-resolve
+# tags from the registry and verify signatures themselves (init's workflow
+# runs fleet.yml on run-image-published and update-locks.yml on the
+# others), so a stale or forged dispatch can at most start a run that
+# changes nothing.
 #
 # Dependents are the owner's repositories with the topic clearcutt-app (the
 # topic and owner inputs), or the repositories input. The repository that
@@ -60,7 +65,7 @@ on:
   workflow_call:
     inputs:
       published:
-        description: 'What was published: a JSON array of {kind (image, app, stack, or profile), image (repository@digest), repository, digest, tags}, such as images.yml''s published output'
+        description: 'What was published: a JSON array of {kind (image, app, stack, or profile), image (repository@digest), repository, digest, tags, roles (an image: build and/or run)}, such as images.yml''s published output'
         type: string
         required: true
       topic:
@@ -107,15 +112,28 @@ jobs:
         env:
           PUBLISHED: ${{ inputs.published }}
         run: |
-          # One dispatch body per line.
+          # One dispatch body per line. An image is announced by its roles:
+          # build-image-published when it is a build image, and
+          # run-image-published when it is a run image or no stack names it
+          # (older images.yml outputs have no roles); both when it is both.
           jq -c --arg source "$GITHUB_REPOSITORY" '
             .[]
             | ((.kind // "image") | ascii_downcase) as $kind
             | select(($kind == "image" or $kind == "stack" or $kind == "profile") and (.digest // "") != "")
             | (.repository // (.image | sub("@.*$"; ""))) as $repository
+            | ((.roles // []) | map(ascii_downcase)) as $roles
+            | ($roles | any(. == "build")) as $build
+            | (if $kind == "stack" then ["clearcutt.stack-published"]
+               elif $kind == "profile" then ["clearcutt.profile-published"]
+               else (if $build then ["clearcutt.build-image-published"] else [] end)
+                    + (if ($roles | any(. == "run")) or ($build | not) then ["clearcutt.run-image-published"] else [] end)
+               end) as $events
+            | . as $item
+            | $events[]
             | {
-                event_type: ({stack: "clearcutt.stack-published", profile: "clearcutt.profile-published"}[$kind] // "clearcutt.run-image-published"),
-                client_payload: {image: (.image // ($repository + "@" + .digest)), repository: $repository, digest, tags: (.tags // []), source: $source}
+                event_type: .,
+                client_payload: ({image: ($item.image // ($repository + "@" + $item.digest)), repository: $repository, digest: $item.digest, tags: ($item.tags // []), source: $source}
+                                 + (if $kind == "image" then {roles: $roles} else {} end))
               }' <<<"${PUBLISHED:-[]}" > "$RUNNER_TEMP/events"
           if [ -s "$RUNNER_TEMP/events" ]; then
             echo "any=true" >> "$GITHUB_OUTPUT"

@@ -1,0 +1,218 @@
+# Renews the evidence of published images without rebuilding them, on a
+# schedule (weekly is a good start: "37 4 * * 1"; daily for a tighter
+# maxScanAgeDays in clearcutt-verify). For each manifest, on the default
+# branch (or the publish-ref input's ref; elsewhere it does nothing):
+#
+#   * clearcutt-factory reattest reads each platform image's SBOM
+#     attestation that the org's image signer made, updates grype's
+#     vulnerability database, scans the SBOM, and attaches the new
+#     vulnerability report to the same digest, signed keylessly by this
+#     workflow, beside the reports already there (its metadata.rescan names
+#     the SBOM it read). A platform whose newest verified report is younger
+#     than the older-than input is left alone, so a re-run doesn't pile up
+#     reports. The gate doesn't fail the run: the image is out, and the
+#     report says what it holds (fixes come from update-locks.yml).
+#   * When the image has no verified reproduction attestation (its
+#     second-runner reproduction failed, or ran before reproductions were
+#     attested), this runner rebuilds it from its signed recipe (or repeats
+#     its rebase) and attests the match: clearcutt-factory verify --image
+#     … --attest.
+#
+# It never rebuilds a published image into a new one, and never moves a tag.
+#
+# The certificate names this workflow
+# (https://github.com/northcutted/clearcutt-factory/.github/workflows/reattest.yml@refs/tags/vX.Y.Z),
+# so the org profile's image signer must accept it beside images.yml and
+# fleet.yml: init writes (images|fleet|reattest) into
+# certificateIdentityRegexp. A report signed by an identity the signer
+# doesn't accept is ignored by clearcutt-verify and by factory.
+#
+# Other repositories call it (see docs/adopting.md):
+#
+#   on:
+#     schedule:
+#       - cron: "37 4 * * 1"
+#   jobs:
+#     reattest:
+#       uses: northcutted/clearcutt-factory/.github/workflows/reattest.yml@v0.3.0
+#       permissions: {contents: read, packages: write, id-token: write}
+name: reattest
+on:
+  schedule:
+    - cron: "37 4 * * 1" # Mondays: this repository's examples
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      manifests:
+        description: Manifest globs, space-separated (bash globstar)
+        type: string
+        default: "**/image.yaml **/app.yaml"
+      registry:
+        description: Registry to log in to
+        type: string
+        default: ghcr.io
+      older-than:
+        description: 'Rescan only the platform images whose newest verified vulnerability report is older than this (7d, 36h); a little under the schedule''s period, so each run rescans what the last one did. "0d" rescans every one'
+        type: string
+        default: 6d
+      reproduce:
+        description: Reproduce, on this runner, each image that has no verified reproduction attestation, and attest the match
+        type: boolean
+        default: true
+      publish-ref:
+        description: 'A ref (or bash glob, e.g. refs/heads/release/*) that re-attests too, besides the default branch. Runs on any other ref do nothing'
+        type: string
+        default: ""
+      factory-version:
+        description: clearcutt-factory release to use
+        type: string
+        default: v0.3.0
+    secrets:
+      REGISTRY_USERNAME:
+        description: Registry user, for a registry other than ghcr.io
+        required: false
+      REGISTRY_PASSWORD:
+        description: Registry password or token, for a registry other than ghcr.io
+        required: false
+permissions:
+  contents: read
+# One run at a time per ref and manifests; a newer one waits.
+concurrency:
+  group: clearcutt-factory-reattest-${{ github.ref }}-${{ inputs.manifests }}
+  cancel-in-progress: false
+env:
+  # Callers use a release; this repository's own events build from source.
+  FACTORY_VERSION: ${{ inputs.factory-version || 'source' }}
+  MANIFESTS: ${{ inputs.manifests || 'examples/*/image.yaml examples/*/app.yaml' }}
+  REGISTRY: ${{ inputs.registry || 'ghcr.io' }}
+  OLDER_THAN: ${{ inputs.older-than || '6d' }}
+jobs:
+  manifests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      manifests: ${{ steps.find.outputs.manifests }}
+      publish: ${{ steps.ref.outputs.publish }}
+    steps:
+      # Only the default branch publishes (pushes, signs, opens pull
+      # requests), or the ref the publish-ref input names: a pull request,
+      # or workflow_dispatch from another branch, builds and checks only.
+      # schedule, repository_dispatch, and workflow_run run on the default
+      # branch.
+      - name: Publish from this ref?
+        id: ref
+        shell: bash
+        env:
+          PUBLISH_REF: ${{ inputs.publish-ref }}
+        run: |
+          default=$(jq -r '.repository.default_branch // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)
+          # publish-ref may be a glob (refs/heads/release/*).
+          # shellcheck disable=SC2053
+          publish_ref() { [ -n "$PUBLISH_REF" ] && [[ "$GITHUB_REF" == $PUBLISH_REF ]]; }
+          publish=false
+          case "$GITHUB_EVENT_NAME" in
+            pull_request | pull_request_target | merge_group) ;;
+            *)
+              if [ -n "$default" ] && [ "$GITHUB_REF" = "refs/heads/$default" ]; then
+                publish=true
+              elif [ -z "$default" ] && [[ "$GITHUB_EVENT_NAME" =~ ^(schedule|repository_dispatch|workflow_run)$ ]]; then
+                publish=true
+              elif publish_ref; then
+                publish=true
+              fi
+              ;;
+          esac
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          if [ "$publish" = false ] && [[ "$GITHUB_EVENT_NAME" != pull_request* ]]; then
+            echo "::notice::$GITHUB_REF is not the default branch${default:+ ($default)}${PUBLISH_REF:+ or $PUBLISH_REF}: checking only, nothing is published"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Find the manifests
+        id: find
+        shell: bash
+        run: |
+          shopt -s globstar nullglob
+          found=()
+          for pattern in $MANIFESTS; do for f in $pattern; do found+=("$f"); done; done
+          echo "manifests=$(printf '%s\n' "${found[@]}" | sort -u | jq -R -s -c 'split("\n") | map(select(. != ""))')" >> "$GITHUB_OUTPUT"
+
+  reattest:
+    needs: manifests
+    if: needs.manifests.outputs.publish == 'true' && needs.manifests.outputs.manifests != '[]'
+    runs-on: ubuntu-latest
+    # A reproduction rebuilds other platforms under emulation.
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        manifest: ${{ fromJSON(needs.manifests.outputs.manifests) }}
+    permissions:
+      contents: read
+      packages: write # attach the attestations
+      id-token: write # sign them keylessly
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: env.FACTORY_VERSION != 'source'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: northcutted/clearcutt-factory
+          ref: ${{ env.FACTORY_VERSION }}
+          path: .clearcutt-factory
+      - if: env.FACTORY_VERSION != 'source'
+        uses: ./.clearcutt-factory
+        with:
+          version: ${{ env.FACTORY_VERSION }}
+      - if: env.FACTORY_VERSION == 'source'
+        uses: ./
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0; a reproduction rebuilds other platforms under emulation
+        with:
+          # The privileged binfmt image, pinned (update: crane digest tonistiigi/binfmt:<tag>).
+          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          password: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
+
+      - name: Rescan the verified SBOMs and attach the new vulnerability reports
+        id: reattest
+        env:
+          MANIFEST: ${{ matrix.manifest }}
+        run: clearcutt-factory reattest -f "$MANIFEST" --older-than "$OLDER_THAN"
+
+      # Also when the rescan failed for a platform: the reproduction is
+      # evidence of its own. verify --image reads the signer identity from
+      # the manifest's org profile.
+      - name: Reproduce on this runner, and attest the match, if no verified reproduction attestation exists
+        if: ${{ !cancelled() && steps.reattest.outputs.reproduced == 'false' && format('{0}', inputs.reproduce) != 'false' }}
+        env:
+          MANIFEST: ${{ matrix.manifest }}
+          IMAGE: ${{ steps.reattest.outputs.image }}
+        run: |
+          dir=$(dirname "$MANIFEST")
+          while [ ! -f "$dir/factory.org.yaml" ] && [ "$dir" != . ] && [ "$dir" != / ]; do dir=$(dirname "$dir"); done
+          org=()
+          if [ -f "$dir/factory.org.yaml" ]; then org=(--org "$dir/factory.org.yaml"); fi
+          clearcutt-factory verify --image "$IMAGE" --attest "${org[@]}"
+
+      - id: slug
+        if: always()
+        env:
+          MANIFEST: ${{ matrix.manifest }}
+        run: echo "slug=$(echo "$MANIFEST" | tr '/.' '--')" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: reattest-${{ steps.slug.outputs.slug }}
+          path: |
+            out/*-reattest/reattest.json
+            out/*-reattest/attestations/
+          if-no-files-found: ignore

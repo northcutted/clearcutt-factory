@@ -33,10 +33,13 @@ func StackPush(ctx context.Context, opts Options, file, ref string, noSign bool)
 
 // StackPushWith publishes a stack file to a registry so apps in any
 // repository can name it (spec.stack: REF), then signs it. Build and run
-// images given as factory manifests are resolved to references first. A
-// stack is published by its content, so when the registry already has that
-// digest, signed by one of the org's stack signers (or signing is off), it
-// only moves the tag: running it again doesn't pile up signatures.
+// images given as factory manifests are resolved to references first, the
+// build image pinned by the digest its tag holds now (see
+// manifest.Stack.Resolved), so pushing after the build image was rebuilt
+// publishes a new stack. A stack is published by its content, so when the
+// registry already has that digest, signed by one of the org's stack
+// signers (or signing is off), it only moves the tag: running it again
+// doesn't pile up signatures.
 func StackPushWith(ctx context.Context, opts Options, file string, so StackPushOptions) error {
 	if so.Key != "" && so.NoSign {
 		return errors.New("--key signs the stack; drop --key or --no-sign")
@@ -53,7 +56,7 @@ func StackPushWith(ctx context.Context, opts Options, file string, so StackPushO
 	if err != nil {
 		return err
 	}
-	if st, err = st.Resolved(org); err != nil {
+	if st, err = st.Resolved(org, func(ref string) (string, error) { return registry.Digest(ctx, ref) }); err != nil {
 		return err
 	}
 	content := st.Marshal()
@@ -151,7 +154,7 @@ func fetchAppStack(ctx context.Context, m *manifest.Manifest, fresh bool) error 
 	ref := m.Spec.Stack
 	target := ref
 	if !fresh {
-		if l, err := lock.Read(m.LockPath()); err == nil && l.App != nil && l.App.StackArtifact != nil && l.App.StackArtifact.Ref == ref {
+		if l := lockPins(m.LockPath()); l != nil && l.App != nil && l.App.StackArtifact != nil && l.App.StackArtifact.Ref == ref {
 			target = lock.RepoOf(ref) + "@" + l.App.StackArtifact.Digest
 		}
 	}

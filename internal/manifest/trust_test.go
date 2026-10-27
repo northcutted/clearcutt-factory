@@ -130,3 +130,41 @@ func TestTlog(t *testing.T) {
 		}
 	}
 }
+
+// TestEstateSigners: a trust policy may name signers for clearcutt-verify's
+// estate report bundles (role estate). factory loads such a policy and
+// leaves those signers out of what it checks images and stacks against;
+// a role it doesn't know is still refused, so a misspelt role can't drop a
+// signer quietly.
+func TestEstateSigners(t *testing.T) {
+	const head = "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nsigning: {trustPolicy: trust.yaml}\npolicy: {requireSignedStacks: true}\n"
+	policy := func(roles string) string {
+		return "apiVersion: clearcutt.dev/v1\nkind: TrustPolicy\nsigners:\n" +
+			"  - {name: images, identityRegexp: '" + testReusable + "', issuer: " + testIssuer + "}\n" +
+			"  - {name: stacks, roles: [stack], identity: " + testStacks + ", issuer: " + testIssuer + "}\n" +
+			"  - {name: estate, roles: " + roles + ", identity: https://github.com/acme/showcase/.github/workflows/estate.yml@refs/heads/main, issuer: " + testIssuer + "}\n"
+	}
+	dir := writeFiles(t, map[string]string{"factory.org.yaml": head, "trust.yaml": policy("[estate]")})
+	org, err := LoadOrg(filepath.Join(dir, "factory.org.yaml"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := org.Signers(RoleImage); len(s) != 1 || s[0].CertificateIdentityRegexp != testReusable {
+		t.Errorf("image signers: %+v", s)
+	}
+	if s := org.Signers(RoleStack); len(s) != 1 || s[0].CertificateIdentity != testStacks {
+		t.Errorf("stack signers: %+v", s)
+	}
+	if s := org.Trust.For(RoleEstate); len(s) != 1 || !strings.Contains(s[0].CertificateIdentity, "estate.yml") {
+		t.Errorf("estate signers: %+v", s)
+	}
+	// An estate signer that also signs images counts for images.
+	dir = writeFiles(t, map[string]string{"factory.org.yaml": head, "trust.yaml": policy("[estate, image]")})
+	if org, err = LoadOrg(filepath.Join(dir, "factory.org.yaml"), ""); err != nil || len(org.Signers(RoleImage)) != 2 {
+		t.Errorf("estate and image: %v, %d image signers", err, len(org.Signers(RoleImage)))
+	}
+	dir = writeFiles(t, map[string]string{"factory.org.yaml": head, "trust.yaml": policy("[esate]")})
+	if _, err := LoadOrg(filepath.Join(dir, "factory.org.yaml"), ""); err == nil || !strings.Contains(err.Error(), `role "esate" must be image, stack, or estate`) {
+		t.Errorf("unknown role: %v", err)
+	}
+}

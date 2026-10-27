@@ -48,9 +48,11 @@ sign)
   if [ -f "$0.children" ]; then grep "^$ref " "$0.children" | while read -r _ child; do echo "sig $child" >> "$0.state"; done; fi
   ;;
 attest)
-  if failing "attest $3"; then echo "fake cosign: attesting $3 failed" >&2; exit 1; fi
-  echo "att $3 $ref" >> "$0.state"
-  mkdir -p "$0.d" && cp "$5" "$0.d/$(key "$3" "$ref")"
+  t=$3
+  case "$t" in https://cosign.sigstore.dev/attestation/vuln/v1) t=vuln ;; esac
+  if failing "attest $t"; then echo "fake cosign: attesting $t failed" >&2; exit 1; fi
+  echo "att $t $ref" >> "$0.state"
+  mkdir -p "$0.d" && cp "$5" "$0.d/$(key "$t" "$ref")"
   ;;
 verify)
   grep -qxF -- "sig $ref" "$0.state" 2>/dev/null || { echo "no signatures found" >&2; exit 1; }
@@ -58,10 +60,12 @@ verify)
 verify-attestation)
   t=$3
   case "$t" in https://cyclonedx.org/bom) t=cyclonedx ;; https://cosign.sigstore.dev/attestation/vuln/v1) t=vuln ;; esac
+  if failing "verify-attestation $t"; then echo "untrusted attestation identity" >&2; exit 1; fi
   grep -qxF -- "att $t $ref" "$0.state" 2>/dev/null || { echo "no matching attestations" >&2; exit 1; }
   pred='{}'
   if [ -f "$0.d/$(key "$t" "$ref")" ]; then pred=$(cat "$0.d/$(key "$t" "$ref")"); fi
-  printf '{"payload":"%s"}\n' "$(printf '{"predicateType":"%s","predicate":%s}' "$3" "$pred" | base64 | tr -d '\n')"
+  if [ "$t" = vuln ] && [ -n "$RETURN_OLD_VULN" ]; then pred='{"metadata":{"scanFinishedOn":"2026-10-01T00:00:00Z"}}'; fi
+  printf '{"payload":"%s"}\n'  "$(printf '{"predicateType":"%s","predicate":%s}' "$3" "$pred" | base64 | tr -d '\n')"
   ;;
 esac
 `
@@ -123,7 +127,11 @@ func (c *stateCosign) calls() []string {
 		case len(f) > 0 && f[0] == "sign":
 			out = append(out, "sign "+ref)
 		case len(f) > 2 && f[0] == "attest":
-			out = append(out, "attest "+f[2]+" "+ref)
+			kind := f[2]
+			if kind == attest.VulnType {
+				kind = "vuln"
+			}
+			out = append(out, "attest "+kind+" "+ref)
 		}
 	}
 	return out

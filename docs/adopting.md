@@ -86,6 +86,23 @@ Push, then in the repository (or organization) settings:
    `action_required`).
 2. For a registry other than `ghcr.io`: set the reusable workflows' `registry`
    input and add `REGISTRY_USERNAME` and `REGISTRY_PASSWORD` secrets.
+3. **To merge the bot's pull requests by themselves** once CI passes, pass
+   the `auto-merge` input to `fleet.yml` (`pin`, `rebuild`) and
+   `update-locks.yml` (`update`, `rebuild`), or `all`, naming the kinds to
+   merge; each such pull request gets GitHub auto-merge (a merge commit).
+   For that, under **General**, allow auto-merge; under **Branches** (or
+   **Rules**), protect the default branch with required status checks
+   (`images / result`, the check `images.yml` reports for the whole build:
+   [below](#pull-requests-build-what-they-change)), since without required checks
+   a pull request is mergeable at once and GitHub refuses to auto-merge it;
+   and use the App or token from step 1, since `GITHUB_TOKEN`'s pull
+   requests get no CI and would never merge. When auto-merge can't be
+   turned on, the job warns and leaves the pull request open; it never
+   fails for that. A pull request the job updates into a kind not listed
+   (the fleet's pin, refused at its next run, becomes a rebuild on the same
+   branch) has auto-merge turned off. A reasonable start: `pin` and
+   `rebuild` on the fleet, `update` and `rebuild` on the weekly job once
+   you trust its gate.
 
 On `main`, each changed image is pushed, signed keylessly, attested (SBOM,
 vulnerabilities, recipe, SLSA provenance), and rebuilt on a second runner from
@@ -105,6 +122,42 @@ signer identity trusts. To publish from another ref too (release branches,
 say), set the `publish-ref` input of each of them to it, or to a bash glob
 (`refs/heads/release/*`), and add a signer for it (the `sourceRef` below
 names one ref).
+
+### Pull requests build what they change
+
+With `changed-only: true`, as `init`'s workflow passes it, `images.yml`
+builds on a pull request only the manifests the pull request affects
+(`clearcutt-factory affected`, given the diff between GitHub's merge commit
+and the base branch). A manifest is affected when the pull request changes
+a file it owns: anything under its directory (its lock and Containerfile
+among them), a file it `extends`, its `vex:` documents, its `files:`
+sources and an app's `source` wherever they are, a `factory.org.yaml`
+above it, and, for an app, its stack file and the manifests of the stack's
+build and run images (and what they extend), which give the app's lock its
+build image and base. A build image's lock is not among them: the app's
+lock pins the build image that is published, not the one in the pull
+request. So the weekly job's pull request for one image builds that image
+only, and goes green on its own even when another image fails the gate on
+its old lock (a CVE in a package every image ships gets one pull request
+per image, each of which can merge).
+
+Every manifest builds when the pull request changes a file no manifest
+owns, since nothing says it can't matter: a shared profile, the trust
+policy or VEX documents a profile names, a workflow, a README at the root.
+Deleting an unowned file also builds every surviving manifest, since the
+previous configuration may have read it. Root manifests do not hide shared
+changes. Local shared-profile inputs belong to every manifest using them. Every manifest builds, too, when the
+affected set can't be told (no merge commit, or a `factory-version`
+before `affected`, with a warning), and on every other event: a push to
+the default branch, a schedule, a dispatch, or a merge queue's
+`merge_group`.
+
+The per-manifest checks (`images / build (images/a/image.yaml)`) then
+differ from one pull request to the next, and branch protection that
+requires one waits forever on a pull request that doesn't build it.
+Require `images / result` (the job name in your workflow, then `result`):
+it passes when every manifest the run built passed, including when there
+was nothing to build, and fails otherwise.
 
 ### A GitHub App for the automation
 
@@ -153,7 +206,12 @@ clearcutt-factory stack push -f stacks/go.yaml --ref ghcr.io/acme/stacks/go:1
 
 Build and run images given as factory manifests (`run: ../go-runtime/image.yaml`)
 are resolved to their published references before pushing, and the stack is
-signed. A stack is published by its content, so pushing an unchanged one
+signed. The build image is pinned by the digest its tag holds at that
+moment (`ghcr.io/acme/build-go:1@sha256:…`), so push stacks after the
+images workflow has published, and a rebuilt build image (a Go or npm
+fix, say) makes the next `stack push` publish a new stack; the run image
+is named by tag, since apps follow it by rebasing. A stack is published
+by its content, so pushing an unchanged one
 again only moves the tag, once the org's stack signer (`signing.stacks`,
 below) has signed it: a workflow can run `stack push` on every change
 without piling up signatures. App repositories name it by reference:
@@ -181,9 +239,28 @@ To have it happen minutes after the platform publishes:
 ```
 platform: images.yml ─┬▶ notify.yml ─repository_dispatch─▶ each repository with the topic clearcutt-app
                       └▶ images.yml with published: reproduce on a second runner, meanwhile
-  clearcutt.run-image-published ─▶ fleet.yml: rebase onto the new run image, then the pin pull request
-  clearcutt.stack-published     ─▶ update-locks.yml: a pull request moving the lock to the new stack
+  clearcutt.run-image-published   ─▶ fleet.yml: rebase onto the new run image, then the pin pull request
+  clearcutt.build-image-published ─▶ update-locks.yml (update: stack): a pull request rebuilding the app
+  clearcutt.stack-published       ─▶   on the stack's newest build (and run) image, "Rebuild … on the newest build image"
+  clearcutt.profile-published     ─▶ update-locks.yml (update: all): a pull request moving the lock to the new profile
 ```
+
+A published image is a build image or a run image by what the platform
+repository's stacks make of it (`spec.build` or `spec.run` naming its
+manifest; `clearcutt-factory roles -f image.yaml` prints it, and
+`images.yml` records it as `roles` in its `published` output); an image no
+stack names is announced as a run image, and one that is both gets both
+events.
+
+Which event moves an app to a rebuilt build image depends on how its stack
+names it. A stack published with `stack push` pins its build image by
+digest, so an app on it moves when the stack does: the
+`clearcutt.stack-published` that follows the platform's next `stack push`
+(push stacks after the images, as below), not the
+`clearcutt.build-image-published` before it, which finds the app's stack
+unchanged and proposes nothing. An app whose own stack file names the
+build image by reference (`build: ghcr.io/acme/build-go:1`) moves on
+`clearcutt.build-image-published` itself.
 
 1. **Tag the app repositories** with the topic `clearcutt-app` (the
    repository's About settings). `notify.yml`'s `topic` and `owner` inputs
@@ -195,8 +272,9 @@ platform: images.yml ─┬▶ notify.yml ─repository_dispatch─▶ each repo
    `GITHUB_TOKEN` can't dispatch to other repositories.
 3. **That's all for images and apps:** `init`'s workflow has the `notify`
    job (sending, for the images `images.yml` reports in its `published`
-   output) and answers both events (receiving). The payload,
-   `{image, repository, digest, tags, source}`, is advisory: the jobs it
+   output) and answers every event (receiving). The payload,
+   `{image, repository, digest, tags, roles, source}` (`roles` for images:
+   `build` and/or `run`), is advisory: the jobs it
    starts re-resolve tags from the registry and verify signatures as they do
    on their schedules, so a stale or forged dispatch starts a run that
    changes nothing. That is also why `notify` needn't wait for the
@@ -213,6 +291,7 @@ platform: images.yml ─┬▶ notify.yml ─repository_dispatch─▶ each repo
     permissions: {contents: read, packages: write, id-token: write, attestations: write}
     with:
       reproduce: false
+      changed-only: true # a pull request builds only the images it affects
 
   reproduce:
     needs: images
@@ -234,14 +313,45 @@ platform: images.yml ─┬▶ notify.yml ─repository_dispatch─▶ each repo
       CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
 ```
 
-4. **Stacks** are pushed by a job of your own, so hand `notify.yml` what it
-   pushed (`stack push` writes `image`, `repository`, `digest`, and
-   `published` to `$GITHUB_OUTPUT`; `published` is `false` when the stack was
-   unchanged and only its tag moved):
+   On the receiving side, a workflow of your own answers
+   `clearcutt.build-image-published` and `clearcutt.stack-published` with
+   `update-locks.yml`'s stack update, which proposes the rebuild and nothing
+   else, and runs it daily too, so a dispatch that was missed costs a day
+   rather than a week (the weekly `update: all` pull request carries the
+   same images with everything else; merging either lets the other close at
+   its next run):
+
+```yaml
+on:
+  schedule:
+    - cron: "23 6 * * 1" # weekly: every input
+    - cron: "41 5 * * *" # daily: the stack and its images, in case a dispatch was missed
+  workflow_dispatch:
+  repository_dispatch:
+    types: [clearcutt.run-image-published, clearcutt.build-image-published, clearcutt.stack-published, clearcutt.profile-published]
+jobs:
+  update-locks:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.action == 'clearcutt.build-image-published' || github.event.action == 'clearcutt.stack-published' || github.event.action == 'clearcutt.profile-published'
+    uses: northcutted/clearcutt-factory/.github/workflows/update-locks.yml@v0.3.0
+    permissions: {contents: write, pull-requests: write}
+    with:
+      update: ${{ (github.event.schedule == '41 5 * * *' || github.event.action == 'clearcutt.build-image-published' || github.event.action == 'clearcutt.stack-published') && 'stack' || 'all' }}
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+```
+
+4. **Stacks** are pushed by a job of your own, after the images (a stack
+   pins its build image by the digest the tag holds when it is pushed, so
+   before the images job has published it would pin the old one), so hand
+   `notify.yml` what it pushed (`stack push` writes `image`, `repository`,
+   `digest`, and `published` to `$GITHUB_OUTPUT`; `published` is `false`
+   when the stack was unchanged and only its tag moved):
 
 ```yaml
   stacks:
-    if: github.event_name == 'push'
+    needs: images # the build images it pins are published
+    if: ${{ !cancelled() && needs.images.result != 'skipped' && github.event_name == 'push' }}
     runs-on: ubuntu-latest
     permissions: {contents: read, packages: write, id-token: write}
     outputs:
@@ -303,7 +413,7 @@ signing:
 vulnerabilities:
   failOn: critical
   onlyFixed: true
-  vex: [../vex/2026-10.openvex.json] # applied to every repository's scans
+  vex: [../vex/2026-10.openvex.json] # applied to every repository's scans (image products apply to their image only)
 policy:
   requireNonRoot: true
   requireSignedStacks: true
@@ -347,7 +457,7 @@ extends:
 registry: ghcr.io/acme/checkout       # what the shared profile leaves to each repository
 signing:
   verify:
-    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet)\.yml@refs/tags/v\d+\.\d+\.\d+$
+    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@refs/tags/v\d+\.\d+\.\d+$
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
     sourceRepository: https://github.com/acme/checkout
     sourceRef: refs/heads/main
@@ -363,7 +473,8 @@ tag could publish one naming themselves. `extends.signer` is a signer like
 `signing.verify` (a key, or a certificate identity and issuer), reviewed in
 the app repository like any other change; protect `factory.org.yaml` with
 CODEOWNERS. It isn't a role in a local trust policy: the trust policy is
-part of what the shared profile provides, and its roles (`image`, `stack`)
+part of what the shared profile provides, and its roles (`image`, `stack`,
+and `estate`, clearcutt-verify's report signers, which factory reads past)
 are shared with clearcutt-verify.
 
 **Rotating the shared profile's signer.** `extends.signers` lists several
@@ -458,7 +569,7 @@ the field, not a silent override, so what the file says is what applies:
 | `policy.requireNonRoot`, `policy.requireSignedStacks`, `policy.requireOfflineBuildTools`, `sbom.scan` | Can only turn on |
 | `policy.requiredLabels` | Union |
 | `policy.allowedHosts`, `policy.allowedRegistries` | The repository's list, when it sets one, must lie within the shared one (a host or `.suffix` the shared list allows; a registry or repository path at or below a shared one, by whole path segments) |
-| `vulnerabilities.vex` | The shared profile's statements apply to every scan. The repository's (its profile's `vex` and its manifests' `spec.vex`) are refused unless the shared profile sets `vulnerabilities.allowLocalVEX: true`: a statement that a vulnerability doesn't apply lets an image past the gate |
+| `vulnerabilities.vex` | The shared profile's statements apply to every scan (a statement whose product is an image, `pkg:oci/…` by digest or `repository_url`, to that image only; see the README's [VEX statements are applied per image](../README.md#what-gets-attached-to-a-pushed-image)). The repository's (its profile's `vex` and its manifests' `spec.vex`) are refused unless the shared profile sets `vulnerabilities.allowLocalVEX: true`: a statement that a vulnerability doesn't apply lets an image past the gate |
 
 Under a shared profile, `build --push` and `rebase --push` refuse
 `--no-scan`, which would publish past its vulnerability gate; `--no-scan`
@@ -515,7 +626,7 @@ writes all three, with the origin remote's default branch (or
 signing:
   mode: keyless
   verify:          # this repository's images
-    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet)\.yml@refs/tags/v\d+\.\d+\.\d+$
+    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@refs/tags/v\d+\.\d+\.\d+$
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
     sourceRepository: https://github.com/acme/checkout
     sourceRef: refs/heads/main
@@ -585,7 +696,7 @@ apiVersion: clearcutt.dev/v1
 kind: TrustPolicy
 signers:
   - name: factory-builds              # images (the default role)
-    identityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet)\.yml@refs/tags/v\d+\.\d+\.\d+$
+    identityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@refs/tags/v\d+\.\d+\.\d+$
     issuer: https://token.actions.githubusercontent.com
     sourceRepositoryOwner: https://github.com/acme
     sourceMatchesImage: true
@@ -607,7 +718,9 @@ workflow does: `secrets: inherit` reaches only workflows in your own
 organization or enterprise. Variables (`CLEARCUTT_APP_ID`) are read from the
 calling repository. `images.yml`'s output `published` is what the run newly
 published: a JSON array of `{manifest, kind (image or app), image
-(repository@digest), repository, digest, tags}`, `[]` on pull requests.
+(repository@digest), repository, digest, tags, roles}` (`roles`: `build`
+and/or `run` for an image, as the stacks name it; `[]` for none), `[]` on
+pull requests.
 It arrives when the whole workflow is done. With `reproduce: false` the run
 publishes without reproducing, and a second call given its `published` builds
 nothing and only reproduces what that lists, so jobs that need only the
@@ -616,10 +729,36 @@ output start right after the images are published
 
 | Workflow | Inputs | Secrets | Caller permissions |
 |---|---|---|---|
-| `images.yml` | `manifests` (globs, default `**/image.yaml **/app.yaml`), `registry`, `provenance`, `reproduce` (default `true`), `published` (only reproduce this) | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write`, `attestations: write` |
-| `update-locks.yml` | `manifests`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: write`, `pull-requests: write` |
-| `fleet.yml` | `apps` (default `**/app.yaml`), `registry`, `provenance`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: write`, `pull-requests: write`, `packages: write`, `id-token: write`, `attestations: write` |
+| `images.yml` | `manifests` (globs, default `**/image.yaml **/app.yaml`), `registry`, `provenance`, `reproduce` (default `true`), `published` (only reproduce this), `changed-only` (default `false`: on a pull request, only the manifests it affects; [above](#pull-requests-build-what-they-change)), `publish-ref` | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write`, `attestations: write` |
+| `update-locks.yml` | `manifests`, `update` (`all`, default, or `stack`: apps only, the stack and its build and run images, as a rebuild pull request), `app-id`, `auto-merge` (`update`, `rebuild`, or `all`) | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: write`, `pull-requests: write` |
+| `fleet.yml` | `apps` (default `**/app.yaml`), `registry`, `provenance`, `app-id`, `auto-merge` (`pin`, `rebuild`, or `all`) | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: write`, `pull-requests: write`, `packages: write`, `id-token: write`, `attestations: write` |
+| `reattest.yml` | `manifests`, `registry`, `older-than` (default `6d`), `reproduce` (default `true`), `publish-ref` | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write` |
 | `notify.yml` | `published` (required), `topic` (default `clearcutt-app`), `owner`, `repositories`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: read` |
+
+`reattest.yml` renews published images' evidence on a schedule: each
+platform image's signed SBOM is scanned again with grype's newest database
+and the new vulnerability report attached to the same digest, and an image
+without a verified reproduction attestation is reproduced and the match
+attested; nothing is rebuilt or retagged
+([README](../README.md#renewing-the-evidence)). `init`'s workflow runs it
+daily with `older-than: 6d`, which renews each report about weekly; a
+caller of your own:
+
+```yaml
+on:
+  schedule:
+    - cron: "41 5 * * *"
+jobs:
+  reattest:
+    uses: northcutted/clearcutt-factory/.github/workflows/reattest.yml@v0.3.0
+    permissions: {contents: read, packages: write, id-token: write}
+```
+
+Its signatures name `reattest.yml`, so the org profile's image signer (or
+the trust policy's `image` signers) must match it:
+`certificateIdentityRegexp` with `(images|fleet|reattest)`, as `init` writes
+it. clearcutt-verify reads the newest verified report, so the estate's scan
+age follows.
 
 For workflows of your own, the action installs a signature-verified binary
 plus cosign, syft, and grype:
@@ -691,3 +830,10 @@ images built on a base (`estate dependents`) so a platform repository can wake
 exactly the apps a new run image affects.
 [clearcutt-portal](https://github.com/northcutted/clearcutt-portal) publishes
 its report as a website.
+
+Re-attestation checks its newly attached report against the image signers.
+An existing adopter must trust `reattest.yml` before enabling its schedule;
+otherwise the command fails with the regexp change to make. A previous
+trusted scan cannot satisfy that check. The lock `contentDigest` catches
+accidental edits; it is not a signature. Review legacy pins before stamping
+them, and review all lock changes like code.

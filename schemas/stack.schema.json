@@ -35,7 +35,7 @@
           "type": "string"
         },
         "build": {
-          "description": "Build is the image the steps run in, and Run the image apps ship on: each an image reference, or the path of a factory manifest (image.yaml) whose published image to use.",
+          "description": "Build is the image the steps run in, and Run the image apps ship on: each an image reference, or the path of a factory manifest (image.yaml) whose published image to use. stack push resolves a manifest to the image's reference and first tag, and pins the build image by the digest the tag holds (ref:tag@sha256:…), so the stack changes when the build image is rebuilt.",
           "type": "string"
         },
         "buildEnv": {

@@ -191,14 +191,15 @@ func extendingOrg(ctx context.Context, opts Options, dir string, io InitOptions)
 }
 
 // workflowIdentityRegexp matches the certificate identity of ClearCutt
-// Factory's signing reusable workflows (images.yml and fleet.yml) at the
+// Factory's signing reusable workflows (images.yml, fleet.yml, and
+// reattest.yml) at the
 // ref the generated workflow calls them by: any release tag, or main.
 func workflowIdentityRegexp(ref string) string {
 	at := `refs/tags/v\d+\.\d+\.\d+$`
 	if !releaseRE.MatchString(ref) {
 		at = `refs/heads/` + regexp.QuoteMeta(ref) + `$`
 	}
-	return `^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet)\.yml@` + at
+	return `^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@` + at
 }
 
 // defaultBranch is the origin remote's default branch (its HEAD), else
@@ -249,7 +250,9 @@ signing:
   mode: keyless # Sigstore, with the CI workflow's OIDC identity
   verify:
     # Images are signed inside ClearCutt Factory's reusable workflows, so the
-    # certificate names those workflows. Any repository can call them, so
+    # certificate names those workflows. Keep reattest in the regexp before
+    # enabling its schedule: a newly attached report must verify too.
+    # Any repository can call them, so
     # sourceRepository binds signatures to runs in this repository, and
     # sourceRef to runs on the branch that publishes (the reusable workflows
     # publish only from the default branch, or their publish-ref input).
@@ -288,7 +291,9 @@ const orgVerifyBlock = `
 signing:
   verify:
     # Images are signed inside ClearCutt Factory's reusable workflows, so the
-    # certificate names those workflows. Any repository can call them, so
+    # certificate names those workflows. Keep reattest in the regexp before
+    # enabling its schedule: a newly attached report must verify too.
+    # Any repository can call them, so
     # sourceRepository binds signatures to runs in this repository, and
     # sourceRef to runs on the branch that publishes (the reusable workflows
     # publish only from the default branch, or their publish-ref input).
@@ -327,8 +332,9 @@ const workflowTemplate = `# Builds, publishes, and maintains this repository's i
 #
 # Across repositories: a platform repository's notify job wakes the
 # repositories with the topic clearcutt-app when it publishes run images,
-# stacks, or a shared org profile; theirs then rebase onto the new run image,
-# or propose the new stack or profile.
+# build images, stacks, or a shared org profile; theirs then rebase onto the
+# new run image, propose a rebuild on the new build image or stack, or
+# propose the new profile.
 name: clearcutt-factory
 on:
   push:
@@ -336,12 +342,12 @@ on:
   pull_request:
   schedule:
     - cron: "23 6 * * 1" # weekly: re-resolve every input, one pull request per manifest
-    - cron: "41 5 * * *" # daily: rebase apps onto the newest build of their run image
+    - cron: "41 5 * * *" # daily: rebase apps onto the newest build of their run image, propose a rebuild on their stack's newest build image, and rescan what was published
   workflow_dispatch:
   # From a platform repository's notify job. The payload is only a hint: the
   # jobs re-resolve everything from the registry and verify it.
   repository_dispatch:
-    types: [clearcutt.run-image-published, clearcutt.stack-published, clearcutt.profile-published]
+    types: [clearcutt.run-image-published, clearcutt.build-image-published, clearcutt.stack-published, clearcutt.profile-published]
 permissions:
   contents: read
 jobs:
@@ -351,6 +357,9 @@ jobs:
     permissions: {contents: read, packages: write, id-token: write, attestations: write}
     with:
       reproduce: false # the reproduce job does it, so fleet and notify start without waiting
+      # A pull request builds only the manifests it affects, so one image's
+      # lock update isn't failed by another image's. Require images / result.
+      changed-only: true
     secrets:
       REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }} # only for a registry other than ghcr.io
       REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
@@ -369,10 +378,18 @@ jobs:
       REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
       REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
 
+  # Weekly, on a new shared profile, and by hand: every input, one pull
+  # request per manifest. Daily, and when the platform publishes a build
+  # image or a stack: only each app's stack and its build and run images, as
+  # a pull request to rebuild the app on them, so a toolchain fix reaches
+  # the apps in minutes (the daily run catches a dispatch that was missed).
   update-locks:
-    if: github.event.schedule == '23 6 * * 1' || github.event_name == 'workflow_dispatch' || github.event.action == 'clearcutt.stack-published' || github.event.action == 'clearcutt.profile-published'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.action == 'clearcutt.build-image-published' || github.event.action == 'clearcutt.stack-published' || github.event.action == 'clearcutt.profile-published'
     uses: northcutted/clearcutt-factory/.github/workflows/update-locks.yml@{{ref}}
     permissions: {contents: write, pull-requests: write}
+    with:
+      update: ${{ (github.event.schedule == '41 5 * * *' || github.event.action == 'clearcutt.build-image-published' || github.event.action == 'clearcutt.stack-published') && 'stack' || 'all' }}
+      # auto-merge: rebuild update # merge by itself once required checks pass; needs "Allow auto-merge", branch protection, and the App (docs/adopting.md#4-turn-on-the-automation)
     secrets:
       CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
       CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
@@ -382,9 +399,24 @@ jobs:
     if: always() && (github.event.schedule == '41 5 * * *' || github.event.action == 'clearcutt.run-image-published' || (github.event_name == 'push' && needs.images.result == 'success'))
     uses: northcutted/clearcutt-factory/.github/workflows/fleet.yml@{{ref}}
     permissions: {contents: write, pull-requests: write, packages: write, id-token: write, attestations: write}
+    # with:
+    #   auto-merge: pin rebuild # merge by itself once required checks pass (see update-locks above)
     secrets:
       CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
       CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+
+  # Daily: each published image whose newest verified vulnerability report
+  # is 6 days old or more is scanned again from its signed SBOM with
+  # grype's newest database, and the new report attached to the same
+  # digest; an image without a verified reproduction is reproduced and the
+  # match attested. Nothing is rebuilt or retagged.
+  reattest:
+    if: github.event.schedule == '41 5 * * *'
+    uses: northcutted/clearcutt-factory/.github/workflows/reattest.yml@{{ref}}
+    permissions: {contents: read, packages: write, id-token: write}
+    secrets:
       REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
       REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
 

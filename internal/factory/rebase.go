@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/name"
@@ -58,6 +60,29 @@ type RebaseOptions struct {
 	// tag that has moved since fails the rebase rather than being left with
 	// a warning, and the build writes the GitHub Actions outputs.
 	held map[string]string
+	// vex are the app manifest's VEX documents (rebase -f, or a build that
+	// rebases), applied to the result's scan with the org's, as at build.
+	vex []string
+}
+
+// scanImage is what the result of a rebase is, for VEX statements scoped
+// to an image: its repository, the tags it takes (and the one it was
+// named by), and its digests.
+func (ro RebaseOptions) scanImage(repo string, digests ...string) scan.Image {
+	tags := slices.Clone(ro.Tags)
+	if t := tagOf(ro.Image); t != "" && !slices.Contains(tags, t) {
+		tags = append(tags, t)
+	}
+	return scan.Image{Repository: repo, Tags: tags, Digests: digests}
+}
+
+// tagOf is the tag a reference names, if any.
+func tagOf(ref string) string {
+	ref, _, _ = strings.Cut(ref, "@")
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		return ref[i+1:]
+	}
+	return ""
 }
 
 // refusedError means the rebase would be unsafe; rebuilding is the remedy.
@@ -96,6 +121,17 @@ func Rebase(ctx context.Context, opts Options, ro RebaseOptions) error {
 		tag = m.Metadata.Tags[0]
 	}
 	ro.Image = m.Metadata.Ref + ":" + tag
+	ro.vex = m.Spec.VEXFiles
+	if ro.UpdateLock {
+		// The lock it will update must be one lock can update (intact, or
+		// an older release's without a digest, and not a newer release's),
+		// before anything is pushed.
+		if _, err := lock.ReadFor(m.LockPath(), opts.Version); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			if edited, missing := lock.IsEdited(err); !edited || !missing {
+				return fmt.Errorf("--update-lock: %w", err)
+			}
+		}
+	}
 	if ro.Onto == "" {
 		ro.Onto = m.Spec.Base
 	} else if ro.UpdateLock && ro.Onto != m.Spec.Base {
@@ -300,7 +336,7 @@ func rebaseImage(ctx context.Context, opts Options, org *manifest.Org, ro Rebase
 		from := lock.Image{Ref: plan.repo, Digest: plan.platform(p.Platform).app.Digest}
 		base := lock.Image{Ref: plan.onto.Name, Digest: plan.platform(p.Platform).newDigest}
 		declared := sbom.Rebased(plan.repo, p.Platform, p.Digest, cf.Created.Time, base, from, opts.Version)
-		po, err := sbomAndScan(ctx, org, declared, nil, p, work, ro.NoScan)
+		po, err := sbomAndScan(ctx, org, declared, ro.vex, ro.scanImage(plan.repo, art.Digest, p.Digest), p, work, ro.NoScan)
 		if err != nil {
 			return "", "", err
 		}

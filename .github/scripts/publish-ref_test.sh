@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Runs the "Publish from this ref?" step of images.yml, fleet.yml, and
-# update-locks.yml, as the workflows have them, for each event and ref, and
+# Runs the "Publish from this ref?" step of images.yml, fleet.yml,
+# update-locks.yml, and reattest.yml, as the workflows have them, for each event and ref, and
 # checks that only the default branch (and the publish-ref input's ref)
-# publishes (#4). The three copies must be the same.
+# publishes (#4). The copies must be the same.
 #
 # Usage: .github/scripts/publish-ref_test.sh (needs bash, jq, and yq v4)
 set -euo pipefail
@@ -10,11 +10,12 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-for wf in images:manifests fleet:apps update-locks:manifests; do
+for wf in images:manifests fleet:apps update-locks:manifests reattest:manifests; do
   yq -e ".jobs.${wf#*:}.steps[] | select(.name == \"Publish from this ref?\") | .run" "$root/.github/workflows/${wf%:*}.yml" > "$tmp/${wf%:*}.sh"
 done
 cmp "$tmp/images.sh" "$tmp/fleet.sh"
 cmp "$tmp/images.sh" "$tmp/update-locks.sh"
+cmp "$tmp/images.sh" "$tmp/reattest.sh"
 
 fail=0
 # event ref default-branch publish-ref want
