@@ -525,6 +525,10 @@ rules and with no signer, since it is its own file; its locks pin the digest
   and a digest of its own content (`contentDigest`): a lock edited by hand
   is refused wherever it is read (`lock --update` resolves it again), and a
   lock a newer release wrote says so instead of failing to decode.
+  This digest detects accidental edits, not deliberate tampering: removing
+  both fields makes a lock appear legacy. Review locks like code. Every
+  legacy read warns that its pins are taken as written; review them before
+  running `clearcutt-factory lock` to stamp the digest.
 * **Pinned BuildKit**: builds run `moby/buildkit@sha256:…` in a container, so
   every machine uses the same builder.
 * **Clamped timestamps**: `SOURCE_DATE_EPOCH` comes from the lock (midnight
@@ -572,7 +576,7 @@ its rescans:
   every repository called NAME;
 * a product that isn't a purl names the image when it is the image's
   repository, `repository:tag`, `repository@digest`, or one of its digests;
-* any other purl is a package, and the statement is passed as it is: it
+* any other purl is a package, passed as a product containing only its `@id`; it
   applies wherever the package is, in every image.
 
 A statement about the image is rewritten as one about the packages its
@@ -587,8 +591,11 @@ image never reaches the scan. The vulnerability attestation's
 finding grype left out for a VEX statement (`vulnerability`, `package`,
 `version`, `purl`, and the statement's `document`, `product`, `status`, and
 `justification`, empty when it matches none passed), so a suppression is
-visible there, never silent; `metadata.vex.documents` lists documents that
-aren't OpenVEX, passed to grype unchanged.
+visible there. Non-OpenVEX documents and malformed fields are refused before
+scanning. OpenVEX 0.0.1 is converted: string vulnerabilities become `name`,
+string products/subcomponents become `@id`, and statement-level
+subcomponents move to products that have none. Package products retain
+only `@id`, so alternate identifiers cannot broaden their scope.
 
 **Tags move last.** `build --push` and `rebase --push` push the image by
 digest, sign it, and attach every attestation above before any tag moves, so
@@ -678,7 +685,11 @@ renewed about weekly and a missed run costs a day; for a tighter
 `maxScanAgeDays` in clearcutt-verify, lower `older-than`. Its signatures name
 `reattest.yml`, so the image signer must accept it beside `images.yml` and
 `fleet.yml` (`init` writes `(images|fleet|reattest)`); a report signed by an
-identity the signer doesn't accept is ignored.
+identity the signer doesn't accept makes re-attestation fail with a trust
+configuration message. The command checks that the exact newly attached
+predicate verifies, so an older trusted report cannot satisfy this check.
+Existing adopters must add `reattest` to the image signer's regexp before
+enabling the schedule.
 
 ## CI
 

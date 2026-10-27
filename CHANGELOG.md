@@ -5,6 +5,25 @@ what may change between releases.
 
 ## Unreleased
 
+### Phase B review fixes
+
+- Reject malformed VEX scopes and non-OpenVEX input instead of passing them
+  to the scanner. Package products are reduced to `@id`; OpenVEX 0.0.1
+  string identifiers and statement subcomponents are converted explicitly.
+- Shared-profile references affect every manifest using that profile,
+  including deletions and references inside a sibling image directory.
+  Root manifests cannot hide shared changes. Unowned deletions build all
+  surviving manifests.
+- Disable auto-merge for an unlisted kind before pushing the branch. If it
+  cannot be checked or disabled, leave that branch unchanged and warn.
+  With the feature off, preserve auto-merge enabled by a person. A failed
+  PR lookup warns without crashing.
+- Re-attestation checks the exact new predicate against the org's image
+  signers and fails visibly when its signer is not trusted.
+- Every legacy-lock read warns that pins are taken as written. The digest
+  detects accidental edits, not deliberate removal of both metadata fields.
+
+
 ### Breaking
 
 **Tags move only to a signed, fully attested image, and never back.**
@@ -220,7 +239,7 @@ stack file and the manifests (and what they extend) of the stack's build
 and run images; a `factory.org.yaml` is owned by every manifest below it.
 A changed file no manifest owns (a shared profile, the trust policy or
 VEX documents a profile names, a workflow, a README) affects every
-manifest, since nothing says it doesn't; a deleted one affects none. A
+manifest, since nothing says it doesn't; a deleted one affects every surviving manifest. A
 rename counts as its old path deleted and its new one changed.
 
 **The bot's pull requests can merge by themselves: `auto-merge`.**
@@ -301,15 +320,14 @@ names no image. It rewrites each as a statement about the packages its
 `subcomponents` name (by `@id` or `identifiers.purl`; an OpenVEX 0.0.1
 statement's own `subcomponents` count), or every package in the SBOM when
 it names none; unreadable subcomponents leave the statement out rather
-than widen it. Statements whose product is a package are passed as they
-are; statements about other images are left out. The vulnerability
+than widen it. Statements whose product is a package retain only its `@id`; statements about other images are left out. The vulnerability
 attestation records what was passed in `metadata.vex.statements`
 (`document`, `vulnerability`, `status`, `justification`, `product` as
 written, `scope` of `image` or `package`, and `packages`), what grype left
 out for a VEX statement in `metadata.vex.suppressed` (`vulnerability`,
 `package`, `version`, `purl`, and the statement's `document`, `product`,
-`status`, `justification`), and in `metadata.vex.documents` the documents
-that aren't OpenVEX, passed unchanged. A rebase (and the heal of an image
+`status`, `justification`). Non-OpenVEX documents and malformed fields are
+refused before scanning. A rebase (and the heal of an image
 already on the newest base) now scans with the app manifest's VEX too, as
 its build did, so a suppression isn't lost when the fleet rebases.
 

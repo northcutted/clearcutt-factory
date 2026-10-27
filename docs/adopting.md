@@ -144,8 +144,9 @@ per image, each of which can merge).
 Every manifest builds when the pull request changes a file no manifest
 owns, since nothing says it can't matter: a shared profile, the trust
 policy or VEX documents a profile names, a workflow, a README at the root.
-Deleting a file no manifest owns builds nothing; a pull request that does
-only that builds no manifest. Every manifest builds, too, when the
+Deleting an unowned file also builds every surviving manifest, since the
+previous configuration may have read it. Root manifests do not hide shared
+changes. Local shared-profile inputs belong to every manifest using them. Every manifest builds, too, when the
 affected set can't be told (no merge commit, or a `factory-version`
 before `affected`, with a warning), and on every other event: a push to
 the default branch, a schedule, a dispatch, or a merge queue's
@@ -829,3 +830,10 @@ images built on a base (`estate dependents`) so a platform repository can wake
 exactly the apps a new run image affects.
 [clearcutt-portal](https://github.com/northcutted/clearcutt-portal) publishes
 its report as a website.
+
+Re-attestation checks its newly attached report against the image signers.
+An existing adopter must trust `reattest.yml` before enabling its schedule;
+otherwise the command fails with the regexp change to make. A previous
+trusted scan cannot satisfy that check. The lock `contentDigest` catches
+accidental edits; it is not a signature. Review legacy pins before stamping
+them, and review all lock changes like code.
