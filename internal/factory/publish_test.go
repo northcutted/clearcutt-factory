@@ -58,10 +58,12 @@ verify)
 verify-attestation)
   t=$3
   case "$t" in https://cyclonedx.org/bom) t=cyclonedx ;; https://cosign.sigstore.dev/attestation/vuln/v1) t=vuln ;; esac
+  if failing "verify-attestation $t"; then echo "untrusted attestation identity" >&2; exit 1; fi
   grep -qxF -- "att $t $ref" "$0.state" 2>/dev/null || { echo "no matching attestations" >&2; exit 1; }
   pred='{}'
   if [ -f "$0.d/$(key "$t" "$ref")" ]; then pred=$(cat "$0.d/$(key "$t" "$ref")"); fi
-  printf '{"payload":"%s"}\n' "$(printf '{"predicateType":"%s","predicate":%s}' "$3" "$pred" | base64 | tr -d '\n')"
+  if [ "$t" = vuln ] && [ -n "$RETURN_OLD_VULN" ]; then pred='{"metadata":{"scanFinishedOn":"2026-10-01T00:00:00Z"}}'; fi
+  printf '{"payload":"%s"}\n'  "$(printf '{"predicateType":"%s","predicate":%s}' "$3" "$pred" | base64 | tr -d '\n')"
   ;;
 esac
 `

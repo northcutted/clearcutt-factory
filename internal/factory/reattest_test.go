@@ -193,6 +193,24 @@ func TestReattest(t *testing.T) {
 		t.Errorf("missing SBOM: cosign calls %v", got)
 	}
 
+	// The new signer is not trusted: attaching must fail visibly, even
+	// when an older trusted report is available for the same subject.
+	if err := os.WriteFile(w.cosign.path+".state", state, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w.cosign.fail("verify-attestation vuln")
+	if err := reattest(ReattestOptions{Image: image}); err == nil || !strings.Contains(err.Error(), "(images|fleet|reattest)") {
+		t.Errorf("untrusted new report: %v", err)
+	}
+	w.cosign.calls()
+	w.cosign.fail()
+	t.Setenv("RETURN_OLD_VULN", "1")
+	if err := reattest(ReattestOptions{Image: image}); err == nil || !strings.Contains(err.Error(), "new vulnerability report") {
+		t.Errorf("accepted an older report instead of the new one: %v", err)
+	}
+	t.Setenv("RETURN_OLD_VULN", "")
+	w.cosign.calls()
+
 	// An image the org's signer didn't sign: refused, nothing attached.
 	other, _, _ := w.image(2, "unsigned ")
 	if _, err := registry.Push(w.ctx, other, w.host+"/unsigned", []string{"1"}); err != nil {

@@ -250,7 +250,9 @@ signing:
   mode: keyless # Sigstore, with the CI workflow's OIDC identity
   verify:
     # Images are signed inside ClearCutt Factory's reusable workflows, so the
-    # certificate names those workflows. Any repository can call them, so
+    # certificate names those workflows. Keep reattest in the regexp before
+    # enabling its schedule: a newly attached report must verify too.
+    # Any repository can call them, so
     # sourceRepository binds signatures to runs in this repository, and
     # sourceRef to runs on the branch that publishes (the reusable workflows
     # publish only from the default branch, or their publish-ref input).
@@ -289,7 +291,9 @@ const orgVerifyBlock = `
 signing:
   verify:
     # Images are signed inside ClearCutt Factory's reusable workflows, so the
-    # certificate names those workflows. Any repository can call them, so
+    # certificate names those workflows. Keep reattest in the regexp before
+    # enabling its schedule: a newly attached report must verify too.
+    # Any repository can call them, so
     # sourceRepository binds signatures to runs in this repository, and
     # sourceRef to runs on the branch that publishes (the reusable workflows
     # publish only from the default branch, or their publish-ref input).

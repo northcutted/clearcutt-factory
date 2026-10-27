@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -216,6 +217,9 @@ func Reattest(ctx context.Context, opts Options, ro ReattestOptions) error {
 				return fmt.Errorf("%s: %w", t.p.Platform, err)
 			}
 			pr.Attached = true
+			if !verifiedRescan(ctx, signers, repo+"@"+t.p.Digest, report.Predicate()) {
+				problems = append(problems, fmt.Sprintf("%s: the new vulnerability report was attached but the org's image signers do not verify it; reattest.yml signs as https://github.com/northcutted/clearcutt-factory/.github/workflows/reattest.yml@<workflow ref>. Add reattest beside images and fleet in signing.verify.certificateIdentityRegexp or the trust policy image signer's identityRegexp: (images|fleet|reattest)\\.yml; for key signing, check the configured public key", t.p.Platform))
+			}
 			opts.printf("  %s: attached the new vulnerability report to %s", t.p.Platform, t.p.Digest)
 		}
 		result.Platforms[t.p.Platform] = pr
@@ -237,7 +241,7 @@ func Reattest(ctx context.Context, opts Options, ro ReattestOptions) error {
 		return err
 	}
 	if len(problems) > 0 {
-		return errors.New("not rescanned, since only an SBOM the org's image signer attested is read:\n  " + strings.Join(problems, "\n  "))
+		return errors.New("re-attestation incomplete:\n  " + strings.Join(problems, "\n  "))
 	}
 	return nil
 }
@@ -299,4 +303,30 @@ func ParseAge(s string) (time.Duration, error) {
 		return 0, fmt.Errorf("%q: want a number of days (7d) or a duration (36h)", s)
 	}
 	return d, nil
+}
+
+// verifiedRescan checks this exact predicate, not merely any older trusted
+// vulnerability report of the same type attached to the image.
+func verifiedRescan(ctx context.Context, signers [][]string, ref string, predicate any) bool {
+	b, err := json.Marshal(predicate)
+	if err != nil {
+		return false
+	}
+	var want any
+	if json.Unmarshal(b, &want) != nil {
+		return false
+	}
+	for _, args := range signers {
+		all, err := attest.VerifyPredicates(ctx, ref, attest.VulnType, args)
+		if err != nil {
+			continue
+		}
+		for _, a := range all {
+			var got any
+			if json.Unmarshal(a.Predicate, &got) == nil && reflect.DeepEqual(got, want) {
+				return true
+			}
+		}
+	}
+	return false
 }
