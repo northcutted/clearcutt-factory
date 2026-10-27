@@ -278,7 +278,8 @@ func ReadFor(path, version string) (*Lock, error) {
 	}
 	switch {
 	case l.ContentDigest == "" && l.Generator == "":
-		// Written before locks had either: an older release's.
+		// Written before locks had either, or manually stripped.
+		fmt.Fprintf(os.Stderr, "warning: %s was written before clearcutt-factory v0.4.0, or its generator/contentDigest were removed; its pins are taken as they are where legacy locks are accepted. Review them, then run clearcutt-factory lock to stamp it.\n", path)
 		return &l, &EditedError{Path: path, Missing: true}
 	case l.ContentDigest != l.contentDigest():
 		// Also a lock that names its generator and has no digest: every

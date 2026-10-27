@@ -2,6 +2,7 @@ package lock
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -158,11 +159,21 @@ func TestWriteFileAtomic(t *testing.T) {
 	if err := os.WriteFile(p, []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	old, err := os.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer old.Close()
 	if err := WriteFileAtomic(p, []byte("new"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(p); string(b) != "new" {
 		t.Errorf("content %q", b)
+	}
+	// A reader holding the old generation keeps seeing that complete
+	// generation. Direct truncation/writing would change this descriptor.
+	if b, err := io.ReadAll(old); err != nil || string(b) != "old" {
+		t.Errorf("old reader saw %q: %v", b, err)
 	}
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 1 {
@@ -177,5 +188,36 @@ func TestWriteFileAtomic(t *testing.T) {
 	b.Generator, b.ContentDigest = "clearcutt-factory v9.9.9", "sha256:x"
 	if string(a.Content()) != string(b.Content()) || string(a.Marshal()) == string(b.Marshal()) {
 		t.Error("Content should leave out the generator and the digest; Marshal should not")
+	}
+}
+
+func TestLegacyLockWarnsOnEveryRead(t *testing.T) {
+	l := sample()
+	l.Generator = ""
+	l.ContentDigest = ""
+	p := filepath.Join(t.TempDir(), "image.lock.yaml")
+	if err := os.WriteFile(p, l.Marshal(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = old; r.Close(); w.Close() }()
+	for i := 0; i < 2; i++ {
+		if _, err := Read(p); err == nil {
+			t.Error("legacy lock must still require stamping")
+		}
+	}
+	w.Close()
+	os.Stderr = old
+	b, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(b), "its pins are taken as they are") != 2 || !strings.Contains(string(b), "Review them") {
+		t.Fatalf("warning %q", b)
 	}
 }
