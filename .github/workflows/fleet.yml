@@ -28,7 +28,7 @@
 #
 #   jobs:
 #     fleet:
-#       uses: northcutted/clearcutt-factory/.github/workflows/fleet.yml@v0.3.0
+#       uses: northcutted/clearcutt-factory/.github/workflows/fleet.yml@v0.4.0
 #       permissions: {contents: write, pull-requests: write, packages: write, id-token: write, attestations: write}
 #       secrets:
 #         CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
@@ -63,7 +63,7 @@ on:
       factory-version:
         description: clearcutt-factory release to use
         type: string
-        default: v0.3.0
+        default: v0.4.0
       app-id:
         description: GitHub App to open pull requests as, by Client ID or App ID (default the CLEARCUTT_APP_ID variable); needs the CLEARCUTT_APP_PRIVATE_KEY secret
         type: string

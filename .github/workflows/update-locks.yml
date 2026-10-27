@@ -47,7 +47,7 @@
 #
 #   jobs:
 #     update:
-#       uses: northcutted/clearcutt-factory/.github/workflows/update-locks.yml@v0.3.0
+#       uses: northcutted/clearcutt-factory/.github/workflows/update-locks.yml@v0.4.0
 #       permissions: {contents: write, pull-requests: write}
 #       with:
 #         update: ${{ (github.event.schedule == '41 5 * * *' || github.event.action == 'clearcutt.build-image-published' || github.event.action == 'clearcutt.stack-published') && 'stack' || 'all' }}
@@ -72,7 +72,7 @@ on:
       factory-version:
         description: clearcutt-factory release to use
         type: string
-        default: v0.3.0
+        default: v0.4.0
       app-id:
         description: GitHub App to open pull requests as, by Client ID or App ID (default the CLEARCUTT_APP_ID variable); needs the CLEARCUTT_APP_PRIVATE_KEY secret
         type: string
