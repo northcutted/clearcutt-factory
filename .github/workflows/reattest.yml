@@ -1,6 +1,7 @@
 # Renews the evidence of published images without rebuilding them, on a
-# schedule (weekly is a good start: "37 4 * * 1"; daily for a tighter
-# maxScanAgeDays in clearcutt-verify). For each manifest, on the default
+# schedule. Call daily with older-than: 6d (init's default) to renew each
+# report about weekly, with a day to recover a missed run. Lower older-than
+# for a tighter maxScanAgeDays. For each manifest, on the default
 # branch (or the publish-ref input's ref; elsewhere it does nothing):
 #
 #   * clearcutt-factory reattest reads each platform image's SBOM
@@ -25,16 +26,17 @@
 # so the org profile's image signer must accept it beside images.yml and
 # fleet.yml: init writes (images|fleet|reattest) into
 # certificateIdentityRegexp. A report signed by an identity the signer
-# doesn't accept is ignored by clearcutt-verify and by factory.
+# doesn't accept is ignored by clearcutt-verify; reattest fails with a
+# trust-configuration message when its exact new report does not verify.
 #
 # Other repositories call it (see docs/adopting.md):
 #
 #   on:
 #     schedule:
-#       - cron: "37 4 * * 1"
+#       - cron: "37 4 * * *"
 #   jobs:
 #     reattest:
-#       uses: northcutted/clearcutt-factory/.github/workflows/reattest.yml@v0.3.0
+#       uses: northcutted/clearcutt-factory/.github/workflows/reattest.yml@v0.4.0
 #       permissions: {contents: read, packages: write, id-token: write}
 name: reattest
 on:
@@ -66,7 +68,7 @@ on:
       factory-version:
         description: clearcutt-factory release to use
         type: string
-        default: v0.3.0
+        default: v0.4.0
     secrets:
       REGISTRY_USERNAME:
         description: Registry user, for a registry other than ghcr.io

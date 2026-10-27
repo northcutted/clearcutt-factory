@@ -40,7 +40,7 @@ rebuilding the app, after checking that this is safe.
 Install a signed release binary from
 [Releases](https://github.com/northcutted/clearcutt-factory/releases) (see
 [docs/adopting.md](docs/adopting.md#1-install) to verify it), or
-`go install github.com/northcutted/clearcutt-factory/cmd/clearcutt-factory@v0.3.0`.
+`go install github.com/northcutted/clearcutt-factory/cmd/clearcutt-factory@v0.4.0`.
 Building needs Docker or Podman (BuildKit runs inside a container, pinned by
 digest); scanning and signing need `syft`, `grype`, and `cosign` on `PATH`.
 
