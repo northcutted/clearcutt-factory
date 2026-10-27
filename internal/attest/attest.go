@@ -353,6 +353,12 @@ func (c Cosign) Sign(ctx context.Context, ref string) error {
 
 // Attest attaches a signed attestation of predicateType to ref.
 func (c Cosign) Attest(ctx context.Context, ref, predicateType, predicatePath string) error {
+	// The short "vuln" name invokes Cosign's fixed-schema decoder, which
+	// drops extension metadata. The URI keeps the complete predicate while
+	// retaining the same signed predicateType and image subject.
+	if predicateType == "vuln" {
+		predicateType = VulnType
+	}
 	return c.run(ctx, "attest", "--type", predicateType, "--predicate", predicatePath, ref)
 }
 

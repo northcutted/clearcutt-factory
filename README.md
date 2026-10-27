@@ -591,7 +591,8 @@ image never reaches the scan. The vulnerability attestation's
 finding grype left out for a VEX statement (`vulnerability`, `package`,
 `version`, `purl`, and the statement's `document`, `product`, `status`, and
 `justification`, empty when it matches none passed), so a suppression is
-visible there. Non-OpenVEX documents and malformed fields are refused before
+visible there. Vulnerability publication uses the full predicate URI so
+Cosign retains VEX metadata and the source SBOM identity. Non-OpenVEX documents and malformed fields are refused before
 scanning. OpenVEX 0.0.1 is converted: string vulnerabilities become `name`,
 string products/subcomponents become `@id`, and statement-level
 subcomponents move to products that have none. Package products retain

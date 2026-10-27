@@ -18,6 +18,8 @@ what may change between releases.
   cannot be checked or disabled, leave that branch unchanged and warn.
   With the feature off, preserve auto-merge enabled by a person. A failed
   PR lookup warns without crashing.
+- Vulnerability attestations use the full predicate URI so Cosign
+  preserves VEX metadata and the source SBOM identity.
 - Re-attestation checks the exact new predicate against the org's image
   signers and fails visibly when its signer is not trusted.
 - Every legacy-lock read warns that pins are taken as written. The digest

@@ -105,6 +105,9 @@ exec "`+real+`" "$@"
 		var out []string
 		for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
 			if f := strings.Fields(l); len(f) > 0 && (f[0] == "sign" || f[0] == "attest") {
+				if f[0] == "attest" && f[2] == attest.VulnType {
+					f[2] = "vuln"
+				}
 				out = append(out, strings.Join(f[:3], " "))
 			}
 		}
@@ -206,7 +209,7 @@ exec "`+real+`" "$@"
 
 	// cosign fails at the vulnerability reports: latest stays.
 	second, secondRecipe, secondOut := image(2, "second")
-	if err := os.WriteFile(wrapper+".fail", []byte("attest --type vuln"), 0o644); err != nil {
+	if err := os.WriteFile(wrapper+".fail", []byte("attest --type "+attest.VulnType), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := publishNow(second, secondRecipe, secondOut); err == nil {
@@ -245,7 +248,10 @@ exec "`+real+`" "$@"
 	orgPath := filepath.Join(dir, "factory.org.yaml")
 	if err := os.WriteFile(orgPath, []byte("apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\n"+
 		"signing: {mode: key, key: "+key+", args: [--signing-config, "+signingConfig+"], verify: {key: "+pub+", tlog: false}}\n"+
-		"vulnerabilities: {scanner: grype}\n"), 0o644); err != nil {
+		"vulnerabilities: {scanner: grype, vex: [vex.json]}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "vex.json"), []byte(`{"@context":"https://openvex.dev/ns/v0.2.0","@id":"https://example.test/vex","statements":[{"vulnerability":{"name":"CVE-2026-111497"},"products":[{"@id":"pkg:apk/wolfi/brotli"}],"status":"not_affected","justification":"component_not_present"}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	reattestOpts := Options{OrgPath: orgPath, Version: "test", Stdout: &out, Stderr: &out}
@@ -267,6 +273,32 @@ exec "`+real+`" "$@"
 		if err != nil {
 			t.Fatal(err)
 		}
+		all, err := attest.VerifyPredicates(ctx, repo+"@"+po.digest, attest.VulnType, []string{"--key", pub, "--insecure-ignore-tlog=true"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		preserved := false
+		for _, a := range all {
+			var pred struct {
+				Metadata struct {
+					Rescan struct {
+						SBOM struct {
+							PredicateType string            `json:"predicateType"`
+							Digest        map[string]string `json:"digest"`
+						} `json:"sbom"`
+					} `json:"rescan"`
+					VEX struct {
+						Statements []scan.Applied `json:"statements"`
+					} `json:"vex"`
+				} `json:"metadata"`
+			}
+			if json.Unmarshal(a.Predicate, &pred) == nil && pred.Metadata.Rescan.SBOM.PredicateType == attest.CycloneDXType && len(pred.Metadata.Rescan.SBOM.Digest["sha256"]) == 64 && len(pred.Metadata.VEX.Statements) == 1 && pred.Metadata.VEX.Statements[0].Product == "pkg:apk/wolfi/brotli" {
+				preserved = true
+			}
+		}
+		if !preserved {
+			t.Error("cosign lost rescan SBOM identity or VEX metadata")
+		}
 		if n := strings.Count(strings.TrimSpace(string(got)), "\n") + 1; n != 2 {
 			t.Errorf("%s carries %d vulnerability reports, want the build's and the rescan's", po.platform, n)
 		}
@@ -281,4 +313,48 @@ exec "`+real+`" "$@"
 	if got := calls(); len(got) != 0 || strings.Count(out.String(), "not rescanned") != len(secondOut) {
 		t.Errorf("second reattest ran %q\n%s", got, out.String())
 	}
+	// A real signature or SBOM from a different key must not authorize a
+	// rescan. Stub cosign tests cannot establish this identity boundary.
+	if _, err := cosign("generate-key-pair", "--output-key-prefix", "other"); err != nil {
+		t.Fatal(err)
+	}
+	originalOrg, err := os.ReadFile(orgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherPub := filepath.Join(dir, "other.pub")
+	if err := os.WriteFile(orgPath, []byte(strings.Replace(string(originalOrg), pub, otherPub, 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := Reattest(ctx, reattestOpts, ReattestOptions{Image: repo + ":latest", OutDir: filepath.Join(dir, "wrong-key")}); err == nil || !strings.Contains(err.Error(), "is not signed by the org's image signer") {
+		t.Fatalf("wrong image key accepted: %v", err)
+	}
+	if err := os.WriteFile(orgPath, originalOrg, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bad, _, badOutputs := image(3, "wrong SBOM signer")
+	badRepo := host + "/e2e/wrong-sbom"
+	if _, err := registry.Push(ctx, bad, badRepo, []string{"latest"}); err != nil {
+		t.Fatal(err)
+	}
+	signer := attest.Cosign{Mode: "key", Key: key, Args: []string{"--signing-config", signingConfig}, Stdout: &out, Stderr: &out}
+	if err := signer.Sign(ctx, badRepo+"@"+bad.Digest); err != nil {
+		t.Fatal(err)
+	}
+	signer.Key = filepath.Join(dir, "other.key")
+	for _, po := range badOutputs {
+		if err := signer.Attest(ctx, badRepo+"@"+po.digest, "cyclonedx", po.sbomPath); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls()
+	out.Reset()
+	if err := Reattest(ctx, reattestOpts, ReattestOptions{Image: badRepo + ":latest", OutDir: filepath.Join(dir, "wrong-sbom")}); err == nil || !strings.Contains(err.Error(), "no SBOM attestation the org's image signer made") {
+		t.Fatalf("wrong SBOM key accepted: %v", err)
+	}
+	if got := calls(); len(got) != 0 || strings.Contains(out.String(), "updating grype") {
+		t.Fatalf("untrusted SBOM scanned or attested: %v\n%s", got, out.String())
+	}
+
 }
