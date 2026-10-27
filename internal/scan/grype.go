@@ -102,16 +102,12 @@ func Grype(ctx context.Context, sbomPath string, img Image, vex []string) (*Repo
 	args := []string{"sbom:" + sbomPath, "-o", "json", "-q"}
 	if len(vex) > 0 {
 		scoped := strings.TrimSuffix(sbomPath, filepath.Ext(sbomPath)) + ".openvex.json"
-		applied, passthrough, err := scopeStatements(vex, img, sbomPath, scoped)
+		applied, err := scopeStatements(vex, img, sbomPath, scoped)
 		if err != nil {
 			return nil, fmt.Errorf("vex: %w", err)
 		}
 		if len(applied) > 0 {
 			args = append(args, "--vex", scoped)
-		}
-		for _, v := range passthrough {
-			args = append(args, "--vex", v)
-			r.VEXDocuments = append(r.VEXDocuments, filepath.Base(v))
 		}
 		r.VEX = applied
 	}

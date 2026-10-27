@@ -485,7 +485,7 @@
           "type": "string"
         },
         "vex": {
-          "description": "VEX are VEX documents (OpenVEX, or CSAF), relative to this profile, applied to every scan, as a manifest's spec.vex is to its own.",
+          "description": "VEX are OpenVEX documents, relative to this profile, applied to every scan, as a manifest's spec.vex is to its own.",
           "items": {
             "type": "string"
           },

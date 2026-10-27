@@ -99,18 +99,14 @@ func TestScopeStatements(t *testing.T) {
 		statement("CVE-2026-7", `{"identifiers":{"purl":"pkg:apk/wolfi/curl"}}`),
 		statement("CVE-2026-8", `{"@id":"ghcr.io/acme/apps/catalog:1"}`),
 	}, ","), 1))
-	csaf := writeVEX(t, dir, "other.json", `{"document":{"category":"csaf_vex"}}`)
 	notes := writeVEX(t, dir, "notes.openvex.json", strings.Replace(openvex, "%s", statement("CVE-2026-9", `{"@id":"pkg:oci/storefront?repository_url=ghcr.io/acme/apps/storefront"}`), 1))
 	old := writeVEX(t, dir, "old.openvex.json", `{"@context":"https://openvex.dev/ns","@id":"old","statements":[{"vulnerability":"CVE-2026-6","products":["pkg:oci/catalog?repository_url=ghcr.io/acme/apps/catalog"],"subcomponents":["pkg:apk/wolfi/glibc"],"status":"not_affected","justification":"component_not_present"}]}`)
 
 	catalog := Image{Repository: "ghcr.io/acme/apps/catalog", Tags: []string{"1"}, Digests: []string{"sha256:c0", "sha256:c1"}}
 	out := filepath.Join(dir, "out", "catalog.openvex.json")
-	applied, passthrough, err := scopeStatements([]string{vex, csaf, notes, old}, catalog, sbom, out)
+	applied, err := scopeStatements([]string{vex, notes, old}, catalog, sbom, out)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(passthrough, []string{csaf}) {
-		t.Errorf("passthrough %v", passthrough)
 	}
 	all := []string{"pkg:apk/wolfi/brotli@1.2.1-r0?arch=x86_64", "pkg:apk/wolfi/python-3.14@3.14.0-r0?arch=x86_64"}
 	a := func(vuln, product, scope string, pkgs ...string) string {
@@ -158,7 +154,7 @@ func TestScopeStatements(t *testing.T) {
 	if err := json.Unmarshal(b, &doc); err != nil {
 		t.Fatal(err)
 	}
-	if doc.Context != "https://openvex.dev/ns/v0.2.0" || !strings.Contains(doc.Author, "https://acme/vex/2026-10") || len(doc.Statements) != 8 {
+	if doc.Context != "https://openvex.dev/ns/v0.2.0" || !strings.Contains(doc.Author, "https://acme/vex/2026-10") || len(doc.Statements) != 9 {
 		t.Fatalf("document:\n%s", b)
 	}
 	products := map[string][]string{}
@@ -197,7 +193,7 @@ func TestScopeStatements(t *testing.T) {
 	// For another image, only the package statements remain; with only
 	// image statements for other images, nothing is written.
 	checkout := Image{Repository: "ghcr.io/acme/apps/checkout", Digests: []string{"sha256:k0"}}
-	applied, _, err = scopeStatements([]string{vex}, checkout, sbom, filepath.Join(dir, "out", "checkout.openvex.json"))
+	applied, err = scopeStatements([]string{vex}, checkout, sbom, filepath.Join(dir, "out", "checkout.openvex.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +205,7 @@ func TestScopeStatements(t *testing.T) {
 		t.Errorf("checkout: %v", vulns)
 	}
 	nothing := filepath.Join(dir, "out", "nothing.openvex.json")
-	if applied, _, err = scopeStatements([]string{notes}, checkout, sbom, nothing); err != nil || applied != nil {
+	if applied, err = scopeStatements([]string{notes}, checkout, sbom, nothing); err != nil || applied != nil {
 		t.Errorf("no statements for checkout: %v %v", applied, err)
 	}
 	if _, err := os.Stat(nothing); err == nil {
@@ -312,5 +308,63 @@ func TestGrypeRecordsSuppressions(t *testing.T) {
 	}
 	if err := json.Unmarshal(b, &pred); err != nil || !reflect.DeepEqual(pred.Metadata.VEX.Suppressed, want) {
 		t.Errorf("predicate: %v %s", err, b)
+	}
+}
+
+// Malformed scoping must never become a statement about every package.
+func TestVEXRejectsMalformedScopes(t *testing.T) {
+	for _, product := range []string{
+		`{"@id":"example.com/apps/catalog","subcomponents":{"@id":"pkg:apk/wolfi/glibc"}}`,
+		`{"@id":"example.com/apps/catalog","subcomponents":"pkg:apk/wolfi/glibc"}`,
+	} {
+		dir := t.TempDir()
+		sbom := writeVEX(t, dir, "sbom.json", `{"bomFormat":"CycloneDX","components":[{"purl":"pkg:apk/wolfi/glibc@1"},{"purl":"pkg:apk/wolfi/openssl@1"}]}`)
+		f := writeVEX(t, dir, "bad.json", strings.Replace(openvex, "%s", statement("CVE-1", product), 1))
+		if _, err := scopeStatements([]string{f}, Image{Repository: "example.com/apps/catalog"}, sbom, filepath.Join(dir, "out.json")); err == nil {
+			t.Errorf("accepted malformed product %s", product)
+		}
+	}
+	for _, body := range []string{
+		`{"document":{"category":"csaf_vex"}}`,
+		`{"@context":"https://openvex.dev/ns/v0.0.1","statements":[{"vulnerability":"CVE-1","products":["example.com/apps/catalog"],"subcomponents":{},"status":"not_affected"}]}`,
+		strings.Replace(openvex, "%s", `{"products":["pkg:apk/wolfi/glibc"],"status":"not_affected"}`, 1),
+		strings.Replace(openvex, "%s", `{"vulnerability":{"name":"CVE-1"},"products":["pkg:apk/wolfi/glibc"]}`, 1),
+	} {
+		dir := t.TempDir()
+		sbom := writeVEX(t, dir, "sbom.json", `{"bomFormat":"CycloneDX","components":[{"purl":"pkg:apk/wolfi/glibc@1"},{"purl":"pkg:apk/wolfi/openssl@1"}]}`)
+		f := writeVEX(t, dir, "bad.json", body)
+		if _, err := scopeStatements([]string{f}, Image{Repository: "example.com/apps/catalog"}, sbom, filepath.Join(dir, "out.json")); err == nil {
+			t.Errorf("accepted %s", body)
+		}
+	}
+}
+
+func TestVEXDoesNotKeepAlternatePackageIdentifiers(t *testing.T) {
+	dir := t.TempDir()
+	f := writeVEX(t, dir, "vex.json", strings.Replace(openvex, "%s", statement("CVE-1", `{"@id":"pkg:apk/wolfi/glibc","identifiers":{"purl":"pkg:apk/wolfi/openssl"},"subcomponents":[{"@id":"pkg:apk/wolfi/zlib"}]}`), 1))
+	out := filepath.Join(dir, "out.json")
+	if _, err := scopeStatements([]string{f}, Image{}, "unused", out); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "openssl") || strings.Contains(string(b), "zlib") {
+		t.Fatalf("alternate identifiers escaped scoping: %s", b)
+	}
+}
+
+func TestVEXPlatformDigestScope(t *testing.T) {
+	dir := t.TempDir()
+	f := writeVEX(t, dir, "vex.json", strings.Replace(openvex, "%s", statement("CVE-1", `{"@id":"pkg:oci/catalog@sha256%3Aamd64","subcomponents":[{"@id":"pkg:apk/wolfi/glibc"}]}`), 1))
+	for _, platform := range []string{"amd64", "arm64"} {
+		applied, err := scopeStatements([]string{f}, Image{Repository: "example.com/apps/catalog", Digests: []string{"sha256:index", "sha256:" + platform}}, "unused", filepath.Join(dir, platform+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (len(applied) > 0) != (platform == "amd64") {
+			t.Errorf("%s: %+v", platform, applied)
+		}
 	}
 }

@@ -56,9 +56,9 @@ const (
 	ScopePackage = "package"
 )
 
-// scopeStatements rewrites the OpenVEX statements of files for a scan of
-// img over the SBOM at sbomPath, and writes one OpenVEX document to
-// outPath holding the statements that apply, by the rule clearcutt-verify
+// scopeStatements reads the OpenVEX documents files (readVEX) and writes
+// to outPath one OpenVEX document holding the statements that apply to a
+// scan of img over the SBOM at sbomPath, by the rule clearcutt-verify
 // applies to its rescans:
 //
 //   - A product that is an image purl (pkg:oci/… or pkg:docker/…) names
@@ -69,119 +69,80 @@ const (
 //   - A product that isn't a purl names the image when it is the image's
 //     repository, repository:tag, repository@digest, or one of its
 //     digests.
-//   - Any other purl is a package: the statement is passed as it is, and
-//     applies wherever the scanner finds that package, in every image.
+//   - Any other purl is a package: the statement is passed with that
+//     product alone, as {"@id": purl}, and applies wherever the scanner
+//     finds that package, in every image.
 //   - A statement about this image is rewritten to the packages its
-//     subcomponents name (by @id or identifiers.purl; in an OpenVEX 0.0.1
-//     document, the statement's subcomponents), since grype, scanning an
-//     SBOM, applies only package products; with no subcomponents, to every
-//     package in the SBOM. Subcomponents none of which can be read leave
-//     the statement out: it never widens to every package.
+//     subcomponents name (by @id, else identifiers.purl), since grype,
+//     scanning an SBOM, applies only package products; with no
+//     subcomponents, to every package in the SBOM. Subcomponents none of
+//     which names a package leave the statement out: it never widens to
+//     every package.
 //
-// Statements about other images are left out. Documents that aren't
-// OpenVEX are returned in passthrough, to be passed as they are. It
-// returns what was written (nil when nothing applied).
-func scopeStatements(files []string, img Image, sbomPath, outPath string) (applied []Applied, passthrough []string, err error) {
-	var statements []map[string]any
+// Each product a statement names becomes a statement of its own, as
+// clearcutt-verify writes them. Statements about other images are left
+// out. It returns what was written (nil when nothing applied, and then
+// nothing is written).
+func scopeStatements(files []string, img Image, sbomPath, outPath string) ([]Applied, error) {
+	docs, err := readVEX(files)
+	if err != nil {
+		return nil, err
+	}
+	var applied []Applied
+	var statements []vexStatement
 	var sources []string
 	var sbomPackages []string
-	for _, f := range files {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			return nil, nil, err
-		}
-		var doc struct {
-			Context    string            `json:"@context"`
-			ID         string            `json:"@id"`
-			Statements []json.RawMessage `json:"statements"`
-		}
-		if err := json.Unmarshal(b, &doc); err != nil || !strings.Contains(doc.Context, "openvex") {
-			passthrough = append(passthrough, f)
-			continue
-		}
-		docName := doc.ID
-		if docName == "" {
-			docName = filepath.Base(f)
-		}
-		for _, raw := range doc.Statements {
-			var st map[string]any
-			if err := json.Unmarshal(raw, &st); err != nil {
-				return nil, nil, fmt.Errorf("%s: statement: %w", f, err)
-			}
-			vuln, names := vulnerability(st["vulnerability"])
-			status, _ := st["status"].(string)
-			justification, _ := st["justification"].(string)
-			// OpenVEX 0.0.1 names subcomponents on the statement.
-			stmtSubs, stmtHasSubs := components(st["subcomponents"])
-			var products []any
-			for _, p := range asList(st["products"]) {
-				id, subs, hasSubs := product(p)
-				if id == "" {
-					continue
-				}
-				a := Applied{Document: docName, Vulnerability: vuln, Status: status, Justification: justification, Product: id, names: names}
-				switch productKind(id) {
+	for _, d := range docs {
+		for _, st := range d.statements {
+			for _, p := range st.Products {
+				a := Applied{Document: d.name, Vulnerability: st.Vulnerability.Name, Status: st.Status, Justification: st.Justification, Product: p.ID, names: st.Vulnerability.names()}
+				var pkgs []string
+				switch productKind(p.ID) {
 				case productPackage:
-					// Applies wherever that package is. As an object
-					// (OpenVEX 0.2), whatever form the document used.
-					a.Scope, a.Packages = ScopePackage, []string{id}
-					obj, ok := p.(map[string]any)
-					if !ok || obj["@id"] != id {
-						obj = map[string]any{"@id": id}
+					a.Scope, pkgs = ScopePackage, []string{p.ID}
+				case productImage:
+					if !img.names(p.ID) {
+						continue
 					}
-					products = append(products, obj)
-					applied = append(applied, a)
-					continue
-				case productOther:
+					a.Scope = ScopeImage
+					for _, c := range p.Subcomponents {
+						if c.ID != "" {
+							pkgs = append(pkgs, c.ID)
+						}
+					}
+					if len(p.Subcomponents) == 0 {
+						if sbomPackages == nil {
+							if sbomPackages, err = packagesOf(sbomPath); err != nil {
+								return nil, err
+							}
+						}
+						pkgs, a.anyPackage = sbomPackages, true
+					}
+				default:
 					continue
 				}
-				if !img.names(id) {
-					continue
-				}
-				if !hasSubs && stmtHasSubs {
-					subs, hasSubs = stmtSubs, true
-				}
-				pkgs := subs
-				if hasSubs && len(pkgs) == 0 {
+				if len(pkgs) == 0 {
 					// Subcomponents it names but none we can read: it
 					// applies to no package, never to every one.
 					continue
 				}
-				if !hasSubs {
-					if sbomPackages == nil {
-						if sbomPackages, err = packagesOf(sbomPath); err != nil {
-							return nil, nil, err
-						}
-					}
-					pkgs, a.anyPackage = sbomPackages, true
-				}
-				a.Scope, a.Packages = ScopeImage, pkgs
+				a.Packages = pkgs
+				out := st
+				out.Subcomponents = nil
+				out.Products = nil
 				for _, pk := range pkgs {
-					products = append(products, map[string]any{"@id": pk})
+					out.Products = append(out.Products, vexProduct{ID: pk})
 				}
+				statements = append(statements, out)
 				applied = append(applied, a)
+				if !slices.Contains(sources, d.name) {
+					sources = append(sources, d.name)
+				}
 			}
-			if len(products) == 0 {
-				continue
-			}
-			out := map[string]any{}
-			for k, v := range st {
-				out[k] = v
-			}
-			delete(out, "subcomponents")
-			out["products"] = products
-			if v, ok := st["vulnerability"].(string); ok {
-				// OpenVEX 0.2 names the vulnerability as an object.
-				out["vulnerability"] = map[string]any{"name": v}
-			}
-			statements = append(statements, out)
-		}
-		if !slices.Contains(sources, docName) {
-			sources = append(sources, docName)
 		}
 	}
 	if len(statements) == 0 {
-		return nil, passthrough, nil
+		return nil, nil
 	}
 	doc := map[string]any{
 		"@context":   "https://openvex.dev/ns/v0.2.0",
@@ -193,12 +154,177 @@ func scopeStatements(files []string, img Image, sbomPath, outPath string) (appli
 	}
 	b, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return applied, passthrough, os.WriteFile(outPath, append(b, '\n'), 0o644)
+	return applied, os.WriteFile(outPath, append(b, '\n'), 0o644)
+}
+
+// vexDocument is an OpenVEX document as readVEX read it.
+type vexDocument struct {
+	// name is the document's @id, else its file name.
+	name       string
+	statements []vexStatement
+}
+
+// vexStatement is one OpenVEX statement, with the fields clearcutt-verify
+// reads and passes to grype; others are dropped. Subcomponents is where
+// OpenVEX 0.0.1 names them, on the statement; readVEX moves them to the
+// products.
+type vexStatement struct {
+	Vulnerability   vexVulnerability `json:"vulnerability"`
+	Products        []vexProduct     `json:"products"`
+	Subcomponents   []vexComponent   `json:"subcomponents,omitempty"`
+	Status          string           `json:"status"`
+	Justification   string           `json:"justification,omitempty"`
+	Timestamp       string           `json:"timestamp,omitempty"`
+	ImpactStatement string           `json:"impact_statement,omitempty"`
+	ActionStatement string           `json:"action_statement,omitempty"`
+}
+
+type vexVulnerability struct {
+	ID      string   `json:"@id,omitempty"`
+	Name    string   `json:"name"`
+	Aliases []string `json:"aliases,omitempty"`
+}
+
+// UnmarshalJSON reads a vulnerability as an object, or as the plain
+// string OpenVEX 0.0.1 uses, which is its name.
+func (v *vexVulnerability) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		*v = vexVulnerability{Name: s}
+		return nil
+	}
+	type plain vexVulnerability
+	var p plain
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*v = vexVulnerability(p)
+	return nil
+}
+
+// names lists the vulnerability's name and aliases.
+func (v vexVulnerability) names() []string {
+	return append([]string{v.Name}, v.Aliases...)
+}
+
+type vexProduct struct {
+	ID            string         `json:"@id"`
+	Identifiers   map[string]any `json:"identifiers,omitempty"`
+	Subcomponents []vexComponent `json:"subcomponents,omitempty"`
+}
+
+type vexComponent struct {
+	ID          string         `json:"@id"`
+	Identifiers map[string]any `json:"identifiers,omitempty"`
+}
+
+// UnmarshalJSON reads a product as an object, or as the plain string
+// older documents use; with no @id, its identifiers.purl names it.
+func (p *vexProduct) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		*p = vexProduct{ID: s}
+		return nil
+	}
+	type plain vexProduct
+	var v plain
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	*p = vexProduct(v)
+	if p.ID == "" {
+		if purl, ok := p.Identifiers["purl"].(string); ok {
+			p.ID = purl
+		}
+	}
+	return nil
+}
+
+// UnmarshalJSON reads a subcomponent as a product is read.
+func (c *vexComponent) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		*c = vexComponent{ID: s}
+		return nil
+	}
+	type plain vexComponent
+	var v plain
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	*c = vexComponent(v)
+	if c.ID == "" {
+		if purl, ok := c.Identifiers["purl"].(string); ok {
+			c.ID = purl
+		}
+	}
+	return nil
+}
+
+// readVEX reads OpenVEX documents as clearcutt-verify reads them, and
+// refuses what it refuses: a file that isn't an OpenVEX document (its
+// @context must start with https://openvex.dev/ns), a field of the wrong
+// type (subcomponents that aren't a list, say), and a statement that names
+// no vulnerability, no product, a product without an @id (or
+// identifiers.purl), or no status. Nothing malformed is passed on, so
+// nothing malformed can widen a statement. OpenVEX 0.0.1 is read as 0.2:
+//
+//   - a vulnerability given as a string S is {"name": S};
+//   - a product or subcomponent given as a string S is {"@id": S};
+//   - subcomponents on the statement are given to each of its products
+//     that names none of its own (a product's own are kept), and the
+//     statement's are dropped.
+func readVEX(files []string) ([]vexDocument, error) {
+	var out []vexDocument
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return nil, err
+		}
+		var doc struct {
+			Context    string         `json:"@context"`
+			ID         string         `json:"@id"`
+			Statements []vexStatement `json:"statements"`
+		}
+		if err := json.Unmarshal(b, &doc); err != nil {
+			return nil, fmt.Errorf("%s: not an OpenVEX document: %w", f, err)
+		}
+		if !strings.HasPrefix(doc.Context, "https://openvex.dev/ns") {
+			return nil, fmt.Errorf("%s: not an OpenVEX document (@context %q)", f, doc.Context)
+		}
+		for i := range doc.Statements {
+			st := &doc.Statements[i]
+			switch {
+			case st.Vulnerability.Name == "":
+				return nil, fmt.Errorf("%s: statements[%d] names no vulnerability", f, i)
+			case len(st.Products) == 0:
+				return nil, fmt.Errorf("%s: statements[%d] (%s) names no product", f, i, st.Vulnerability.Name)
+			case st.Status == "":
+				return nil, fmt.Errorf("%s: statements[%d] (%s) has no status", f, i, st.Vulnerability.Name)
+			}
+			for j := range st.Products {
+				p := &st.Products[j]
+				if p.ID == "" {
+					return nil, fmt.Errorf("%s: statements[%d] (%s) products[%d] has no @id", f, i, st.Vulnerability.Name, j)
+				}
+				if len(p.Subcomponents) == 0 {
+					p.Subcomponents = st.Subcomponents
+				}
+			}
+			st.Subcomponents = nil
+		}
+		name := doc.ID
+		if name == "" {
+			name = filepath.Base(f)
+		}
+		out = append(out, vexDocument{name: name, statements: doc.Statements})
+	}
+	return out, nil
 }
 
 // Kinds of VEX product.
@@ -261,7 +387,6 @@ func (img Image) names(id string) bool {
 	// An image purl: pkg:oci/NAME[@VERSION][?QUALIFIERS].
 	rest := id[strings.Index(id, "/")+1:]
 	rest, query, _ := strings.Cut(rest, "?")
-	rest, _, _ = strings.Cut(rest, "#")
 	_, version, hasVersion := strings.Cut(rest, "@")
 	q, _ := url.ParseQuery(query)
 	if hasVersion {
@@ -321,81 +446,6 @@ func tagOf(ref string) string {
 		return ref[i+1:]
 	}
 	return ""
-}
-
-// product returns a statement product's identifier (its @id, else
-// identifiers.purl; or the string an OpenVEX 0.0.1 document gives), its
-// subcomponents' identifiers, and whether it names subcomponents at all.
-func product(p any) (id string, subs []string, hasSubs bool) {
-	switch v := p.(type) {
-	case string:
-		return v, nil, false
-	case map[string]any:
-		subs, hasSubs = components(v["subcomponents"])
-		return componentID(v), subs, hasSubs
-	}
-	return "", nil, false
-}
-
-// components reads a list of subcomponents: the identifiers that can be
-// read, and whether the list names any.
-func components(v any) (ids []string, named bool) {
-	for _, c := range asList(v) {
-		named = true
-		if id := componentID(c); id != "" {
-			ids = append(ids, id)
-		}
-	}
-	return ids, named
-}
-
-// componentID is a product's or subcomponent's @id, else its
-// identifiers.purl; a string is its own.
-func componentID(c any) string {
-	switch v := c.(type) {
-	case string:
-		return strings.TrimSpace(v)
-	case map[string]any:
-		if id, _ := v["@id"].(string); strings.TrimSpace(id) != "" {
-			return strings.TrimSpace(id)
-		}
-		if ids, ok := v["identifiers"].(map[string]any); ok {
-			if purl, _ := ids["purl"].(string); strings.TrimSpace(purl) != "" {
-				return strings.TrimSpace(purl)
-			}
-		}
-	}
-	return ""
-}
-
-func asList(v any) []any {
-	l, _ := v.([]any)
-	return l
-}
-
-// vulnerability returns a statement's vulnerability name and every name it
-// goes by (the name, @id, and aliases).
-func vulnerability(v any) (string, []string) {
-	switch x := v.(type) {
-	case string:
-		return x, []string{x}
-	case map[string]any:
-		var names []string
-		for _, k := range []string{"name", "@id"} {
-			if n, ok := x[k].(string); ok && n != "" {
-				names = append(names, n)
-			}
-		}
-		for _, a := range asList(x["aliases"]) {
-			if n, ok := a.(string); ok && n != "" {
-				names = append(names, n)
-			}
-		}
-		if len(names) > 0 {
-			return names[0], names
-		}
-	}
-	return "", nil
 }
 
 // Suppression is a finding the scanner left out because of a VEX

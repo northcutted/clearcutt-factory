@@ -185,7 +185,7 @@ type Vulnerabilities struct {
 	FailOn string `yaml:"failOn,omitempty"`
 	// OnlyFixed only counts vulnerabilities with a fix available toward FailOn.
 	OnlyFixed bool `yaml:"onlyFixed,omitempty"`
-	// VEX are VEX documents (OpenVEX, or CSAF), relative to this profile,
+	// VEX are OpenVEX documents, relative to this profile,
 	// applied to every scan, as a manifest's spec.vex is to its own.
 	VEX []string `yaml:"vex,omitempty"`
 	// AllowLocalVEX, in a shared profile, also applies the VEX statements
