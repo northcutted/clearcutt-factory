@@ -22,10 +22,14 @@ cat > "$tmp/bin/gh" <<'STUB'
 echo "$*" >> "$GH_LOG"
 case "$1 $2 ${5:-}" in
   "pr view state"*) [ "${GH_STATE:-}" = OPEN ] && echo OPEN || exit 1 ;;
-  "pr view id,autoMergeRequest"*) echo "PR_kwID ${GH_AUTO_ON:-false}" ;;
+  "pr view id,autoMergeRequest"*) [ "${GH_VIEW_FAILS:-}" != true ] || exit 1; echo "PR_kwID ${GH_AUTO_ON:-false}" ;;
   "pr merge"*) echo "gh pr merge called" >&2; exit 3 ;;
   "pr create"*) case "$*" in *--label*) [ "${GH_LABEL_FAILS:-}" != true ] || exit 1 ;; esac ;;
   "api graphql"*)
+    case "$*" in *disablePullRequestAutoMerge*)
+      if [ -n "${GH_EXPECT_REMOTE:-}" ] && [ "$(git --git-dir="$GH_REMOTE" rev-parse refs/heads/factory/update/apps-web)" != "$GH_EXPECT_REMOTE" ]; then echo "disable happened after push" >&2; exit 1; fi
+      ;; esac
+    case "$*" in *disablePullRequestAutoMerge*) [ "${GH_DISABLE_FAILS:-}" != true ] || exit 1 ;; esac
     case "$*" in *enablePullRequestAutoMerge*) if [ -n "${GH_MERGE_FAILS:-}" ]; then echo "$GH_MERGE_FAILS" >&2; exit 1; fi ;; esac
     case "$*" in *"id=PR_kwID"*) ;; *) echo "no pull request id" >&2; exit 1 ;; esac
     echo '{}'
@@ -105,10 +109,26 @@ change; run AUTO_MERGE=all
 if [ "$(mutations AutoMerge)" != 0 ]; then fail "no kind: $(cat "$GH_LOG")"; fi
 # A pin pull request with auto-merge became a rebuild, which isn't listed:
 # auto-merge is turned off, so the rebuild doesn't merge by itself.
-change; run AUTO_MERGE=pin PR_KIND=rebuild GH_AUTO_ON=true
+change; run AUTO_MERGE=pin PR_KIND=rebuild GH_AUTO_ON=true GH_STATE=OPEN GH_REMOTE="$tmp/remote" GH_EXPECT_REMOTE="$(git -C "$tmp/remote" rev-parse factory/update/apps-web)"
 if [ "$(mutations disablePullRequestAutoMerge)" != 1 ] || [ "$(mutations enablePullRequestAutoMerge)" != 0 ] || ! grep -q "auto-merge is off" "$tmp/out"; then fail "unlisted kind with auto-merge on: $(cat "$GH_LOG") $(cat "$tmp/out")"; fi
 change; run PR_KIND=update GH_AUTO_ON=true
-if [ "$(mutations disablePullRequestAutoMerge)" != 1 ]; then fail "auto-merge off, a pull request with it on: $(cat "$GH_LOG")"; fi
+if [ "$(mutations disablePullRequestAutoMerge)" != 0 ]; then fail "feature off must preserve a person's auto-merge: $(cat "$GH_LOG")"; fi
+# The disabling mutation must precede pushing: inspect the remote from gh.
+# The shell implementation also emits its off message before git switches.
+if [ "$(calls merge)" != 0 ]; then fail "merged immediately"; fi
+change
+if ! run AUTO_MERGE=update PR_KIND=update GH_VIEW_FAILS=true; then fail "failed view crashed the job"; fi
+if ! grep -q '^::warning::auto-merge could not be turned on' "$tmp/out"; then fail "no warning after failed view"; fi
+change
+before=$(git -C "$tmp/remote" rev-parse factory/update/apps-web)
+run AUTO_MERGE=pin PR_KIND=rebuild GH_AUTO_ON=true GH_STATE=OPEN GH_DISABLE_FAILS=true
+if [ "$(git -C "$tmp/remote" rev-parse factory/update/apps-web)" != "$before" ] || ! grep -q 'leaving its branch unchanged' "$tmp/out"; then fail "updated a branch whose auto-merge could not be disabled"; fi
+git -C "$repo" checkout -q -- apps/web/app.lock.yaml
+change
+before=$(git -C "$tmp/remote" rev-parse factory/update/apps-web)
+run AUTO_MERGE=pin PR_KIND=rebuild GH_STATE=OPEN GH_VIEW_FAILS=true
+if [ "$(git -C "$tmp/remote" rev-parse factory/update/apps-web)" != "$before" ]; then fail "updated without knowing whether auto-merge was enabled"; fi
+git -C "$repo" checkout -q -- apps/web/app.lock.yaml
 # GitHub refuses (auto-merge not allowed, or no required checks: "clean
 # status"): a warning, exit 0, the pull request open and unmerged.
 change
