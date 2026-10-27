@@ -5,6 +5,22 @@ what may change between releases.
 
 ## Unreleased
 
+## v0.4.1 (2026-10-26)
+
+### Fixed
+
+- Build the CLI with Go 1.27.3. v0.4.0's signed binaries were built with
+  Go 1.27.0, although local verification used Go 1.27.3. Binary
+  `govulncheck` reported 13 standard-library advisories, including
+  [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809), in the v0.4.0
+  artifact; the same source built with Go 1.27.3 reported none. These are
+  scanner findings, not a claim that every advisory is exploitable through
+  Factory.
+- Run govulncheck in PR CI and inspect all four compiled release binaries
+  before provenance, signing, and publication. This checks the toolchain
+  actually embedded in each artifact.
+
+
 ## v0.4.0 (2026-10-26)
 
 ### Phase B review fixes
