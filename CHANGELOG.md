@@ -5,6 +5,8 @@ what may change between releases.
 
 ## Unreleased
 
+## v0.4.0 (2026-10-26)
+
 ### Phase B review fixes
 
 - Reject malformed VEX scopes and non-OpenVEX input instead of passing them
