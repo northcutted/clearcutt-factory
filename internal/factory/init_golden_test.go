@@ -227,29 +227,50 @@ func TestInitScaffoldsLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("platform org profile: %v", err)
 	}
-	if org.Registry != "ghcr.io/acme/platform" || !org.Policy.RequireSignedStacks {
-		t.Errorf("platform org profile: registry %s, requireSignedStacks %v", org.Registry, org.Policy.RequireSignedStacks)
+	if org.Registry != "ghcr.io/acme/platform" || !org.Policy.RequireSignedStacks || !org.Policy.RequireSignedBases {
+		t.Errorf("platform org profile: registry %s, requireSignedStacks %v, requireSignedBases %v", org.Registry, org.Policy.RequireSignedStacks, org.Policy.RequireSignedBases)
 	}
+	// Two image signers: the platform's own (repository-scoped), and the
+	// apps' (owner-scoped). Only the platform's may vouch for a base.
 	images := org.Signers(manifest.RoleImage)
-	if len(images) != 1 || images[0].SourceRepositoryOwner != "https://github.com/acme" || !images[0].SourceMatchesImage || images[0].SourceRef != "refs/heads/main" {
+	if len(images) != 2 || images[0].SourceRepository != "https://github.com/acme/platform" || images[0].SourceRepositoryOwner != "" ||
+		images[1].SourceRepositoryOwner != "https://github.com/acme" || images[1].SourceRepository != "" {
 		t.Fatalf("platform image signers: %+v", images)
 	}
-	for _, c := range []struct {
-		source string
-		ok     bool
-	}{
-		{"https://github.com/acme/checkout", true},
-		{"https://github.com/acme/a-new-app", true},
-		{"https://github.com/acme-evil/checkout", false},
-		{"https://github.com/mallory/checkout", false},
-		{"", false},
-	} {
-		args, err := identityArgs(images[0], c.source)
-		if (err == nil) != c.ok {
-			t.Errorf("an image whose source is %q: %q, %v", c.source, args, err)
+	for _, s := range images {
+		if !s.SourceMatchesImage || s.SourceRef != "refs/heads/main" {
+			t.Errorf("platform image signer: %+v", s)
 		}
-		if c.ok && !strings.Contains(strings.Join(args, " "), "--certificate-github-workflow-repository "+strings.TrimPrefix(c.source, "https://github.com/")) {
-			t.Errorf("an image whose source is %s: cosign isn't held to that repository: %q", c.source, args)
+	}
+	if bases := org.BaseSigners(); len(bases) != 1 || bases[0].SourceRepository != images[0].SourceRepository {
+		t.Errorf("base signers: %+v", bases)
+	}
+	for _, c := range []struct {
+		source      string
+		image, base bool
+	}{
+		{"https://github.com/acme/checkout", true, false},
+		{"https://github.com/acme/a-new-app", true, false},
+		{"https://github.com/acme/platform", true, true},
+		{"https://github.com/acme-evil/checkout", false, false},
+		{"https://github.com/acme-evil/platform", false, false},
+		{"https://github.com/mallory/checkout", false, false},
+		{"", false, false},
+	} {
+		for _, k := range []struct {
+			name    string
+			signers []manifest.VerifyIdentity
+			ok      bool
+		}{{"an image", images, c.image}, {"a base", org.BaseSigners(), c.base}} {
+			args, err := argsOf(k.signers, c.source)
+			if (err == nil) != k.ok {
+				t.Errorf("%s whose source is %q: %q, %v", k.name, c.source, args, err)
+			}
+			for _, a := range args {
+				if !strings.Contains(strings.Join(a, " "), "--certificate-github-workflow-repository "+strings.TrimPrefix(c.source, "https://github.com/")) {
+					t.Errorf("%s whose source is %s: cosign isn't held to that repository: %q", k.name, c.source, a)
+				}
+			}
 		}
 	}
 	if s := org.Signers(manifest.RoleStack); len(s) != 1 || s[0].CertificateIdentity != "https://github.com/acme/platform/.github/workflows/stacks.yml@refs/heads/main" {
@@ -271,7 +292,7 @@ func TestInitScaffoldsLoad(t *testing.T) {
 	pr := filepath.Join("testdata", "init", "platform-registry")
 	if o, err := loadOrg(context.Background(), Options{OrgPath: filepath.Join(pr, "factory.org.yaml")}, pr, nil); err != nil || o.Registry != "registry.example.com/acme/platform" {
 		t.Errorf("platform-registry org profile: %v", err)
-	} else if s := o.Signers(manifest.RoleImage); len(s) != 1 || s[0].SourceRef != "refs/heads/trunk" {
+	} else if s := o.Signers(manifest.RoleImage); len(s) != 2 || s[0].SourceRef != "refs/heads/trunk" || s[1].SourceRef != "refs/heads/trunk" {
 		t.Errorf("platform-registry image signers: %+v", s)
 	}
 	for _, c := range []string{"images", "app"} {

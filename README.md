@@ -272,6 +272,11 @@ the stack's digest until `lock --update` moves it, and
 `policy.requireSignedStacks` accepts only stacks signed by the org's stack
 signer (`signing.stacks`). Every command that uses the stack checks the
 version the lock pins, so editing the lock can't bring in an unsigned one.
+`policy.requireSignedBases` also checks the stack's build and run images
+(where they are pinned, built on, rebased onto, and named by `stack push`),
+against the image signers that name one repository (`sourceRepository`)
+only: an owner-scoped signer would let any of the owner's repositories
+vouch for what every app ships on.
 Pushing an unchanged stack again only moves its tag once the stack signer
 has signed it, and in key mode stacks are signed with `signing.stackKey`
 (or `stack push --key`) when the platform's stacks have a key of their own.

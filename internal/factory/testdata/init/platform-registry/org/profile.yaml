@@ -35,4 +35,8 @@ policy:
   # The image signer accepts the repository an image names as its source.
   requiredLabels: [org.opencontainers.image.source]
   requireSignedStacks: true
+  # An app's build and run images (its bases) must be signed by this
+  # repository's signer (platform-images in trust.yaml), never only by the
+  # owner-scoped one apps are signed by.
+  requireSignedBases: true
   allowedRegistries: [cgr.dev/chainguard/, registry.example.com/acme/, docker.io/moby/, docker.io/docker/]

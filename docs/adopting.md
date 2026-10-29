@@ -130,7 +130,7 @@ clearcutt-factory init --estate --repo acme/estate --platform-repo acme/platform
 
 | Flag | Files | What they do |
 |---|---|---|
-| `--platform` | `factory.org.yaml` (extends `org/profile.yaml` by path), `org/profile.yaml` (the shared profile: builder, keyless signing, `signing.trustPolicy`, the gate, policy requiring signed stacks and a source label), `org/trust.yaml`, `images/run-go/`, `images/build-go/`, `stacks/go.yaml`, `.github/workflows/` `platform.yml`, `stacks.yml`, `profile.yml`, `update-locks.yml`, `reattest.yml`, `.github/dependabot.yml`, `.gitignore` | `platform.yml` publishes the images, then the stacks (`stacks.yml`) and the shared profile (`profile.yml`), each signed by its own workflow, wakes the app repositories (`notify.yml`), reproduces, and with `--estate-repo` refreshes the estate. The trust policy's image signer is **owner-scoped**: `sourceRepositoryOwner: https://github.com/<owner>` with `sourceMatchesImage: true` and `sourceRef`, so an image is trusted when it was signed by factory's workflows in a run of the owner's repository it names as its source, on the default branch; a new app repository needs no change to it. Its stack signer is `stacks.yml`; with `--estate-repo`, its estate signer is that repository's `estate.yml`, and `notify.yml` wakes only the apps the estate's report proves are built on a run image ([above](#only-the-apps-built-on-it)) |
+| `--platform` | `factory.org.yaml` (extends `org/profile.yaml` by path), `org/profile.yaml` (the shared profile: builder, keyless signing, `signing.trustPolicy`, the gate, policy requiring signed stacks and a source label), `org/trust.yaml`, `images/run-go/`, `images/build-go/`, `stacks/go.yaml`, `.github/workflows/` `platform.yml`, `stacks.yml`, `profile.yml`, `update-locks.yml`, `reattest.yml`, `.github/dependabot.yml`, `.gitignore` | `platform.yml` publishes the images, then the stacks (`stacks.yml`) and the shared profile (`profile.yml`), each signed by its own workflow, wakes the app repositories (`notify.yml`), reproduces, and with `--estate-repo` refreshes the estate. The trust policy has two image signers. `app-images` is **owner-scoped**: `sourceRepositoryOwner: https://github.com/<owner>` with `sourceMatchesImage: true` and `sourceRef`, so an app's image is trusted when it was signed by factory's workflows in a run of the owner's repository it names as its source, on the default branch; a new app repository needs no change to it. `platform-images` names the platform repository (`sourceRepository`), and the profile's `policy.requireSignedBases` checks the run and build images apps use against it alone, never the owner-scoped one ([Signed bases](#platform-stacks)). Its stack signer is `stacks.yml`; with `--estate-repo`, its estate signer is that repository's `estate.yml`, and `notify.yml` wakes only the apps the estate's report proves are built on a run image ([above](#only-the-apps-built-on-it)) |
 | `--app` | `app.yaml` (with `--stack`), `factory.org.yaml`, `.github/workflows/factory.yml`, `.github/dependabot.yml`, `.gitignore` | With `--platform-repo`, the org profile extends `<registry>/factory/org:1`, signed by that repository's `profile.yml` (checked now), and images go to `<registry>/apps`; the workflow is a caller of [`app.yml`](#an-app-repository-is-its-appyaml-and-one-call), with `estate:` from `--estate-repo`. `--name` (default the repository's) names the app |
 | `--estate` | `.github/workflows/estate.yml`, `estate/policy.yaml`, `estate/refs.txt`, `.github/dependabot.yml` | clearcutt-verify (by release tag) over `estate/refs.txt`, daily, on `clearcutt.estate-changed`, and by hand, with `--rescan` (a checksum-pinned grype) and `--reproduce`, the trust policy read from the platform's signed profile (`--platform-repo`'s `profile.yml` must have signed it), the last report bundle pulled only if this workflow signed it, the new one pushed and signed; then clearcutt-portal (by release tag) publishes it to Pages. `--name` (default the owner) names the estate |
 
@@ -425,6 +425,22 @@ The app's lock pins the stack's digest, so a moved tag changes nothing until
 unset). Every command that uses the stack (`lock`, `render`, `build`,
 `verify`, `rebase`) checks the version the lock pins, so a pull request that
 edits the lock to an unsigned version fails CI too.
+
+**Signed bases.** A signed stack names its build and run images, but the
+run image is a tag apps follow, and anyone who can write to the registry
+can move it. `policy.requireSignedBases: true` also requires an app's bases
+to carry a signature from a **repository-scoped** image signer: one that
+names the repository whose runs count with `sourceRepository` (the
+platform's). `lock` and `update-locks` check the build and run images they
+pin, `build` (and `verify`) the ones the lock pins, `rebase` and `fleet.yml`
+the run image they move an app onto, and `stack push` the images a stack
+names before publishing it. An owner-scoped signer (`sourceRepositoryOwner`
+without `sourceRepository`) is never asked for a base, even when it would
+accept the image: it accepts a run in any of the owner's repositories, so
+any app repository could build a "run image", sign it, and, with write
+access to the registry (the only other boundary), put it under the tag
+every app ships on. `init --platform` turns it on, with a signer for the
+platform repository's own images beside the owner-scoped one for apps.
 
 ### Waking the apps when the platform publishes
 
@@ -809,7 +825,7 @@ the field, not a silent override, so what the file says is what applies:
 | `signing.profile` | Only in a profile you publish |
 | `vulnerabilities.failOn` | The repository may set a stricter (lower) severity, not a looser one |
 | `vulnerabilities.onlyFixed`, `vulnerabilities.allowLocalVEX`, `policy.allowTOFU` | Can only turn off |
-| `policy.requireNonRoot`, `policy.requireSignedStacks`, `policy.requireOfflineBuildTools`, `sbom.scan` | Can only turn on |
+| `policy.requireNonRoot`, `policy.requireSignedStacks`, `policy.requireSignedBases`, `policy.requireOfflineBuildTools`, `sbom.scan` | Can only turn on |
 | `policy.requiredLabels` | Union |
 | `policy.allowedHosts`, `policy.allowedRegistries` | The repository's list, when it sets one, must lie within the shared one (a host or `.suffix` the shared list allows; a registry or repository path at or below a shared one, by whole path segments) |
 | `vulnerabilities.vex` | The shared profile's statements apply to every scan (a statement whose product is an image, `pkg:oci/…` by digest or `repository_url`, to that image only; see the README's [VEX statements are applied per image](../README.md#what-gets-attached-to-a-pushed-image)). The repository's (its profile's `vex` and its manifests' `spec.vex`) are refused unless the shared profile sets `vulnerabilities.allowLocalVEX: true`: a statement that a vulnerability doesn't apply lets an image past the gate |
@@ -884,7 +900,10 @@ the image names as its source (`org.opencontainers.image.source`), and
 bind images only: a stack names no source, so a stack
 signer names its repository with `sourceRepository` (or is a workflow in it,
 as above), and with `policy.requireSignedStacks` a stack signer with
-`sourceMatchesImage` is an error.
+`sourceMatchesImage` is an error. With `policy.requireSignedBases`, a
+stack's build and run images are checked only against the image signers
+that name a `sourceRepository`, never an owner-scoped one ([Signed
+bases](#platform-stacks)).
 
 **Pinning factory's workflows by commit.** The regexp `init` writes accepts
 the signing workflows at a release tag only (`@refs/tags/v\d+\.\d+\.\d+$`).

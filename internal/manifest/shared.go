@@ -301,6 +301,9 @@ func (o *Org) checkShared() error {
 	if o.Policy.RequireSignedStacks && len(o.Signers(RoleStack)) == 0 {
 		add("policy.requireSignedStacks: name the stack signer (signing.stacks, signing.verify, or stack signers in signing.trustPolicy) in the shared profile itself, so the repositories that extend it can't choose whose stacks to trust")
 	}
+	if o.Policy.RequireSignedBases && len(o.BaseSigners()) == 0 {
+		add("policy.requireSignedBases: name the image signer of the repository that publishes the stacks' images (with sourceRepository) in the shared profile itself, so the repositories that extend it can't choose whose bases to trust")
+	}
 	return errors.Join(errs...)
 }
 
@@ -481,6 +484,7 @@ func extendWith(s, l *Org, set keySet) (*Org, error) {
 	p, sp, lp := &out.Policy, s.Policy, l.Policy
 	p.RequireNonRoot = on("policy.requireNonRoot", sp.RequireNonRoot, lp.RequireNonRoot)
 	p.RequireSignedStacks = on("policy.requireSignedStacks", sp.RequireSignedStacks, lp.RequireSignedStacks)
+	p.RequireSignedBases = on("policy.requireSignedBases", sp.RequireSignedBases, lp.RequireSignedBases)
 	p.RequiredLabels = slices.Clone(sp.RequiredLabels)
 	for _, k := range lp.RequiredLabels {
 		if !slices.Contains(p.RequiredLabels, k) {

@@ -119,6 +119,25 @@ func (o *Org) Signers(role string) []VerifyIdentity {
 	return nil
 }
 
+// BaseSigners returns who the org trusts to sign a base (a stack's build
+// or run image): its image signers that name a sourceRepository, so each
+// vouches only for runs in that one repository. An owner-scoped signer
+// (sourceRepositoryOwner without sourceRepository) accepts a run in any of
+// the owner's repositories: right for apps, which a new repository adds
+// without a change to the trust policy, but with it any of them could
+// vouch for an image every app builds or ships on, with write access to
+// the registry the only other boundary. A key, or an identity without
+// source constraints, names no repository either.
+func (o *Org) BaseSigners() []VerifyIdentity {
+	var out []VerifyIdentity
+	for _, v := range o.Signers(RoleImage) {
+		if v.SourceRepository != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // Verify is the signer as a verify identity.
 func (s TrustedSigner) Verify() VerifyIdentity {
 	return VerifyIdentity{

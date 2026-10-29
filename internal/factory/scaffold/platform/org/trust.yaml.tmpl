@@ -8,16 +8,34 @@ kind: TrustPolicy
 signers:
   # Images are signed inside factory's reusable workflows (images.yml when
   # built, fleet.yml when rebased, reattest.yml when rescanned), at a release
-  # tag{% if .CommitPins %} or, with init --allow-commit-pins, any commit in the
-  # repository's fork network (naming the commits you pin is safer:
-  # docs/adopting.md){% end %}, which any repository can call. So the signer also says
-  # whose runs count: those in a repository of {% .Owner %}
-  # (sourceRepositoryOwner) that is the one the image names as its source
+  # tag, which any repository can call. So each signer also says whose runs
+  # count, and requires the image to name that repository as its source
   # (sourceMatchesImage: its org.opencontainers.image.source label, which
-  # the profile requires), on {% .Branch %} (sourceRef). A new app repository needs
-  # no change here. To trust only some of the owner's repositories, give
-  # each a signer of its own with sourceRepository instead.
-  - name: images
+  # the profile requires) and the run to be on {% .Branch %} (sourceRef).
+{% if .CommitPins %}  # With init --allow-commit-pins, they also accept the workflows at any
+  # commit in factory's fork network; naming the commits you pin is safer
+  # (docs/adopting.md).
+{% end %}  #
+  # This repository's images: the run and build images the stacks name,
+  # which every app builds and ships on. With policy.requireSignedBases
+  # (profile.yaml), factory checks an app's bases only against signers that
+  # name one repository (sourceRepository), like this one, never against
+  # the owner-scoped signer below: that would let any of {% .Owner %}'s
+  # repositories vouch for what every app ships on, with write access to
+  # the registry the only other boundary.
+  - name: platform-images
+    roles: [image]
+    identityRegexp: {% .IdentityRegexp %}
+    issuer: https://token.actions.githubusercontent.com
+    sourceRepository: https://github.com/{% .Repo %}
+    sourceMatchesImage: true
+    sourceRef: refs/heads/{% .Branch %}
+  # The apps' images: a run in any repository of {% .Owner %}
+  # (sourceRepositoryOwner) that the image names as its source, so a new
+  # app repository needs no change here. To trust only some of the owner's
+  # repositories, give each a signer of its own with sourceRepository
+  # instead.
+  - name: app-images
     roles: [image]
     identityRegexp: {% .IdentityRegexp %}
     issuer: https://token.actions.githubusercontent.com

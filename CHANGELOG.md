@@ -22,6 +22,19 @@ what may change between releases.
 
 ### Added
 
+- **`policy.requireSignedBases`**: an app's bases, the build and run
+  images its stack names, must carry a signature from an image signer that
+  names one repository (`sourceRepository`), never an owner-scoped one
+  (`sourceRepositoryOwner` alone), which would let any of the owner's
+  repositories vouch for what every app ships on. `lock` and
+  `update-locks.yml` check what they pin, `build` and `verify` what the
+  lock pins, `rebase` and `fleet.yml` the run image they move an app onto,
+  and `stack push` the images a stack names before publishing it. It can
+  only be turned on by a profile that extends one, and a shared profile
+  that turns it on must name such a signer. `init --platform` turns it on,
+  and its trust policy now has two image signers: `platform-images`
+  (`sourceRepository`: the platform repository) and `app-images` (the
+  owner-scoped signer, as before, for apps).
 - **`clearcutt-factory doctor`** checks what factory needs, each failure
   with its fix: the manifest, its org profile, and its lock (a lock a newer
   release wrote names the release to install); docker or podman and its
@@ -40,9 +53,12 @@ what may change between releases.
   shapes of repository the showcase runs, consistent with each other under
   one registry layout (`<registry>/platform`, `/stacks`, `/factory/org:1`,
   `/apps`, `/estate:latest`). `--platform`: run and build images, a Go
-  stack, the shared profile with an **owner-scoped trust policy** (the image
-  signer has `sourceRepositoryOwner`, `sourceMatchesImage`, and `sourceRef`,
-  so a new app repository needs no platform change), and the `platform.yml`,
+  stack, the shared profile with an **owner-scoped trust policy for apps**
+  (the `app-images` signer has `sourceRepositoryOwner`, `sourceMatchesImage`,
+  and `sourceRef`, so a new app repository needs no platform change), a
+  repository-scoped `platform-images` signer for the platform's own images,
+  and `policy.requireSignedBases` (apps' bases rest on that signer only),
+  and the `platform.yml`,
   `stacks.yml`, `profile.yml`, `update-locks.yml`, and `reattest.yml`
   workflows. `--app`: `app.yaml` (with `--stack`), an org profile extending
   the platform's (`--platform-repo`; its signature checked), and a caller

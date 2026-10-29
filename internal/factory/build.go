@@ -84,6 +84,10 @@ func Build(ctx context.Context, opts Options, bo BuildOptions) error {
 	if err := policy.Check(m, org, l); err != nil {
 		return err
 	}
+	// A lock edited to pin another base fails here, before it is built on.
+	if err := verifyLockedBases(ctx, org, l); err != nil {
+		return err
+	}
 	out, err := render.Render(m, l)
 	if err != nil {
 		return err
