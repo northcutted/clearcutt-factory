@@ -396,6 +396,10 @@ func TestDoctorVersions(t *testing.T) {
 		{"factory-version wins", map[string]string{"factory.yml": caller("v1.2.3") + "    with:\n      factory-version: v1.2.2 # pinned\n"}, "v1.2.2", "", DoctorOK, "v1.2.2 in factory.yml (factory-version)"},
 		{"a release's commit", map[string]string{"factory.yml": caller(sha)}, "v1.2.3", sha + "\trefs/tags/v1.2.3^{}\nfeedface\trefs/tags/v1.2.3\n", DoctorOK, "v1.2.3 in factory.yml"},
 		{"another commit", map[string]string{"factory.yml": caller(sha)}, "v1.2.3", "", DoctorWarn, "a commit no release tag names"},
+		// As the action picks: an annotated tag by its commit, not its tag
+		// object; the newest release whose tag points at the commit.
+		{"a tag object", map[string]string{"factory.yml": caller(sha)}, "v1.2.3", sha + "\trefs/tags/v1.2.3\nfeedface\trefs/tags/v1.2.3^{}\n", DoctorWarn, "a commit no release tag names"},
+		{"two releases at a commit", map[string]string{"factory.yml": caller(sha)}, "v1.10.0", sha + "\trefs/tags/v1.10.0\n" + sha + "\trefs/tags/v1.9.0\n" + sha + "\trefs/tags/v1.2.3\n", DoctorOK, "v1.10.0 in factory.yml"},
 		{"main", map[string]string{"factory.yml": caller("main")}, "v1.2.3", "", DoctorWarn, "follow main"},
 		{"no factory", map[string]string{"ci.yml": "jobs: {}\n"}, "v1.2.3", "", DoctorSkip, "no workflow"},
 	} {

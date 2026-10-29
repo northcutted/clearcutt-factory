@@ -783,7 +783,9 @@ func doctorVersions(ctx context.Context, env doctorEnv, st *doctorState, local s
 	return c
 }
 
-// releaseTags maps the commits factory's release tags name to the tags.
+// releaseTags maps each commit a release tag (vX.Y.Z) points at to the
+// newest such tag, as the action picks the release to install at a commit:
+// an annotated tag by the commit it peels to, not its tag object.
 func releaseTags(ctx context.Context, env doctorEnv) map[string]string {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -792,17 +794,46 @@ func releaseTags(ctx context.Context, env doctorEnv) map[string]string {
 	if err != nil {
 		return tags
 	}
+	direct, peeled := map[string]string{}, map[string]string{}
 	for _, line := range strings.Split(string(out), "\n") {
 		sha, ref, ok := strings.Cut(strings.TrimSpace(line), "\t")
 		if !ok {
 			continue
 		}
-		tag := strings.TrimSuffix(strings.TrimPrefix(ref, "refs/tags/"), "^{}")
-		if releaseRE.MatchString(tag) {
+		tag := strings.TrimPrefix(ref, "refs/tags/")
+		if t, ok := strings.CutSuffix(tag, "^{}"); ok {
+			peeled[t] = sha
+		} else {
+			direct[tag] = sha
+		}
+	}
+	for tag, sha := range direct {
+		v := stableReleaseRE.FindStringSubmatch(tag)
+		if v == nil {
+			continue
+		}
+		if p, ok := peeled[tag]; ok {
+			sha = p
+		}
+		if cur, ok := tags[sha]; !ok || releaseLess(stableReleaseRE.FindStringSubmatch(cur), v) {
 			tags[sha] = tag
 		}
 	}
 	return tags
+}
+
+var stableReleaseRE = regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)$`)
+
+// releaseLess orders two stableReleaseRE matches.
+func releaseLess(a, b []string) bool {
+	for i := 1; i <= 3; i++ {
+		x, _ := strconv.Atoi(a[i])
+		y, _ := strconv.Atoi(b[i])
+		if x != y {
+			return x < y
+		}
+	}
+	return false
 }
 
 func appendUnique(s []string, v string) []string {
