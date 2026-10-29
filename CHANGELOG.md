@@ -5,6 +5,21 @@ what may change between releases.
 
 ## Unreleased
 
+### Breaking
+
+- **A trust signer's `sourceRepositoryOwner` is read as clearcutt-verify
+  reads it.** It must be exactly `https://github.com/OWNER` (a trailing
+  slash allowed), and any source constraint (`sourceRepository`,
+  `sourceRepositoryOwner`, `sourceMatchesImage`, `sourceRef`) needs the
+  GitHub Actions issuer; a profile or trust policy that breaks either is
+  refused when it loads, as clearcutt-verify refuses the same trust policy.
+  Before, `sourceRepositoryOwner: https://github.com/acme/checkout` loaded
+  and then matched nothing. An owner alone, without `sourceMatchesImage`
+  or `sourceRepository`, which clearcutt-verify accepts (it reads the
+  repository from each certificate first), still can't be checked by
+  factory, which hands cosign one exact repository: that signer is
+  skipped, and the message now says what to add.
+
 ### Added
 
 - **`clearcutt-factory doctor`** checks what factory needs, each failure
@@ -101,19 +116,6 @@ what may change between releases.
   so a caller may pin factory's workflows by SHA (and `app.yml` calls them
   at one when pinned so). Existing profiles keep their regexp; widen it to
   pin by commit.
-- **A trust signer's `sourceRepositoryOwner` is read as clearcutt-verify
-  reads it.** It must be exactly `https://github.com/OWNER` (a trailing
-  slash allowed), and any source constraint (`sourceRepository`,
-  `sourceRepositoryOwner`, `sourceMatchesImage`, `sourceRef`) needs the
-  GitHub Actions issuer; a profile or trust policy that breaks either is
-  refused when it loads, as clearcutt-verify refuses the same trust policy.
-  Before, `sourceRepositoryOwner: https://github.com/acme/checkout` loaded
-  and then matched nothing. An owner alone, without `sourceMatchesImage`
-  or `sourceRepository`, which clearcutt-verify accepts (it reads the
-  repository from each certificate first), still can't be checked by
-  factory, which hands cosign one exact repository: that signer is
-  skipped, and the message now says what to add.
-
 ### Fixed
 
 - `build` gives the container runtime the real paths of the directories it
