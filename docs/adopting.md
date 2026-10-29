@@ -25,6 +25,16 @@ Or build it: `go install github.com/northcutted/clearcutt-factory/cmd/clearcutt-
 Building needs Docker or Podman (BuildKit runs in a container). Scanning and
 signing need `syft`, `grype`, and `cosign` on `PATH`.
 
+On macOS and Windows the runtime runs in a VM (a Podman machine, Docker
+Desktop) that sees only the host directories shared with it: by default a
+Podman machine shares your home directory, `/private`, and `/var/folders`.
+`build` mounts the repository's staged context and the `--out` directory into
+the BuildKit container by their real paths (so `/tmp`, which is
+`/private/tmp`, works), and when the runtime can't see one it says which path
+and how to share it. Keep the repository and `--out` under your home directory
+and a local build matches CI's: an app the showcase publishes rebuilds locally,
+on a Podman machine, to the same digest in about 30 seconds.
+
 ## 2. Scaffold
 
 In your repository:

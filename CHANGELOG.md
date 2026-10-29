@@ -5,6 +5,18 @@ what may change between releases.
 
 ## Unreleased
 
+### Fixed
+
+- `build` gives the container runtime the real paths of the directories it
+  mounts into the BuildKit container (symbolic links resolved). On macOS,
+  `/tmp` is `/private/tmp`: a Podman machine shares `/private`, but the
+  path `/tmp/x` named the VM's own `/tmp`, so `build --out /tmp/x` failed
+  with podman's `Error: statfs /tmp/x/…/context: no such file or
+  directory … exit status 125`. When the runtime still can't see a path
+  (a directory its VM doesn't share), `build` now says so in one sentence,
+  naming the path and how to share it, instead of that message and the
+  build log's tail.
+
 ## v0.4.1 (2026-10-26)
 
 ### Fixed
