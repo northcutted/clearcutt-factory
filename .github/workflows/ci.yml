@@ -30,6 +30,8 @@ jobs:
         run: .github/scripts/publish-ref_test.sh
       - name: notify.yml announces build images as such
         run: .github/scripts/notify-events_test.sh
+      - name: notify.yml wakes the run images' dependents by layer digest, and the estate
+        run: .github/scripts/notify-dependents_test.sh
       - name: open-pr.sh opens, updates, closes, and auto-merges
         run: .github/scripts/open-pr_test.sh
       - name: changed-only builds what a pull request affects

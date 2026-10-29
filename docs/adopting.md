@@ -390,6 +390,46 @@ jobs:
 Dispatches queue behind any fleet or lock-update run already going in the
 app repository, so a burst of them costs at most one more run.
 
+### Only the apps built on it
+
+The topic wakes every app repository for every publish. When the
+organization runs [clearcutt-verify](https://github.com/northcutted/clearcutt-verify)
+over its estate (as `init --estate` sets up), `notify.yml` can ask the
+estate's report instead which images are built on a run image, proven by
+layer digest (`clearcutt-verify estate dependents`), and wake only the
+repositories they come from:
+
+```yaml
+  notify-images:
+    needs: images
+    if: ${{ !cancelled() && github.event_name == 'push' && needs.images.outputs.published != '[]' && needs.images.outputs.published != '' }}
+    uses: northcutted/clearcutt-factory/.github/workflows/notify.yml@v0.4.1
+    permissions: {contents: read}
+    with:
+      published: ${{ needs.images.outputs.published }}
+      estate-report: ghcr.io/acme/estate:latest # the bundle the estate workflow pushes
+      estate-report-signer: https://github.com/acme/estate/.github/workflows/estate.yml@refs/heads/main
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+```
+
+The bundle is pulled anonymously (a public package) and read only once its
+signature verifies against `estate-report-signer`. A dependent's repository
+is its image's source (verified provenance where there is any, else its
+`org.opencontainers.image.source` label), and must be one of the owner's.
+The topic search stays for what has no layer relation to an app (build
+images, stacks, profiles), and for a run image the report can't answer for:
+the bundle can't be pulled or verified, or a dependent names no repository
+of the owner. An app the report doesn't list yet (it joined after the
+estate's last run) isn't woken; its daily fleet run catches up.
+
+`estate: NAME` (or `OWNER/NAME`) also sends `clearcutt.estate-changed`
+(`{source, sha}`) to the estate repository when `published` lists anything,
+apps included, or `changed: true` says something else changed (a rebase),
+so its report and portal refresh now rather than at the next scheduled run.
+`app.yml` does this for an app repository with its `estate` input.
+
 ## 6. One org profile for every repository
 
 Without this, each app repository carries its own copy of the platform
@@ -743,7 +783,7 @@ output start right after the images are published
 | `update-locks.yml` | `manifests`, `update` (`all`, default, or `stack`: apps only, the stack and its build and run images, as a rebuild pull request), `app-id`, `auto-merge` (`update`, `rebuild`, or `all`) | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: write`, `pull-requests: write` |
 | `fleet.yml` | `apps` (default `**/app.yaml`), `registry`, `provenance`, `app-id`, `auto-merge` (`pin`, `rebuild`, or `all`) | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: write`, `pull-requests: write`, `packages: write`, `id-token: write`, `attestations: write` |
 | `reattest.yml` | `manifests`, `registry`, `older-than` (default `6d`), `reproduce` (default `true`), `publish-ref` | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write` |
-| `notify.yml` | `published` (required), `topic` (default `clearcutt-app`), `owner`, `repositories`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: read` |
+| `notify.yml` | `published` (required), `topic` (default `clearcutt-app`), `owner`, `repositories`, `app-id`, `estate-report` and `estate-report-signer` (a run image's dependents by layer digest, [above](#only-the-apps-built-on-it)), `estate` and `changed` (send `clearcutt.estate-changed`) | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: read` |
 
 `reattest.yml` renews published images' evidence on a schedule: each
 platform image's signed SBOM is scanned again with grype's newest database

@@ -5,6 +5,22 @@ what may change between releases.
 
 ## Unreleased
 
+### Added
+
+- **`notify.yml` wakes only the apps built on a run image**, with the new
+  `estate-report` (an estate report bundle clearcutt-verify `estate push`
+  published) and `estate-report-signer` (who must have signed it) inputs:
+  a run image's dependents are the owner's repositories whose images the
+  report proves, by layer digest, are built on it (`clearcutt-verify estate
+  dependents`, v0.17.0, installed signature-verified). Build images, stacks,
+  profiles, and a run image the report can't answer for keep the topic
+  search, which stays the default.
+- `notify.yml`'s `estate` and `changed` inputs send `clearcutt.estate-changed`
+  (`{source, sha}`) to the estate repository when anything was published,
+  apps included, or `changed` is true, so the estate's report refreshes
+  now. The showcase's platform and app workflows did this with a job of
+  their own.
+
 ### Changed
 
 - **A trust signer's `sourceRepositoryOwner` is read as clearcutt-verify
