@@ -92,6 +92,10 @@ what may change between releases.
 
 ### Changed
 
+- The action pinned by commit (`uses: northcutted/clearcutt-factory@<sha>`)
+  installs the release tagged at that commit, its signature checked, as at
+  the tag; it built the commit from source. A commit no release tag names
+  still builds from source.
 - **The signer identity `init` writes accepts a commit as well as a release
   tag**: `…(images|fleet|reattest)\.yml@(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$`,
   so a caller may pin factory's workflows by SHA (and `app.yml` calls them

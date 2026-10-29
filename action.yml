@@ -2,10 +2,11 @@
 #
 #   - uses: northcutted/clearcutt-factory@v0.4.1
 #
-# At a release tag, the action downloads that release's binary and verifies
-# its Sigstore signature (made by this repository's release workflow at that
-# tag) before putting it on PATH. At any other ref, or as a local action
-# (uses: ./), it builds the binary from the action's own source.
+# At a release tag, or the commit a release tag names, the action downloads
+# that release's binary and verifies its Sigstore signature (made by this
+# repository's release workflow at that tag) before putting it on PATH. At
+# any other ref, or as a local action (uses: ./), it builds the binary from
+# the action's own source.
 name: ClearCutt Factory
 description: Install clearcutt-factory (signature-verified) and the cosign, syft, and grype it uses
 author: northcutted
@@ -37,6 +38,18 @@ runs:
       run: |
         v=$INPUT
         if [ -z "$v" ] && [[ "$ACTION_REF" =~ ^v[0-9] ]]; then v=$ACTION_REF; fi
+        # Pinned by commit: the release tagged at it (the newest, if several
+        # are), so the signed release is installed; a commit no release tag
+        # names builds from source.
+        if [ -z "$v" ] && [[ "$ACTION_REF" =~ ^[0-9a-f]{40}$ ]]; then
+          v=$(git ls-remote --tags https://github.com/northcutted/clearcutt-factory |
+            awk -v sha="$ACTION_REF" '$1 == sha { sub("^refs/tags/", "", $2); sub("[\\^][{][}]$", "", $2); print $2 }' |
+            grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1 || true)
+          if [ -n "$v" ]; then
+            v=v$v
+            echo "commit $ACTION_REF is release $v"
+          fi
+        fi
         if [ -z "$v" ] || ! [[ "$v" =~ ^v[0-9] ]]; then v=source; fi
         echo "version=$v" >> "$GITHUB_OUTPUT"
 
