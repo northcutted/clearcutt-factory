@@ -7,6 +7,34 @@ what may change between releases.
 
 ### Added
 
+- **`init --platform`, `init --app`, `init --estate`** write the three
+  shapes of repository the showcase runs, consistent with each other under
+  one registry layout (`<registry>/platform`, `/stacks`, `/factory/org:1`,
+  `/apps`, `/estate:latest`). `--platform`: run and build images, a Go
+  stack, the shared profile with an **owner-scoped trust policy** (the image
+  signer has `sourceRepositoryOwner`, `sourceMatchesImage`, and `sourceRef`,
+  so a new app repository needs no platform change), and the `platform.yml`,
+  `stacks.yml`, `profile.yml`, `update-locks.yml`, and `reattest.yml`
+  workflows. `--app`: `app.yaml` (with `--stack`), an org profile extending
+  the platform's (`--platform-repo`; its signature checked), and a caller
+  of `app.yml`. `--estate`: clearcutt-verify (v0.18.0) and clearcutt-portal
+  (v0.3.0) by release tag, with `--rescan`, a checksum-pinned grype,
+  `--reproduce`, the trust policy from the platform's signed profile, and
+  `estate pull` checked by the estate signer, as the showcase's estate
+  workflow does. New flags: `--app`, `--platform`, `--estate`, `--name`,
+  `--stack`, `--platform-repo`, `--estate-repo`; one that doesn't apply to
+  the kind is refused. With `--estate-repo`, the platform trusts the
+  estate's workflow as its estate signer, wakes only the apps its report
+  proves are built on a run image, and both platform and app send it
+  `clearcutt.estate-changed`. Golden files (`internal/factory/testdata/init`)
+  pin what each writes; CI runs actionlint and zizmor on them as adopters'
+  workflows.
+- **Every repository `init` sets up gets `.github/dependabot.yml`**: the
+  actions and ClearCutt workflows its workflows pin (the
+  `northcutted/clearcutt-*` pins grouped), and for an app its own
+  ecosystems (`gomod`, `npm`, `pip`, `cargo`, `maven`, `gradle`, `bundler`,
+  `composer`, `nuget`, by the manifests beside `app.yaml`), each proposed
+  once a week old.
 - **`app.yml`: an app repository in one call.** The new reusable workflow
   runs everything an app repository needs, choosing from the caller's
   event: `images.yml` (pull requests, pushes), a second-runner reproduction,
@@ -50,6 +78,11 @@ what may change between releases.
 
 ### Changed
 
+- **The signer identity `init` writes accepts a commit as well as a release
+  tag**: `…(images|fleet|reattest)\.yml@(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$`,
+  so a caller may pin factory's workflows by SHA (and `app.yml` calls them
+  at one when pinned so). Existing profiles keep their regexp; widen it to
+  pin by commit.
 - **A trust signer's `sourceRepositoryOwner` is read as clearcutt-verify
   reads it.** It must be exactly `https://github.com/OWNER` (a trailing
   slash allowed), and any source constraint (`sourceRepository`,

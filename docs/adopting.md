@@ -43,13 +43,14 @@ In your repository:
 clearcutt-factory init
 ```
 
-It writes three files and keeps any that exist (`--force` overwrites):
+It writes four files and keeps any that exist (`--force` overwrites):
 
 | File | What it is |
 |---|---|
-| `factory.org.yaml` | Your registry (default `ghcr.io/<owner>`), signer identity (keyless: ClearCutt Factory's reusable workflows, bound to runs in this repository; see [Who signs](#who-signs-and-binding-signatures-to-your-repository)), vulnerability gate, and policy |
+| `factory.org.yaml` | Your registry (default `ghcr.io/<owner>`), signer identity (keyless: ClearCutt Factory's reusable workflows, at a release tag or a commit, bound to runs in this repository; see [Who signs](#who-signs-and-binding-signatures-to-your-repository)), vulnerability gate, and policy |
 | `images/example/image.yaml` | An example image to replace |
 | `.github/workflows/clearcutt-factory.yml` | Calls the reusable workflows: build, test, and scan on pull requests; publish on the default branch; weekly lock updates; daily app rebases; across repositories, notify dependents of what it published and answer such notices ([below](#waking-the-apps-when-the-platform-publishes)) |
+| `.github/dependabot.yml` | Keeps the actions and ClearCutt workflows the workflow pins current, the ClearCutt pins grouped, each version a week old ([below](#dependabot)) |
 
 `--repo owner/name`, `--registry`, and `--default-branch` override what it
 reads from the `origin` remote (the branch is the one the signer identity
@@ -58,6 +59,55 @@ profile, `--extends REF --extends-identity ID` (or `--extends-key K`) checks
 that profile's signature and writes a `factory.org.yaml` that extends it
 ([section 6](#6-one-org-profile-for-every-repository)). Every file names its JSON Schema, so editors with the YAML language
 server complete and check fields as you type.
+
+An organization with a platform team, app teams, and an estate report sets
+up each kind of repository with its own flag instead
+([below](#init-for-a-platform-its-apps-and-its-estate)): `init --platform`,
+`init --app`, and `init --estate`.
+
+### Dependabot
+
+Every repository `init` sets up gets a `.github/dependabot.yml`: the
+actions and ClearCutt reusable workflows its workflows pin (one group for
+`northcutted/clearcutt-*`, so factory, verify, and portal move together),
+and, for an app, its own dependencies, for each manifest `init` finds
+beside `app.yaml` (`go.mod`, `package.json`, `requirements.txt` or
+`pyproject.toml`, `Cargo.toml`, `pom.xml`, `build.gradle`, `Gemfile`,
+`composer.json`): factory's lock updates move the OS packages and
+toolchains, not the app's own dependencies, so a CVE in those reaches the
+app through Dependabot (turn on its security updates, which don't wait for
+the schedule). A version is proposed once it is seven days old
+(`cooldown`). The signer identity `init` writes accepts any factory release
+tag or commit, so a factory bump keeps images verifiable.
+
+### init for a platform, its apps, and its estate
+
+Three flags write the three shapes of repository a ClearCutt organization
+runs, each consistent with the others' (the registry layout under
+`--registry`, default `ghcr.io/<owner>`: `platform/`, `stacks/`,
+`factory/org:1`, `apps/`, `estate:latest`):
+
+```sh
+clearcutt-factory init --platform --repo acme/platform --estate-repo acme/estate
+clearcutt-factory init --app --repo acme/checkout --platform-repo acme/platform \
+  --stack ghcr.io/acme/stacks/go:1 --estate-repo acme/estate
+clearcutt-factory init --estate --repo acme/estate --platform-repo acme/platform
+```
+
+| Flag | Files | What they do |
+|---|---|---|
+| `--platform` | `factory.org.yaml` (extends `org/profile.yaml` by path), `org/profile.yaml` (the shared profile: builder, keyless signing, `signing.trustPolicy`, the gate, policy requiring signed stacks and a source label), `org/trust.yaml`, `images/run-go/`, `images/build-go/`, `stacks/go.yaml`, `.github/workflows/` `platform.yml`, `stacks.yml`, `profile.yml`, `update-locks.yml`, `reattest.yml`, `.github/dependabot.yml`, `.gitignore` | `platform.yml` publishes the images, then the stacks (`stacks.yml`) and the shared profile (`profile.yml`), each signed by its own workflow, wakes the app repositories (`notify.yml`), reproduces, and with `--estate-repo` refreshes the estate. The trust policy's image signer is **owner-scoped**: `sourceRepositoryOwner: https://github.com/<owner>` with `sourceMatchesImage: true` and `sourceRef`, so an image is trusted when it was signed by factory's workflows in a run of the owner's repository it names as its source, on the default branch; a new app repository needs no change to it. Its stack signer is `stacks.yml`; with `--estate-repo`, its estate signer is that repository's `estate.yml`, and `notify.yml` wakes only the apps the estate's report proves are built on a run image ([above](#only-the-apps-built-on-it)) |
+| `--app` | `app.yaml` (with `--stack`), `factory.org.yaml`, `.github/workflows/factory.yml`, `.github/dependabot.yml`, `.gitignore` | With `--platform-repo`, the org profile extends `<registry>/factory/org:1`, signed by that repository's `profile.yml` (checked now), and images go to `<registry>/apps`; the workflow is a caller of [`app.yml`](#an-app-repository-is-its-appyaml-and-one-call), with `estate:` from `--estate-repo`. `--name` (default the repository's) names the app |
+| `--estate` | `.github/workflows/estate.yml`, `estate/policy.yaml`, `estate/refs.txt`, `.github/dependabot.yml` | clearcutt-verify (by release tag) over `estate/refs.txt`, daily, on `clearcutt.estate-changed`, and by hand, with `--rescan` (a checksum-pinned grype) and `--reproduce`, the trust policy read from the platform's signed profile (`--platform-repo`'s `profile.yml` must have signed it), the last report bundle pulled only if this workflow signed it, the new one pushed and signed; then clearcutt-portal (by release tag) publishes it to Pages. `--name` (default the owner) names the estate |
+
+Each takes `--repo`, `--registry`, `--default-branch`, and `--force` as
+before; a flag that doesn't apply to the kind is refused. The workflows
+call factory's at the release `init` is, and the other tools at the
+releases it was tested with; Dependabot moves them all. Owner-scoped trust
+accepts any of the owner's repositories that build on factory's workflows,
+so it suits an organization where every repository is the owner's; to trust
+only some, give each a signer of its own with `sourceRepository`, as the
+default `init` does for its one repository.
 
 ## 3. Write manifests and lock them
 
@@ -606,7 +656,7 @@ extends:
 registry: ghcr.io/acme/checkout       # what the shared profile leaves to each repository
 signing:
   verify:
-    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@refs/tags/v\d+\.\d+\.\d+$
+    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
     sourceRepository: https://github.com/acme/checkout
     sourceRef: refs/heads/main
@@ -775,7 +825,7 @@ writes all three, with the origin remote's default branch (or
 signing:
   mode: keyless
   verify:          # this repository's images
-    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@refs/tags/v\d+\.\d+\.\d+$
+    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
     sourceRepository: https://github.com/acme/checkout
     sourceRef: refs/heads/main
@@ -791,7 +841,19 @@ bind images only: a stack names no source, so a stack
 signer names its repository with `sourceRepository` (or is a workflow in it,
 as above), and with `policy.requireSignedStacks` a stack signer with
 `sourceMatchesImage` is an error. Pinning the workflows by commit SHA changes
-the identity's `@…` suffix: adjust the regexp to match.
+the identity's `@…` suffix to the commit; the regexp `init` writes accepts a
+release tag or a 40-hex commit (`@(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$`).
+A commit can be any in the repository's network, a fork's included, so the
+source constraints, not the workflow's ref, are what bind a signature to
+your runs.
+
+`sourceRepositoryOwner` is read as clearcutt-verify reads it: exactly
+`https://github.com/OWNER`, and the repository it resolves to (the image's
+source, with `sourceMatchesImage`) must be one of the owner's, which cosign
+is then held to. clearcutt-verify also accepts it alone, reading the
+repository from each certificate; factory, which hands cosign the signer as
+written, needs `sourceMatchesImage` (or `sourceRepository`) with it and
+skips a signer that has neither.
 
 **With keys.** In key mode, `signing.key` signs images and
 `signing.stackKey` signs stacks (default: `signing.key`), so a platform's
@@ -845,10 +907,11 @@ apiVersion: clearcutt.dev/v1
 kind: TrustPolicy
 signers:
   - name: factory-builds              # images (the default role)
-    identityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@refs/tags/v\d+\.\d+\.\d+$
+    identityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$
     issuer: https://token.actions.githubusercontent.com
-    sourceRepositoryOwner: https://github.com/acme
-    sourceMatchesImage: true
+    sourceRepositoryOwner: https://github.com/acme   # a run in one of acme's repositories,
+    sourceMatchesImage: true                         # the one the image names as its source,
+    sourceRef: refs/heads/main                       # on main
   - name: platform-stacks
     roles: [stack]
     identity: https://github.com/acme/platform/.github/workflows/stacks.yml@refs/heads/main

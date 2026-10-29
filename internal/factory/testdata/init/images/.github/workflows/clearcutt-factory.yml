@@ -1,0 +1,114 @@
+# Builds, publishes, and maintains this repository's images and apps with
+# ClearCutt Factory: https://github.com/northcutted/clearcutt-factory
+#
+# CI starts on the pull requests the weekly and daily jobs open only when they
+# come from a GitHub App (a CLEARCUTT_APP_ID variable holding its Client ID,
+# and a CLEARCUTT_APP_PRIVATE_KEY secret) or a CLEARCUTT_BOT_TOKEN secret:
+# https://github.com/northcutted/clearcutt-factory/blob/v1.2.3/docs/adopting.md#a-github-app-for-the-automation
+# Secrets are passed by name because secrets: inherit reaches only workflows
+# in this repository's own organization or enterprise.
+#
+# Across repositories: a platform repository's notify job wakes the
+# repositories with the topic clearcutt-app when it publishes run images,
+# build images, stacks, or a shared org profile; theirs then rebase onto the
+# new run image, propose a rebuild on the new build image or stack, or
+# propose the new profile.
+name: clearcutt-factory
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 6 * * 1" # weekly: re-resolve every input, one pull request per manifest
+    - cron: "41 5 * * *" # daily: rebase apps onto the newest build of their run image, propose a rebuild on their stack's newest build image, and rescan what was published
+  workflow_dispatch:
+  # From a platform repository's notify job. The payload is only a hint: the
+  # jobs re-resolve everything from the registry and verify it.
+  repository_dispatch:
+    types: [clearcutt.run-image-published, clearcutt.build-image-published, clearcutt.stack-published, clearcutt.profile-published]
+permissions:
+  contents: read
+jobs:
+  images:
+    if: github.event_name != 'schedule' && github.event_name != 'repository_dispatch'
+    uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v1.2.3
+    permissions: {contents: read, packages: write, id-token: write, attestations: write}
+    with:
+      reproduce: false # the reproduce job does it, so fleet and notify start without waiting
+      # A pull request builds only the manifests it affects, so one image's
+      # lock update isn't failed by another image's. Require images / result.
+      changed-only: true
+    secrets:
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }} # only for a registry other than ghcr.io
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+
+  # images.yml again, given what images published: it rebuilds each image on
+  # a second runner from its signed recipe alone and attests the match. A
+  # failed reproduction fails the run.
+  reproduce:
+    needs: images
+    if: ${{ !cancelled() && needs.images.outputs.published != '[]' && needs.images.outputs.published != '' }}
+    uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v1.2.3
+    permissions: {contents: read, packages: write, id-token: write, attestations: write}
+    with:
+      published: ${{ needs.images.outputs.published }}
+    secrets:
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+
+  # Weekly, on a new shared profile, and by hand: every input, one pull
+  # request per manifest. Daily, and when the platform publishes a build
+  # image or a stack: only each app's stack and its build and run images, as
+  # a pull request to rebuild the app on them, so a toolchain fix reaches
+  # the apps in minutes (the daily run catches a dispatch that was missed).
+  update-locks:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.action == 'clearcutt.build-image-published' || github.event.action == 'clearcutt.stack-published' || github.event.action == 'clearcutt.profile-published'
+    uses: northcutted/clearcutt-factory/.github/workflows/update-locks.yml@v1.2.3
+    permissions: {contents: write, pull-requests: write}
+    with:
+      update: ${{ (github.event.schedule == '41 5 * * *' || github.event.action == 'clearcutt.build-image-published' || github.event.action == 'clearcutt.stack-published') && 'stack' || 'all' }}
+      # auto-merge: rebuild update # merge by itself once required checks pass; needs "Allow auto-merge", branch protection, and the App (docs/adopting.md#4-turn-on-the-automation)
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+
+  fleet:
+    needs: images
+    if: always() && (github.event.schedule == '41 5 * * *' || github.event.action == 'clearcutt.run-image-published' || (github.event_name == 'push' && needs.images.result == 'success'))
+    uses: northcutted/clearcutt-factory/.github/workflows/fleet.yml@v1.2.3
+    permissions: {contents: write, pull-requests: write, packages: write, id-token: write, attestations: write}
+    # with:
+    #   auto-merge: pin rebuild # merge by itself once required checks pass (see update-locks above)
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+
+  # Daily: each published image whose newest verified vulnerability report
+  # is 6 days old or more is scanned again from its signed SBOM with
+  # grype's newest database, and the new report attached to the same
+  # digest; an image without a verified reproduction is reproduced and the
+  # match attested. Nothing is rebuilt or retagged.
+  reattest:
+    if: github.event.schedule == '41 5 * * *'
+    uses: northcutted/clearcutt-factory/.github/workflows/reattest.yml@v1.2.3
+    permissions: {contents: read, packages: write, id-token: write}
+    secrets:
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+
+  # Wakes the repositories with the topic clearcutt-app when this one
+  # publishes images (run images, typically), as soon as they are published:
+  # it needs images, not reproduce. Needs a GitHub App installed on them, or
+  # a CLEARCUTT_BOT_TOKEN that can write to them.
+  notify:
+    needs: images
+    if: ${{ !cancelled() && github.event_name == 'push' && needs.images.outputs.published != '[]' && needs.images.outputs.published != '' }}
+    uses: northcutted/clearcutt-factory/.github/workflows/notify.yml@v1.2.3
+    permissions: {contents: read}
+    with:
+      published: ${{ needs.images.outputs.published }}
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}

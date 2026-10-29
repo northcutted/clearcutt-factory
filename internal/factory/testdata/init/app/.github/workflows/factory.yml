@@ -1,0 +1,35 @@
+# Builds, publishes, and maintains this repository's app with ClearCutt
+# Factory's app.yml, which runs what each event needs: build and check on
+# pull requests, publish on main, rebase onto new run images, propose lock
+# updates and rebuilds, and renew the app's evidence:
+# https://github.com/northcutted/clearcutt-factory/blob/v1.2.3/docs/adopting.md#an-app-repository-is-its-appyaml-and-one-call
+#
+# The bot's pull requests get CI by themselves when they come from a GitHub
+# App (a CLEARCUTT_APP_ID variable and a CLEARCUTT_APP_PRIVATE_KEY secret)
+# or a CLEARCUTT_BOT_TOKEN secret. Secrets are passed by name: secrets:
+# inherit doesn't reach another owner's workflows. Branch protection
+# requires "app / images / result".
+name: factory
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 6 * * 1" # weekly: re-resolve every input (app.yml's weekly input)
+    - cron: "41 5 * * *" # daily: rebase, rebuild on new build images, rescan
+  workflow_dispatch:
+  # From the platform's notify job. The payload is only a hint: the jobs
+  # re-resolve everything from the registry and verify it.
+  repository_dispatch:
+    types: [clearcutt.run-image-published, clearcutt.build-image-published, clearcutt.stack-published, clearcutt.profile-published]
+permissions:
+  contents: read
+jobs:
+  app:
+    uses: northcutted/clearcutt-factory/.github/workflows/app.yml@v1.2.3
+    permissions: {contents: write, pull-requests: write, packages: write, id-token: write, attestations: write}
+    with:
+      estate: estate # refresh the estate's report when the app changes
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}

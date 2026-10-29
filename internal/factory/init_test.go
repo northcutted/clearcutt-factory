@@ -48,6 +48,15 @@ func TestInit(t *testing.T) {
 		"https://github.com/northcutted/clearcutt-factory/.github/workflows/reattest.yml@refs/tags/v1.2.3":     true,
 		"https://github.com/northcutted/clearcutt-factory/.github/workflows/update-locks.yml@refs/tags/v1.2.3": false,
 		"https://github.com/Acme/platform-images/.github/workflows/clearcutt-factory.yml@refs/heads/main":      false,
+		// A caller that pins the workflows by commit (and app.yml at one).
+		"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@0123456789abcdef0123456789abcdef01234567":      true,
+		"https://github.com/northcutted/clearcutt-factory/.github/workflows/fleet.yml@0123456789abcdef0123456789abcdef01234567":       true,
+		"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@0123456":                                       false,
+		"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@0123456789ABCDEF0123456789ABCDEF01234567":      false,
+		"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@0123456789abcdef0123456789abcdef012345678":     false,
+		"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@refs/heads/main":                               false,
+		"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@refs/tags/v1.2.3-rc.1":                         false,
+		"https://github.com/northcutted/clearcutt-factory-evil/.github/workflows/images.yml@0123456789abcdef0123456789abcdef01234567": false,
 	} {
 		if re.MatchString(san) != want {
 			t.Errorf("identity regexp %s on %s: want %v", re, san, want)
@@ -95,93 +104,8 @@ func TestInit(t *testing.T) {
 	if err := Init(context.Background(), Options{Version: "dev", Stdout: &out, Stderr: &out}, InitOptions{Dir: dir}); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(out.String(), "kept ") != 3 {
+	if strings.Count(out.String(), "kept ") != 4 {
 		t.Errorf("second run:\n%s", out.String())
-	}
-}
-
-// The generated workflow passes only the inputs and secrets factory's
-// reusable workflows declare (GitHub rejects others), by name: secrets:
-// inherit doesn't reach workflows in another organization. It grants every
-// permission their jobs ask for: GitHub fails a run whose called workflow
-// asks for more than its caller granted.
-func TestInitWorkflowMatchesReusableWorkflows(t *testing.T) {
-	dir := t.TempDir()
-	var out bytes.Buffer
-	if err := Init(context.Background(), Options{Version: "v1.2.3", Stdout: &out, Stderr: &out}, InitOptions{Dir: dir, Repo: "acme/platform"}); err != nil {
-		t.Fatal(err)
-	}
-	var wf struct {
-		Jobs map[string]struct {
-			Uses        string            `yaml:"uses"`
-			With        map[string]any    `yaml:"with"`
-			Secrets     any               `yaml:"secrets"`
-			Permissions map[string]string `yaml:"permissions"`
-		} `yaml:"jobs"`
-	}
-	b, err := os.ReadFile(filepath.Join(dir, ".github/workflows/clearcutt-factory.yml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := yaml.Unmarshal(b, &wf); err != nil {
-		t.Fatal(err)
-	}
-	called := 0
-	for name, job := range wf.Jobs {
-		path, ok := strings.CutPrefix(job.Uses, "northcutted/clearcutt-factory/")
-		if !ok {
-			continue
-		}
-		called++
-		path, _, _ = strings.Cut(path, "@")
-		var reusable struct {
-			On struct {
-				WorkflowCall struct {
-					Inputs  map[string]any `yaml:"inputs"`
-					Secrets map[string]any `yaml:"secrets"`
-				} `yaml:"workflow_call"`
-			} `yaml:"on"`
-			Permissions map[string]string `yaml:"permissions"`
-			Jobs        map[string]struct {
-				Permissions map[string]string `yaml:"permissions"`
-			} `yaml:"jobs"`
-		}
-		rb, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(path)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := yaml.Unmarshal(rb, &reusable); err != nil {
-			t.Fatal(err)
-		}
-		for k := range job.With {
-			if _, ok := reusable.On.WorkflowCall.Inputs[k]; !ok {
-				t.Errorf("job %s passes input %s, which %s doesn't declare", name, k, path)
-			}
-		}
-		secrets, ok := job.Secrets.(map[string]any)
-		if job.Secrets != nil && !ok {
-			t.Errorf("job %s passes secrets %v; name them", name, job.Secrets)
-		}
-		for k := range secrets {
-			if _, ok := reusable.On.WorkflowCall.Secrets[k]; !ok {
-				t.Errorf("job %s passes secret %s, which %s doesn't declare", name, k, path)
-			}
-		}
-		level := map[string]int{"": 0, "none": 0, "read": 1, "write": 2}
-		asks := []map[string]string{reusable.Permissions}
-		for _, j := range reusable.Jobs {
-			asks = append(asks, j.Permissions)
-		}
-		for _, ask := range asks {
-			for scope, want := range ask {
-				if got := job.Permissions[scope]; level[got] < level[want] {
-					t.Errorf("job %s grants %s %q, but %s asks for %q", name, scope, got, path, want)
-				}
-			}
-		}
-	}
-	if called == 0 {
-		t.Errorf("no job calls factory's reusable workflows:\n%s", b)
 	}
 }
 

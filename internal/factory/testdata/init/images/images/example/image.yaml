@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/northcutted/clearcutt-factory/v1.2.3/schemas/manifest.schema.json
+# An example image to replace with your own. Packages come from the base's
+# package manager; anything else is a tool (see the ClearCutt Factory README).
+apiVersion: factory.clearcutt.dev/v1alpha1
+kind: Image
+metadata:
+  name: example
+spec:
+  packages: [ca-certificates-bundle, jq]
+  labels:
+    org.opencontainers.image.source: https://github.com/Acme/platform-images
+  user: "65532"
+  entrypoint: [/usr/bin/jq]
+  test:
+    command: [/usr/bin/jq, --version]

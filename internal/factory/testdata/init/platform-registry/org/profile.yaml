@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/northcutted/clearcutt-factory/v1.2.3/schemas/org.schema.json
+# The shared org profile: what every repository of acme builds with.
+# .github/workflows/profile.yml publishes it, with trust.yaml, as
+# registry.example.com/acme/factory/org:1 and signs it. Each app repository's factory.org.yaml
+# extends it (clearcutt-factory init --app --platform-repo acme/platform),
+# adds its registry, and may only tighten the gate and policy; this
+# repository's own extends it by path. It leaves out what differs per
+# repository: registry, tags, and the base image.
+apiVersion: factory.clearcutt.dev/v1alpha1
+kind: OrgProfile
+
+defaults:
+  platforms: [linux/amd64, linux/arm64]
+
+builder:
+  buildkit: moby/buildkit:v0.33.1
+  frontend: docker/dockerfile:1
+  toolbox: cgr.dev/chainguard/wolfi-base:latest
+
+signing:
+  mode: keyless           # Sigstore, with each workflow run's OIDC identity
+  trustPolicy: trust.yaml # image, stack, and estate signers, shared with clearcutt-verify
+  profile:                # who signs this profile (profile push checks it; apps name it in extends.signer)
+    certificateIdentity: https://github.com/acme/platform/.github/workflows/profile.yml@refs/heads/trunk
+    certificateOIDCIssuer: https://token.actions.githubusercontent.com
+
+vulnerabilities:
+  scanner: grype
+  failOn: critical
+  onlyFixed: true # don't block on CVEs nobody can fix yet
+  # vex: [vex/accepted.openvex.json] # statements for every repository, published with the profile
+
+policy:
+  requireNonRoot: true
+  # The image signer accepts the repository an image names as its source.
+  requiredLabels: [org.opencontainers.image.source]
+  requireSignedStacks: true
+  allowedRegistries: [cgr.dev/chainguard/, registry.example.com/acme/, docker.io/moby/, docker.io/docker/]

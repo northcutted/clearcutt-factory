@@ -1,0 +1,24 @@
+# Re-resolves every input of every platform image once a week, and on
+# demand, opening one pull request per image that moved. Merging one
+# publishes it (platform.yml), which wakes the apps.
+#
+# The pull requests get CI by themselves when they come from a GitHub App
+# (a CLEARCUTT_APP_ID variable and a CLEARCUTT_APP_PRIVATE_KEY secret) or a
+# CLEARCUTT_BOT_TOKEN secret.
+name: update-locks
+on:
+  schedule:
+    - cron: "23 6 * * 1" # Mondays
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  update-locks:
+    uses: northcutted/clearcutt-factory/.github/workflows/update-locks.yml@v1.2.3
+    permissions: {contents: write, pull-requests: write}
+    with:
+      manifests: images/*/image.yaml
+      # auto-merge: update # merge by itself once required checks pass; needs "Allow auto-merge", branch protection, and the App
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}

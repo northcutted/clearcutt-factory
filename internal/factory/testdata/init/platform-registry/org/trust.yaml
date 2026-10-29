@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/northcutted/clearcutt-verify/main/contract/trust-policy.v1.schema.json
+# Whose signatures acme accepts, and for what. One file, read by
+# clearcutt-factory (signing.trustPolicy in profile.yaml, which every
+# repository extends) and by clearcutt-verify (the estate's policy), so
+# building, rebasing, and verifying the estate trust the same signers.
+apiVersion: clearcutt.dev/v1
+kind: TrustPolicy
+signers:
+  # Images are signed inside factory's reusable workflows (images.yml when
+  # built, fleet.yml when rebased, reattest.yml when rescanned), at a release
+  # tag or a commit, which any repository can call. So the signer also says
+  # whose runs count: those in a repository of acme
+  # (sourceRepositoryOwner) that is the one the image names as its source
+  # (sourceMatchesImage: its org.opencontainers.image.source label, which
+  # the profile requires), on trunk (sourceRef). A new app repository needs
+  # no change here. To trust only some of the owner's repositories, give
+  # each a signer of its own with sourceRepository instead.
+  - name: images
+    roles: [image]
+    identityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$
+    issuer: https://token.actions.githubusercontent.com
+    sourceRepositoryOwner: https://github.com/acme
+    sourceMatchesImage: true
+    sourceRef: refs/heads/trunk
+  # Stacks: only this repository's stacks workflow, on trunk.
+  - name: stacks
+    roles: [stack]
+    identity: https://github.com/acme/platform/.github/workflows/stacks.yml@refs/heads/trunk
+    issuer: https://token.actions.githubusercontent.com

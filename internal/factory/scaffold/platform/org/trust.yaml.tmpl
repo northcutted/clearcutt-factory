@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/northcutted/clearcutt-verify/main/contract/trust-policy.v1.schema.json
+# Whose signatures {% .Owner %} accepts, and for what. One file, read by
+# clearcutt-factory (signing.trustPolicy in profile.yaml, which every
+# repository extends) and by clearcutt-verify (the estate's policy), so
+# building, rebasing, and verifying the estate trust the same signers.
+apiVersion: clearcutt.dev/v1
+kind: TrustPolicy
+signers:
+  # Images are signed inside factory's reusable workflows (images.yml when
+  # built, fleet.yml when rebased, reattest.yml when rescanned), at a release
+  # tag or a commit, which any repository can call. So the signer also says
+  # whose runs count: those in a repository of {% .Owner %}
+  # (sourceRepositoryOwner) that is the one the image names as its source
+  # (sourceMatchesImage: its org.opencontainers.image.source label, which
+  # the profile requires), on {% .Branch %} (sourceRef). A new app repository needs
+  # no change here. To trust only some of the owner's repositories, give
+  # each a signer of its own with sourceRepository instead.
+  - name: images
+    roles: [image]
+    identityRegexp: {% .IdentityRegexp %}
+    issuer: https://token.actions.githubusercontent.com
+    sourceRepositoryOwner: https://github.com/{% .Owner %}
+    sourceMatchesImage: true
+    sourceRef: refs/heads/{% .Branch %}
+  # Stacks: only this repository's stacks workflow, on {% .Branch %}.
+  - name: stacks
+    roles: [stack]
+    identity: https://github.com/{% .Repo %}/.github/workflows/stacks.yml@refs/heads/{% .Branch %}
+    issuer: https://token.actions.githubusercontent.com
+{% if .Estate %}  # The estate's report bundles (clearcutt-verify estate push): its estate
+  # workflow, on {% .Branch %}.
+  - name: estate
+    roles: [estate]
+    identity: {% .EstateSigner %}
+    issuer: https://token.actions.githubusercontent.com
+{% end %}

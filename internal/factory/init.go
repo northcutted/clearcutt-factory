@@ -1,17 +1,48 @@
 package factory
 
 import (
+	"bytes"
 	"context"
+	"embed"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"text/template"
 
 	"github.com/northcutted/clearcutt-factory/internal/manifest"
+)
+
+// What init sets up (InitOptions.Kind).
+const (
+	// InitImages is a repository of images (and apps) that publishes and
+	// maintains itself with one workflow: the default.
+	InitImages = ""
+	// InitApp is an app repository: an app.yaml and a caller of app.yml.
+	InitApp = "app"
+	// InitPlatform is a platform repository: run and build images, stacks,
+	// and the shared org profile with the organization's trust policy.
+	InitPlatform = "platform"
+	// InitEstate is an estate repository: clearcutt-verify over the
+	// organization's images, published with clearcutt-portal.
+	InitEstate = "estate"
+)
+
+// The releases of the other ClearCutt tools the estate workflow uses, and
+// the grype it rescans with (checked against its checksum). Dependabot
+// moves the action pins in the repositories init writes.
+const (
+	verifyRelease = "v0.18.0"
+	portalRelease = "v0.3.0"
+	grypeVersion  = "0.120.1"
+	grypeSHA256   = "0a9ee97ef5ae2ee953b0a80098105052e846cdbe319a57d808b519c33cd1343d"
+	githubIssuer  = manifest.GitHubActionsIssuer
 )
 
 type InitOptions struct {
@@ -20,7 +51,10 @@ type InitOptions struct {
 	// Repo is owner/name on GitHub, for the signer identity and image
 	// labels. Default: the origin remote.
 	Repo string
-	// Registry receives the images (default ghcr.io/<owner>).
+	// Registry receives the images (default ghcr.io/<owner>). A platform
+	// publishes under <registry>/platform, /stacks, and /factory/org:1,
+	// apps extending it under <registry>/apps, and the estate's report
+	// bundle at <registry>/estate:latest.
 	Registry string
 	// Branch is the branch that publishes, which the signer identity
 	// requires (sourceRef). Default: the origin remote's default branch,
@@ -34,40 +68,95 @@ type InitOptions struct {
 	// Init checks the signature, and writes only what the shared profile
 	// leaves to each repository.
 	Extends, ExtendsIdentity, ExtendsIssuer, ExtendsKey string
+	// Kind is what to set up: InitImages (the default), InitApp,
+	// InitPlatform, or InitEstate.
+	Kind string
+	// Name is the app's (InitApp) or the estate's (InitEstate); default
+	// the repository's name, or its owner's for an estate.
+	Name string
+	// Stack is the stack an app builds on (InitApp), such as
+	// ghcr.io/acme/stacks/go:1; without it no app.yaml is written.
+	Stack string
+	// PlatformRepo is the platform repository (OWNER/NAME) that publishes
+	// the shared profile, as init --platform sets it up: an app extends
+	// it, and an estate reads its trust policy from it.
+	PlatformRepo string
+	// EstateRepo is the estate repository (OWNER/NAME) that verifies the
+	// organization's images: an app and a platform send it
+	// clearcutt.estate-changed, a platform's trust policy names its
+	// workflow as the estate signer, and a platform wakes only the apps its
+	// report proves are built on a run image.
+	EstateRepo string
 }
 
-var releaseRE = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$`)
+var (
+	releaseRE = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$`)
+	repoRE    = regexp.MustCompile(`^[\w.-]+/[\w.-]+$`)
+	nameRE    = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$`)
+)
 
-// Init scaffolds a repository: an org profile, an example image manifest,
-// and a GitHub Actions workflow that calls ClearCutt Factory's reusable
-// workflows to publish, update, and rebase.
+//go:embed all:scaffold
+var scaffoldFS embed.FS
+
+// scaffold is what the templates under scaffold/ are rendered with.
+type scaffold struct {
+	// Ref is the release (or main) the workflows call factory's at.
+	Ref string
+	// Repo and Owner are the repository being set up.
+	Repo, Owner string
+	// Registry is the organization's registry (ghcr.io/<owner>).
+	Registry string
+	// LoginHost is the registry's host when it isn't ghcr.io, which the
+	// workflows log in to with REGISTRY_USERNAME and REGISTRY_PASSWORD.
+	LoginHost string
+	Branch    string
+	// IdentityRegexp matches the certificate identity of factory's signing
+	// workflows.
+	IdentityRegexp string
+	Name, Stack    string
+	// App is set for an app repository.
+	App bool
+	// Ecosystems are the app's own package ecosystems, for Dependabot.
+	Ecosystems []ecosystem
+	// Platform is the platform repository; ProfileRef and ProfileSigner
+	// its shared profile and who signs it.
+	Platform, ProfileRef, ProfileSigner string
+	// Estate is the estate repository, EstateName the way a workflow in
+	// this repository names it, EstateRef its report bundle and
+	// EstateSigner who signs it.
+	Estate, EstateName, EstateRef, EstateSigner string
+	VerifyRef, PortalRef                        string
+	GrypeVersion, GrypeSHA256                   string
+}
+
+type ecosystem struct{ Name, Dir string }
+
+// Init scaffolds a repository of the kind io.Kind names: its org profile,
+// manifests, GitHub Actions workflows that call ClearCutt Factory's
+// reusable workflows, and a Dependabot configuration.
 func Init(ctx context.Context, opts Options, io InitOptions) error {
 	dir := io.Dir
 	if dir == "" {
 		dir = "."
 	}
+	if err := checkInitOptions(io); err != nil {
+		return err
+	}
 	repo := io.Repo
 	if repo == "" {
 		repo = githubRepo(ctx, dir)
 	}
-	if repo != "" && !regexp.MustCompile(`^[\w.-]+/[\w.-]+$`).MatchString(repo) {
+	if repo != "" && !repoRE.MatchString(repo) {
 		return fmt.Errorf("--repo %q must look like owner/name", repo)
 	}
-	owner, _, _ := strings.Cut(repo, "/")
-	registry := io.Registry
+	owner, name, _ := strings.Cut(repo, "/")
+	registry := strings.TrimSuffix(io.Registry, "/")
 	if registry == "" && owner != "" {
 		registry = "ghcr.io/" + strings.ToLower(owner)
 	}
 	if repo == "" {
 		opts.logf("warning: no GitHub origin remote found; fill in OWNER/REPO (or pass --repo)")
-		repo, registry = "OWNER/REPO", firstNonEmpty(registry, "ghcr.io/OWNER")
-	}
-	org := orgTemplate
-	if io.Extends != "" || io.ExtendsIdentity != "" || io.ExtendsIssuer != "" || io.ExtendsKey != "" {
-		var err error
-		if org, err = extendingOrg(ctx, opts, dir, io); err != nil {
-			return err
-		}
+		repo, owner, name, registry = "OWNER/REPO", "OWNER", "REPO", firstNonEmpty(registry, "ghcr.io/OWNER")
 	}
 	branch := io.Branch
 	if branch == "" {
@@ -81,14 +170,74 @@ func Init(ctx context.Context, opts Options, io InitOptions) error {
 	if releaseRE.MatchString(opts.Version) {
 		ref = opts.Version
 	}
-	r := strings.NewReplacer("{{ref}}", ref, "{{repo}}", repo, "{{identityRegexp}}", workflowIdentityRegexp(ref), "{{registry}}", registry, "{{branch}}", branch)
+	d := scaffold{
+		Ref: ref, Repo: repo, Owner: owner, Registry: registry, Branch: branch,
+		IdentityRegexp: workflowIdentityRegexp(ref),
+		Stack:          io.Stack,
+		VerifyRef:      verifyRelease, PortalRef: portalRelease,
+		GrypeVersion: grypeVersion, GrypeSHA256: grypeSHA256,
+	}
+	if host, _, _ := strings.Cut(registry, "/"); host != "ghcr.io" {
+		d.LoginHost = host
+	}
+	if io.PlatformRepo != "" {
+		d.Platform = io.PlatformRepo
+	} else if io.Kind == InitPlatform {
+		d.Platform = repo
+	}
+	if d.Platform != "" {
+		d.ProfileRef = registry + "/factory/org:1"
+		d.ProfileSigner = "https://github.com/" + d.Platform + "/.github/workflows/profile.yml@refs/heads/" + branch
+	}
+	if io.EstateRepo != "" {
+		d.Estate = io.EstateRepo
+	} else if io.Kind == InitEstate {
+		d.Estate = repo
+	}
+	if d.Estate != "" {
+		d.EstateName = d.Estate
+		if estateOwner, estateName, _ := strings.Cut(d.Estate, "/"); strings.EqualFold(estateOwner, owner) {
+			d.EstateName = estateName
+		}
+		d.EstateRef = registry + "/estate:latest"
+		d.EstateSigner = "https://github.com/" + d.Estate + "/.github/workflows/estate.yml@refs/heads/" + branch
+	}
+	switch io.Kind {
+	case InitApp:
+		d.App = true
+		d.Name = firstNonEmpty(io.Name, strings.ToLower(name))
+		d.Ecosystems = ecosystems(dir)
+	case InitEstate:
+		d.Name = firstNonEmpty(io.Name, owner)
+	}
+	if io.Kind == InitApp && d.Platform != "" && io.Registry == "" {
+		// Apps go beside the platform's images: <registry>/apps/<name>.
+		d.Registry = registry + "/apps"
+	}
 
+	// The org profile: an app's extends the platform's shared profile (or
+	// the one --extends names), checking its signature now.
+	org := ""
+	if io.Kind == InitImages || io.Kind == InitApp {
+		org = orgFile
+		extends := io
+		if io.PlatformRepo != "" {
+			extends.Extends, extends.ExtendsIdentity = d.ProfileRef, d.ProfileSigner
+		}
+		if extends.Extends != "" || extends.ExtendsIdentity != "" || extends.ExtendsIssuer != "" || extends.ExtendsKey != "" {
+			var err error
+			if org, err = extendingOrg(ctx, opts, dir, extends, d.Registry); err != nil {
+				return err
+			}
+		}
+	}
+
+	files, err := initFiles(io.Kind, org, d)
+	if err != nil {
+		return err
+	}
 	var wrote []string
-	for _, f := range []struct{ path, body string }{
-		{"factory.org.yaml", org},
-		{"images/example/image.yaml", imageTemplate},
-		{".github/workflows/clearcutt-factory.yml", workflowTemplate},
-	} {
+	for _, f := range files {
 		p := filepath.Join(dir, filepath.FromSlash(f.path))
 		if _, err := os.Stat(p); err == nil && !io.Force {
 			opts.printf("kept %s (exists; --force overwrites)", f.path)
@@ -99,7 +248,7 @@ func Init(ctx context.Context, opts Options, io InitOptions) error {
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(p, []byte(r.Replace(f.body)), 0o644); err != nil {
+		if err := os.WriteFile(p, f.body, 0o644); err != nil {
 			return err
 		}
 		wrote = append(wrote, f.path)
@@ -107,25 +256,207 @@ func Init(ctx context.Context, opts Options, io InitOptions) error {
 	for _, p := range wrote {
 		opts.printf("wrote %s", p)
 	}
-	opts.printf(`
-Next:
-  clearcutt-factory lock  -f images/example/image.yaml   # pin every input
-  clearcutt-factory build -f images/example/image.yaml   # build, test, scan locally
-  Commit and push. On GitHub, so that CI runs on the pull requests the weekly
+	opts.printf("%s", nextSteps(io.Kind, d))
+	return nil
+}
+
+// checkInitOptions refuses flags that don't apply to the kind of
+// repository being set up.
+func checkInitOptions(io InitOptions) error {
+	kind := io.Kind
+	switch kind {
+	case InitImages, InitApp, InitPlatform, InitEstate:
+	default:
+		return fmt.Errorf("init sets up a repository of images (the default), an app, a platform, or an estate, not %q", kind)
+	}
+	what := map[string]string{InitImages: "a repository of images", InitApp: "--app", InitPlatform: "--platform", InitEstate: "--estate"}[kind]
+	for _, c := range []struct {
+		set   bool
+		flag  string
+		kinds []string
+	}{
+		{io.Stack != "", "--stack", []string{InitApp}},
+		{io.Name != "", "--name", []string{InitApp, InitEstate}},
+		{io.PlatformRepo != "", "--platform-repo", []string{InitApp, InitEstate}},
+		{io.EstateRepo != "", "--estate-repo", []string{InitApp, InitPlatform}},
+		{io.Extends != "" || io.ExtendsIdentity != "" || io.ExtendsIssuer != "" || io.ExtendsKey != "", "--extends", []string{InitImages, InitApp}},
+	} {
+		if c.set && !slices.Contains(c.kinds, kind) {
+			return fmt.Errorf("%s doesn't apply to %s", c.flag, what)
+		}
+	}
+	if io.PlatformRepo != "" && (io.Extends != "" || io.ExtendsIdentity != "" || io.ExtendsKey != "") {
+		return errors.New("--platform-repo names the shared profile to extend (its profile.yml signs <registry>/factory/org:1); give it or --extends, not both")
+	}
+	if kind == InitEstate && io.PlatformRepo == "" {
+		return errors.New("init --estate needs --platform-repo OWNER/NAME: the platform repository whose signed profile holds the trust policy")
+	}
+	for flag, r := range map[string]string{"--platform-repo": io.PlatformRepo, "--estate-repo": io.EstateRepo} {
+		if r != "" && !repoRE.MatchString(r) {
+			return fmt.Errorf("%s %q must look like owner/name", flag, r)
+		}
+	}
+	if io.Name != "" && !nameRE.MatchString(io.Name) {
+		return fmt.Errorf("--name %q must be lowercase letters, digits, '.', '_', and '-'", io.Name)
+	}
+	if s := io.Stack; s != "" && (strings.ContainsAny(s, " \t\n#'\"") || !strings.Contains(s, "/")) {
+		return fmt.Errorf("--stack %q must be a stack reference, like ghcr.io/acme/stacks/go:1", s)
+	}
+	return nil
+}
+
+type initFile struct {
+	path string
+	body []byte
+}
+
+// initFiles renders what init writes for kind. org is the org profile's
+// template, for the kinds that have one.
+func initFiles(kind, org string, d scaffold) ([]initFile, error) {
+	var paths []string
+	switch kind {
+	case InitImages:
+		paths = []string{"images/images/example/image.yaml", "images/.github/workflows/clearcutt-factory.yml", "common/.github/dependabot.yml"}
+	case InitApp:
+		paths = []string{"app/.github/workflows/factory.yml", "common/.github/dependabot.yml", "common/.gitignore"}
+		if d.Stack != "" {
+			paths = append([]string{"app/app.yaml"}, paths...)
+		}
+	case InitPlatform:
+		paths = []string{
+			"platform/factory.org.yaml", "platform/org/profile.yaml", "platform/org/trust.yaml",
+			"platform/images/run-go/image.yaml", "platform/images/build-go/image.yaml", "platform/stacks/go.yaml",
+			"platform/.github/workflows/platform.yml", "platform/.github/workflows/stacks.yml", "platform/.github/workflows/profile.yml",
+			"platform/.github/workflows/update-locks.yml", "platform/.github/workflows/reattest.yml",
+			"common/.github/dependabot.yml", "common/.gitignore",
+		}
+	case InitEstate:
+		paths = []string{"estate/.github/workflows/estate.yml", "estate/estate/policy.yaml", "estate/estate/refs.txt", "common/.github/dependabot.yml"}
+	}
+	var files []initFile
+	if org != "" {
+		body, err := renderScaffold("factory.org.yaml", org, d)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, initFile{"factory.org.yaml", body})
+	}
+	for _, p := range paths {
+		tmpl, err := scaffoldFS.ReadFile(path.Join("scaffold", p+".tmpl"))
+		if err != nil {
+			return nil, err
+		}
+		body, err := renderScaffold(p, string(tmpl), d)
+		if err != nil {
+			return nil, err
+		}
+		_, out, _ := strings.Cut(p, "/")
+		files = append(files, initFile{out, body})
+	}
+	return files, nil
+}
+
+// renderScaffold executes a scaffold template. Its actions are {% … %}, since the
+// files hold GitHub Actions expressions (${{ … }}) and stack templates
+// ({{name}}) of their own.
+func renderScaffold(name, tmpl string, d scaffold) ([]byte, error) {
+	t, err := template.New(name).Delims("{%", "%}").Option("missingkey=error").Parse(tmpl)
+	if err != nil {
+		return nil, err
+	}
+	var b bytes.Buffer
+	if err := t.Execute(&b, d); err != nil {
+		return nil, err
+	}
+	return []byte(strings.TrimRight(b.String(), "\n") + "\n"), nil
+}
+
+// ecosystems lists the package ecosystems Dependabot knows whose manifests
+// are in dir, the app's source.
+func ecosystems(dir string) []ecosystem {
+	var out []ecosystem
+	for _, e := range []struct {
+		name  string
+		files []string
+	}{
+		{"gomod", []string{"go.mod"}},
+		{"npm", []string{"package.json"}},
+		{"pip", []string{"requirements.txt", "pyproject.toml", "setup.py", "Pipfile"}},
+		{"cargo", []string{"Cargo.toml"}},
+		{"maven", []string{"pom.xml"}},
+		{"gradle", []string{"build.gradle", "build.gradle.kts"}},
+		{"bundler", []string{"Gemfile"}},
+		{"composer", []string{"composer.json"}},
+		{"nuget", []string{"packages.config", "Directory.Packages.props"}},
+	} {
+		for _, f := range e.files {
+			if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+				out = append(out, ecosystem{Name: e.name, Dir: "/"})
+				break
+			}
+		}
+	}
+	return out
+}
+
+func nextSteps(kind string, d scaffold) string {
+	const automation = `  Commit and push. On GitHub, so that CI runs on the pull requests the weekly
   and daily jobs open: install a GitHub App with contents and pull-requests
   write, and set a CLEARCUTT_APP_ID variable (its Client ID) and a
   CLEARCUTT_APP_PRIVATE_KEY secret; or add a CLEARCUTT_BOT_TOKEN secret (a
   fine-grained token with the same permissions). Without either, allow GitHub
   Actions to create pull requests (Settings → Actions → General) and approve
-  their CI runs by hand. See docs/adopting.md.`)
-	return nil
+  their CI runs by hand. See docs/adopting.md.`
+	switch kind {
+	case InitApp:
+		s := "\nNext:\n"
+		if d.Stack == "" {
+			s += "  Write app.yaml naming the platform's stack (init --app --stack REF writes one).\n"
+		}
+		s += `  clearcutt-factory lock  -f app.yaml   # pin the stack, its build and run images
+  clearcutt-factory build -f app.yaml   # build, test, scan locally
+` + automation + `
+  Give the repository the topic clearcutt-app, so the platform's notify job
+  wakes it, and install the App on it. Require "app / images / result" in
+  branch protection.`
+		return s
+	case InitPlatform:
+		s := `
+Next:
+  clearcutt-factory lock -f images/run-go/image.yaml     # pin every input
+  clearcutt-factory lock -f images/build-go/image.yaml
+  clearcutt-factory build -f images/run-go/image.yaml    # build, test, scan locally
+` + automation + `
+  Install the App on the app repositories too, so notify.yml can wake them.
+  Make the packages under ` + d.Registry + ` public (or grant the app and
+  estate repositories read access to them). Each app repository:
+    clearcutt-factory init --app --platform-repo ` + d.Repo + ` --stack ` + d.Registry + `/stacks/go:1`
+		if d.Estate != "" {
+			s += " --estate-repo " + d.Estate
+		}
+		return s
+	case InitEstate:
+		return `
+Next:
+  List the images to verify in estate/refs.txt. Commit and push; set Pages'
+  source to GitHub Actions. The platform's trust policy must name this
+  repository's estate.yml as its estate signer (init --platform --estate-repo
+  ` + d.Repo + ` writes it), and its platform and apps send
+  clearcutt.estate-changed here (init --platform/--app --estate-repo ` + d.Repo + `),
+  with a GitHub App installed on this repository too.`
+	}
+	return `
+Next:
+  clearcutt-factory lock  -f images/example/image.yaml   # pin every input
+  clearcutt-factory build -f images/example/image.yaml   # build, test, scan locally
+` + automation
 }
 
 // extendingOrg checks the shared profile io.Extends names against its
 // signer and returns an org profile template that extends it, adding only
-// what it leaves to each repository: the registry, and who signs this
-// repository's images.
-func extendingOrg(ctx context.Context, opts Options, dir string, io InitOptions) (string, error) {
+// what it leaves to each repository: the registry (registry, unless the
+// shared profile sets one), and who signs this repository's images.
+func extendingOrg(ctx context.Context, opts Options, dir string, io InitOptions, registry string) (string, error) {
 	if io.Extends == "" {
 		return "", errors.New("--extends-identity, --extends-issuer, and --extends-key name who signs the shared profile --extends names")
 	}
@@ -154,7 +485,7 @@ func extendingOrg(ctx context.Context, opts Options, dir string, io InitOptions)
 		signer = "    key: " + signer + "\n"
 	default:
 		e.Signer.CertificateIdentity = io.ExtendsIdentity
-		e.Signer.CertificateOIDCIssuer = firstNonEmpty(io.ExtendsIssuer, "https://token.actions.githubusercontent.com")
+		e.Signer.CertificateOIDCIssuer = firstNonEmpty(io.ExtendsIssuer, githubIssuer)
 		signer = "    certificateIdentity: " + e.Signer.CertificateIdentity + "\n    certificateOIDCIssuer: " + e.Signer.CertificateOIDCIssuer + "\n"
 	}
 	// Check the signature now, whatever this machine checked before: this
@@ -176,9 +507,9 @@ func extendingOrg(ctx context.Context, opts Options, dir string, io InitOptions)
 	b.WriteString("extends:\n  ref: " + io.Extends + " # each manifest's lock pins its digest; lock --update moves it\n")
 	b.WriteString("  signer: # who may sign the shared profile; checked whenever it is loaded\n" + signer)
 	if shared.Registry == "" {
-		b.WriteString("\nregistry: {{registry}} # images go to <registry>/<metadata.name>\n")
-	} else if io.Registry != "" && io.Registry != shared.Registry {
-		opts.logf("warning: the shared profile sets the registry (%s), so --registry %s isn't written", shared.Registry, io.Registry)
+		b.WriteString("\nregistry: {% .Registry %} # images go to <registry>/<metadata.name>\n")
+	} else if io.Registry != "" && registry != shared.Registry {
+		opts.logf("warning: the shared profile sets the registry (%s), so %s isn't written", shared.Registry, registry)
 	}
 	if shared.Trust == nil && shared.Signing.Verify.IsZero() {
 		if shared.Signing.Mode == "" || shared.Signing.Mode == "keyless" {
@@ -192,10 +523,11 @@ func extendingOrg(ctx context.Context, opts Options, dir string, io InitOptions)
 
 // workflowIdentityRegexp matches the certificate identity of ClearCutt
 // Factory's signing reusable workflows (images.yml, fleet.yml, and
-// reattest.yml) at the
-// ref the generated workflow calls them by: any release tag, or main.
+// reattest.yml) at the ref the generated workflows call them by: any
+// release tag, or a commit (a caller that pins them by SHA, or app.yml at
+// one), or, for a development build, main.
 func workflowIdentityRegexp(ref string) string {
-	at := `refs/tags/v\d+\.\d+\.\d+$`
+	at := `(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$`
 	if !releaseRE.MatchString(ref) {
 		at = `refs/heads/` + regexp.QuoteMeta(ref) + `$`
 	}
@@ -234,50 +566,19 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-const orgTemplate = `# yaml-language-server: $schema=https://raw.githubusercontent.com/northcutted/clearcutt-factory/{{ref}}/schemas/org.schema.json
-# Org profile: every manifest below this directory inherits these choices.
-apiVersion: factory.clearcutt.dev/v1alpha1
-kind: OrgProfile
+// orgFile is the standalone org profile: this repository's registry,
+// signer, gate, and policy.
+var orgFile = mustScaffold("images/factory.org.yaml")
 
-registry: {{registry}} # images go to <registry>/<metadata.name>
-tags: [latest]
+func mustScaffold(p string) string {
+	b, err := scaffoldFS.ReadFile(path.Join("scaffold", p+".tmpl"))
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
 
-defaults:
-  base: cgr.dev/chainguard/wolfi-base:latest
-  platforms: [linux/amd64, linux/arm64]
-
-signing:
-  mode: keyless # Sigstore, with the CI workflow's OIDC identity
-  verify:
-    # Images are signed inside ClearCutt Factory's reusable workflows, so the
-    # certificate names those workflows. Keep reattest in the regexp before
-    # enabling its schedule: a newly attached report must verify too.
-    # Any repository can call them, so
-    # sourceRepository binds signatures to runs in this repository, and
-    # sourceRef to runs on the branch that publishes (the reusable workflows
-    # publish only from the default branch, or their publish-ref input).
-    certificateIdentityRegexp: {{identityRegexp}}
-    certificateOIDCIssuer: https://token.actions.githubusercontent.com
-    sourceRepository: https://github.com/{{repo}}
-    sourceRef: refs/heads/{{branch}}
-  # Stacks from a platform repository have their own signer, for
-  # policy.requireSignedStacks:
-  # stacks:
-  #   certificateIdentity: https://github.com/OWNER/platform/.github/workflows/stacks.yml@refs/heads/main
-  #   certificateOIDCIssuer: https://token.actions.githubusercontent.com
-
-vulnerabilities:
-  scanner: grype
-  failOn: critical
-  onlyFixed: true # don't block on CVEs nobody can fix yet
-
-policy:
-  requireNonRoot: true
-  # allowedRegistries: [cgr.dev/chainguard/, ghcr.io/]
-  # allowedHosts: [github.com, dl.k8s.io]
-`
-
-const orgExtendsHeader = `# yaml-language-server: $schema=https://raw.githubusercontent.com/northcutted/clearcutt-factory/{{ref}}/schemas/org.schema.json
+const orgExtendsHeader = `# yaml-language-server: $schema=https://raw.githubusercontent.com/northcutted/clearcutt-factory/{% .Ref %}/schemas/org.schema.json
 # Org profile. It extends the platform team's shared profile, which sets the
 # builder, signing, vulnerability gate, and policy: this file adds what the
 # shared profile leaves to each repository, and may tighten (never loosen)
@@ -291,147 +592,15 @@ const orgVerifyBlock = `
 signing:
   verify:
     # Images are signed inside ClearCutt Factory's reusable workflows, so the
-    # certificate names those workflows. Keep reattest in the regexp before
-    # enabling its schedule: a newly attached report must verify too.
+    # certificate names those workflows, at the release tag (or commit) they
+    # are called by. Keep reattest in the regexp before enabling its
+    # schedule: a newly attached report must verify too.
     # Any repository can call them, so
     # sourceRepository binds signatures to runs in this repository, and
     # sourceRef to runs on the branch that publishes (the reusable workflows
     # publish only from the default branch, or their publish-ref input).
-    certificateIdentityRegexp: {{identityRegexp}}
+    certificateIdentityRegexp: {% .IdentityRegexp %}
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
-    sourceRepository: https://github.com/{{repo}}
-    sourceRef: refs/heads/{{branch}}
-`
-
-const imageTemplate = `# yaml-language-server: $schema=https://raw.githubusercontent.com/northcutted/clearcutt-factory/{{ref}}/schemas/manifest.schema.json
-# An example image to replace with your own. Packages come from the base's
-# package manager; anything else is a tool (see the ClearCutt Factory README).
-apiVersion: factory.clearcutt.dev/v1alpha1
-kind: Image
-metadata:
-  name: example
-spec:
-  packages: [ca-certificates-bundle, jq]
-  labels:
-    org.opencontainers.image.source: https://github.com/{{repo}}
-  user: "65532"
-  entrypoint: [/usr/bin/jq]
-  test:
-    command: [/usr/bin/jq, --version]
-`
-
-const workflowTemplate = `# Builds, publishes, and maintains this repository's images and apps with
-# ClearCutt Factory: https://github.com/northcutted/clearcutt-factory
-#
-# CI starts on the pull requests the weekly and daily jobs open only when they
-# come from a GitHub App (a CLEARCUTT_APP_ID variable holding its Client ID,
-# and a CLEARCUTT_APP_PRIVATE_KEY secret) or a CLEARCUTT_BOT_TOKEN secret:
-# https://github.com/northcutted/clearcutt-factory/blob/{{ref}}/docs/adopting.md#a-github-app-for-the-automation
-# Secrets are passed by name because secrets: inherit reaches only workflows
-# in this repository's own organization or enterprise.
-#
-# Across repositories: a platform repository's notify job wakes the
-# repositories with the topic clearcutt-app when it publishes run images,
-# build images, stacks, or a shared org profile; theirs then rebase onto the
-# new run image, propose a rebuild on the new build image or stack, or
-# propose the new profile.
-name: clearcutt-factory
-on:
-  push:
-    branches: [main]
-  pull_request:
-  schedule:
-    - cron: "23 6 * * 1" # weekly: re-resolve every input, one pull request per manifest
-    - cron: "41 5 * * *" # daily: rebase apps onto the newest build of their run image, propose a rebuild on their stack's newest build image, and rescan what was published
-  workflow_dispatch:
-  # From a platform repository's notify job. The payload is only a hint: the
-  # jobs re-resolve everything from the registry and verify it.
-  repository_dispatch:
-    types: [clearcutt.run-image-published, clearcutt.build-image-published, clearcutt.stack-published, clearcutt.profile-published]
-permissions:
-  contents: read
-jobs:
-  images:
-    if: github.event_name != 'schedule' && github.event_name != 'repository_dispatch'
-    uses: northcutted/clearcutt-factory/.github/workflows/images.yml@{{ref}}
-    permissions: {contents: read, packages: write, id-token: write, attestations: write}
-    with:
-      reproduce: false # the reproduce job does it, so fleet and notify start without waiting
-      # A pull request builds only the manifests it affects, so one image's
-      # lock update isn't failed by another image's. Require images / result.
-      changed-only: true
-    secrets:
-      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }} # only for a registry other than ghcr.io
-      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
-
-  # images.yml again, given what images published: it rebuilds each image on
-  # a second runner from its signed recipe alone and attests the match. A
-  # failed reproduction fails the run.
-  reproduce:
-    needs: images
-    if: ${{ !cancelled() && needs.images.outputs.published != '[]' && needs.images.outputs.published != '' }}
-    uses: northcutted/clearcutt-factory/.github/workflows/images.yml@{{ref}}
-    permissions: {contents: read, packages: write, id-token: write, attestations: write}
-    with:
-      published: ${{ needs.images.outputs.published }}
-    secrets:
-      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
-
-  # Weekly, on a new shared profile, and by hand: every input, one pull
-  # request per manifest. Daily, and when the platform publishes a build
-  # image or a stack: only each app's stack and its build and run images, as
-  # a pull request to rebuild the app on them, so a toolchain fix reaches
-  # the apps in minutes (the daily run catches a dispatch that was missed).
-  update-locks:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.action == 'clearcutt.build-image-published' || github.event.action == 'clearcutt.stack-published' || github.event.action == 'clearcutt.profile-published'
-    uses: northcutted/clearcutt-factory/.github/workflows/update-locks.yml@{{ref}}
-    permissions: {contents: write, pull-requests: write}
-    with:
-      update: ${{ (github.event.schedule == '41 5 * * *' || github.event.action == 'clearcutt.build-image-published' || github.event.action == 'clearcutt.stack-published') && 'stack' || 'all' }}
-      # auto-merge: rebuild update # merge by itself once required checks pass; needs "Allow auto-merge", branch protection, and the App (docs/adopting.md#4-turn-on-the-automation)
-    secrets:
-      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
-      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
-
-  fleet:
-    needs: images
-    if: always() && (github.event.schedule == '41 5 * * *' || github.event.action == 'clearcutt.run-image-published' || (github.event_name == 'push' && needs.images.result == 'success'))
-    uses: northcutted/clearcutt-factory/.github/workflows/fleet.yml@{{ref}}
-    permissions: {contents: write, pull-requests: write, packages: write, id-token: write, attestations: write}
-    # with:
-    #   auto-merge: pin rebuild # merge by itself once required checks pass (see update-locks above)
-    secrets:
-      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
-      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
-      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
-
-  # Daily: each published image whose newest verified vulnerability report
-  # is 6 days old or more is scanned again from its signed SBOM with
-  # grype's newest database, and the new report attached to the same
-  # digest; an image without a verified reproduction is reproduced and the
-  # match attested. Nothing is rebuilt or retagged.
-  reattest:
-    if: github.event.schedule == '41 5 * * *'
-    uses: northcutted/clearcutt-factory/.github/workflows/reattest.yml@{{ref}}
-    permissions: {contents: read, packages: write, id-token: write}
-    secrets:
-      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
-
-  # Wakes the repositories with the topic clearcutt-app when this one
-  # publishes images (run images, typically), as soon as they are published:
-  # it needs images, not reproduce. Needs a GitHub App installed on them, or
-  # a CLEARCUTT_BOT_TOKEN that can write to them.
-  notify:
-    needs: images
-    if: ${{ !cancelled() && github.event_name == 'push' && needs.images.outputs.published != '[]' && needs.images.outputs.published != '' }}
-    uses: northcutted/clearcutt-factory/.github/workflows/notify.yml@{{ref}}
-    permissions: {contents: read}
-    with:
-      published: ${{ needs.images.outputs.published }}
-    secrets:
-      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
-      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+    sourceRepository: https://github.com/{% .Repo %}
+    sourceRef: refs/heads/{% .Branch %}
 `

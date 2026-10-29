@@ -1,0 +1,24 @@
+# What every image in estate/refs.txt must prove. Run by
+# .github/workflows/estate.yml.
+apiVersion: clearcutt.dev/v1
+kind: VerificationPolicy
+# factory's images.yml attests SLSA provenance for every build and fleet.yml
+# for every rebase, so a fleet in its steady state (rebased apps) meets it.
+# A rebased image's recipe is not-applicable: its verified rebase record
+# leads to the original's.
+required: [signature, sbom, vulnerabilityScan, provenance, recipe]
+# The platform's trust policy, in the signed copy factory builds and rebases
+# with: estate.yml pulls the shared profile {% .ProfileRef %}, checks that
+# {% .ProfileSigner %}
+# signed it, and unpacks it into estate/.profile.
+trustPolicy: .profile/trust-policy.yaml
+failOn: critical
+onlyFixed: true
+maxDaysBehind: 7
+# estate.yml runs --rescan: grype scans each image's verified SBOMs again
+# with today's database, and the gate takes the worse of that scan and the
+# one the publisher attested. A rescan's age is its database's: older than
+# 7 days leaves the image unverified, as an image no rescan could cover is.
+maxScanAgeDays: 7
+# VEX statements the platform publishes with its profile:
+# vex: [.profile/vex/accepted.openvex.json]

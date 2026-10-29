@@ -44,12 +44,20 @@ Install a signed release binary from
 Building needs Docker or Podman (BuildKit runs inside a container, pinned by
 digest); scanning and signing need `syft`, `grype`, and `cosign` on `PATH`.
 
-Set up your own repository (an org profile, an example image, and a GitHub
-Actions workflow that publishes and maintains everything):
+Set up your own repository (an org profile, an example image, a GitHub
+Actions workflow that publishes and maintains everything, and a Dependabot
+configuration):
 
 ```sh
 clearcutt-factory init
 ```
+
+An organization sets up its platform, app, and estate repositories with
+`init --platform`, `init --app`, and `init --estate`: the platform's images,
+stack, shared profile and owner-scoped trust policy, and workflows; an app
+that is its `app.yaml` plus a short caller of `app.yml`; and the estate's
+clearcutt-verify and clearcutt-portal workflow
+([adopting](docs/adopting.md#init-for-a-platform-its-apps-and-its-estate)).
 
 [docs/adopting.md](docs/adopting.md) walks through the rest. To try the
 examples here:

@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/northcutted/clearcutt-factory/v1.2.3/schemas/stack.schema.json
+# Stack go:1, published as registry.example.com/acme/stacks/go:1 by
+# .github/workflows/stacks.yml, which signs it. Apps name it by reference
+# (spec.stack: registry.example.com/acme/stacks/go:1).
+apiVersion: factory.clearcutt.dev/v1alpha1
+kind: Stack
+metadata:
+  name: go
+  description: Static Go binaries on run-go
+spec:
+  build: ../images/build-go/image.yaml
+  run: ../images/run-go/image.yaml
+  platforms: [linux/amd64, linux/arm64]
+  crossCompile: true
+  buildEnv:
+    CGO_ENABLED: "0"
+    MAIN: .
+    GOFLAGS: -mod=readonly
+  caches: [/root/.cache/go-build, /root/go/pkg/mod]
+  steps:
+    - run: go mod download
+    - run: GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -buildid=" -o "/out/$APP_NAME" "$MAIN"
+  user: "65532"
+  entrypoint: ["/app/{{name}}"]
+  env:
+    PORT: "8080"

@@ -1,0 +1,18 @@
+# Renews the platform images' signed scan evidence about weekly (a report
+# older than 6 days is rescanned from the image's signed SBOM with grype's
+# newest database), retrying daily after a missed run; and reproduces any
+# image without a verified reproduction. Nothing is rebuilt or retagged.
+name: reattest
+on:
+  schedule:
+    - cron: "37 4 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  reattest:
+    uses: northcutted/clearcutt-factory/.github/workflows/reattest.yml@v1.2.3
+    permissions: {contents: read, packages: write, id-token: write}
+    with:
+      manifests: images/*/image.yaml
+      older-than: 6d

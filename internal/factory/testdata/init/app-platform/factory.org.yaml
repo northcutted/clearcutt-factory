@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/northcutted/clearcutt-factory/v1.2.3/schemas/org.schema.json
+# Org profile. It extends the platform team's shared profile, which sets the
+# builder, signing, vulnerability gate, and policy: this file adds what the
+# shared profile leaves to each repository, and may tighten (never loosen)
+# the gate and policy.
+apiVersion: factory.clearcutt.dev/v1alpha1
+kind: OrgProfile
+
+extends:
+  ref: HOST/factory/org:1 # each manifest's lock pins its digest; lock --update moves it
+  signer: # who may sign the shared profile; checked whenever it is loaded
+    certificateIdentity: https://github.com/acme/platform/.github/workflows/profile.yml@refs/heads/main
+    certificateOIDCIssuer: https://token.actions.githubusercontent.com
+
+registry: HOST # images go to <registry>/<metadata.name>
