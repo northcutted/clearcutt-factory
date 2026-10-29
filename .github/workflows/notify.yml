@@ -25,12 +25,16 @@
 # published, once its signature verifies against estate-report-signer), so
 # a publish wakes only the apps built on it. Build images, stacks, and
 # profiles have no layer relation to an app, so they go to the topic search,
-# as does a run image the report can't answer for (the bundle can't be
-# pulled or verified, or a dependent names no repository of the owner as
-# its source). An app the report doesn't list yet (it joined the estate
-# after the report's run) is not woken: its daily fleet run catches up. The
-# repository that published is left out: its own jobs already follow its
-# publishes. Search results can lag a topic change by a few minutes.
+# as does a run image the report can't answer for, with a warning naming it
+# and why: the bundle can't be pulled or verified; no image in the report is
+# built on it (the estate's refs.txt doesn't list the apps' images, say), or
+# none by layer digest, so an empty answer never wakes nothing; or a
+# dependent names no repository of the owner as its source. An app the
+# report doesn't list yet, while it lists others built on the same run
+# image (it joined the estate after the report's run), is not woken: its
+# daily fleet run catches up. The repository that published is left out:
+# its own jobs already follow its publishes. Search results can lag a topic
+# change by a few minutes.
 #
 # With estate, it also sends clearcutt.estate-changed ({source, sha}) to
 # that repository (an estate workflow, as clearcutt-factory init --estate
@@ -102,7 +106,7 @@ on:
         type: string
         default: ""
       estate-report:
-        description: 'An estate report bundle clearcutt-verify estate push published (REGISTRY/REPOSITORY:TAG, pulled anonymously). A run image''s dependents are then the owner''s repositories whose images the report proves, by layer digest, are built on it, instead of the topic search; build images, stacks, profiles, and a run image the report can''t answer for keep the topic search. Needs estate-report-signer'
+        description: 'An estate report bundle clearcutt-verify estate push published (REGISTRY/REPOSITORY:TAG, pulled anonymously). A run image''s dependents are then the owner''s repositories whose images the report proves, by layer digest, are built on it, instead of the topic search; build images, stacks, profiles, and a run image the report can''t answer for (no image in it is built on the run image by layer digest, say) keep the topic search, with a warning. Needs estate-report-signer'
         type: string
         default: ""
       estate-report-signer:
@@ -218,8 +222,24 @@ jobs:
           echo '{}' > "$RUNNER_TEMP/report.json"
           jq -r 'select(.event_type == "clearcutt.run-image-published") | .client_payload.repository' "$RUNNER_TEMP/events" | sort -u |
             while IFS= read -r repo; do
+              # The report answers only for a base some image in it is built
+              # on. estate dependents lists nothing (and succeeds) for a base
+              # it doesn't know, as when the estate's refs.txt lists the
+              # platform's images but not the apps': that is "can't say",
+              # not "nothing is built on it".
+              if ! jq -e --arg repo "$repo" 'any(.images[]?; ((.base.repository? // "") | sub("^index\\.docker\\.io/"; "docker.io/")) == $repo)' \
+                "$dir/estate-report.json" > /dev/null 2>&1; then
+                echo "::warning::$repo: no image in the estate report is built on it, so the report can't say which apps are (does the estate's refs.txt list the apps' images?); finding its dependents by topic"
+                continue
+              fi
               if ! clearcutt-verify --format json estate dependents --report "$dir/estate-report.json" --base "$repo" > "$RUNNER_TEMP/dependents.json"; then
-                echo "::warning::the estate report can't tell what is built on $repo; finding its dependents by topic"
+                echo "::warning::$repo: the estate report can't tell what is built on it; finding its dependents by topic"
+                continue
+              fi
+              # Images built on it, but none proven by layer digest (a label
+              # or an assisted match only): no answer either.
+              if ! jq -e '(.dependents // []) | length > 0' "$RUNNER_TEMP/dependents.json" > /dev/null; then
+                echo "::warning::$repo: the estate report proves no image is built on it by layer digest; finding its dependents by topic"
                 continue
               fi
               # Each dependent's source must be a GitHub repository of the

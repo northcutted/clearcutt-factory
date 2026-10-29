@@ -343,3 +343,30 @@ func TestInitRefusesFlagsOfOtherKinds(t *testing.T) {
 		}
 	}
 }
+
+// init --app's next steps say how the platform finds the app: by layer
+// digest only once the estate verifies the app's image (its refs.txt lists
+// it), and by the clearcutt-app topic otherwise.
+func TestInitAppNextSteps(t *testing.T) {
+	for _, c := range []struct {
+		opts InitOptions
+		want []string
+	}{
+		{InitOptions{Kind: InitApp, Repo: "acme/checkout", Stack: "ghcr.io/acme/stacks/go:1", EstateRepo: "acme/estate"},
+			[]string{"ghcr.io/acme/checkout:latest", "acme/estate's estate/refs.txt", "by layer digest", "topic clearcutt-app"}},
+		{InitOptions{Kind: InitApp, Repo: "acme/checkout", Stack: "ghcr.io/acme/stacks/go:1"},
+			[]string{"ghcr.io/acme/checkout:latest", "the estate repository's estate/refs.txt", "by layer digest", "topic clearcutt-app"}},
+	} {
+		var out bytes.Buffer
+		c.opts.Dir = t.TempDir()
+		if err := Init(context.Background(), Options{Version: "v1.2.3", Stdout: &out, Stderr: &out}, c.opts); err != nil {
+			t.Fatal(err)
+		}
+		text := strings.Join(strings.Fields(out.String()), " ")
+		for _, w := range c.want {
+			if !strings.Contains(text, w) {
+				t.Errorf("%+v: next steps don't say %q:\n%s", c.opts, w, out.String())
+			}
+		}
+	}
+}

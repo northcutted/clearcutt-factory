@@ -602,10 +602,18 @@ signature verifies against `estate-report-signer`. A dependent's repository
 is its image's source (verified provenance where there is any, else its
 `org.opencontainers.image.source` label), and must be one of the owner's.
 The topic search stays for what has no layer relation to an app (build
-images, stacks, profiles), and for a run image the report can't answer for:
-the bundle can't be pulled or verified, or a dependent names no repository
-of the owner. An app the report doesn't list yet (it joined after the
-estate's last run) isn't woken; its daily fleet run catches up.
+images, stacks, profiles), and for a run image the report can't answer for,
+with a warning naming the image and why: the bundle can't be pulled or
+verified; no image in the report is built on the run image, or none by
+layer digest; or a dependent names no repository of the owner. An empty
+answer never wakes nothing: `estate dependents` lists nothing, and
+succeeds, for a base the report doesn't know, as when the estate's
+`refs.txt` lists the platform's images but not the apps' (as `init
+--estate` writes it). So add each app's image to the estate's `refs.txt`
+as it starts publishing (`init --app` says which). An app the report
+doesn't list yet, while it lists others built on the same run image (it
+joined after the estate's last run), isn't woken; its daily fleet run
+catches up.
 
 `estate: NAME` (or `OWNER/NAME`) also sends `clearcutt.estate-changed`
 (`{source, sha}`) to the estate repository when `published` lists anything,

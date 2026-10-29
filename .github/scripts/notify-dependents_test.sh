@@ -3,10 +3,12 @@
 # estate report", and "Find dependents" steps, as the workflow has them,
 # with stand-ins for clearcutt-verify and gh, and checks who gets which
 # dispatch: a run image's dependents come from the estate report (layer
-# digest) when it answers for the image, else from the topic search; build
-# images, stacks, and profiles always from the topic search; the estate
-# repository gets clearcutt.estate-changed when anything was published or
-# changed is true; the publishing repository never gets its own events.
+# digest) when it answers for the image (some image in it is built on the
+# run image, and at least one by layer digest), else from the topic search,
+# with a warning naming the image; build images, stacks, and profiles always
+# from the topic search; the estate repository gets clearcutt.estate-changed
+# when anything was published or changed is true; the publishing repository
+# never gets its own events.
 #
 # Usage: .github/scripts/notify-dependents_test.sh (needs bash, jq, and yq v4)
 set -euo pipefail
@@ -28,8 +30,10 @@ run_step() { # step, then env assignments
 }
 
 # Stand-ins. gh search prints the topic's repositories (the platform
-# itself included); clearcutt-verify estate pull writes a report unless
-# PULL_FAILS, and estate dependents prints $tmp/deps/<base with / as _>.
+# itself included); clearcutt-verify estate pull writes $tmp/report.json
+# unless PULL_FAILS, and estate dependents prints $tmp/deps/<base with / as
+# _>, or, as clearcutt-verify does for a base it doesn't know, no
+# dependents and exit 0 (r/run-php: it fails).
 mkdir -p "$tmp/bin" "$tmp/deps"
 cat > "$tmp/bin/gh" <<'GH'
 #!/usr/bin/env bash
@@ -42,16 +46,29 @@ case "\$*" in
   "estate pull "*)
     [ -z "\${PULL_FAILS:-}" ] || exit 1
     case "\$*" in *"--certificate-identity https://github.com/acme/estate/.github/workflows/estate.yml@refs/heads/main --certificate-oidc-issuer https://token.actions.githubusercontent.com"*) ;; *) echo "unchecked signer: \$*" >&2; exit 1 ;; esac
-    out=\$(sed -E 's/.*--output ([^ ]+).*/\1/' <<<"\$*"); mkdir -p "\$out"; echo '{}' > "\$out/estate-report.json" ;;
+    out=\$(sed -E 's/.*--output ([^ ]+).*/\1/' <<<"\$*"); mkdir -p "\$out"; cp "$tmp/report.json" "\$out/estate-report.json" ;;
   "--format json estate dependents "*)
     base=\$(sed -E 's/.*--base ([^ ]+).*/\1/' <<<"\$*")
     f="$tmp/deps/\${base//\//_}"
-    [ -f "\$f" ] || exit 1
-    cat "\$f" ;;
+    [ "\$base" != r/run-php ] || exit 1
+    if [ -f "\$f" ]; then cat "\$f"; else printf '{"base": "%s", "report": "x", "dependents": []}\n' "\$base"; fi ;;
   *) echo "unexpected clearcutt-verify \$*" >&2; exit 1 ;;
 esac
 CV
 chmod +x "$tmp/bin/gh" "$tmp/bin/clearcutt-verify"
+# The report: images built on run-go, run-python, run-rust, and run-php by
+# layer digest (proof), on run-node by a label only (declared); none on
+# run-java (the estate doesn't verify its apps), nor on run-ruby, though
+# estate dependents (wrongly) names one.
+cat > "$tmp/report.json" <<'J'
+{"apiVersion": "clearcutt.dev/v1", "kind": "EstateReport", "images": [
+  {"id": "a", "base": {"repository": "r/run-go", "strength": "proof"}},
+  {"id": "n", "base": {"repository": "r/run-node", "strength": "declared"}},
+  {"id": "x", "base": {"repository": "r/run-python", "strength": "proof"}},
+  {"id": "y", "base": {"repository": "r/run-rust", "strength": "proof"}},
+  {"id": "p", "base": {"repository": "r/run-php", "strength": "proof"}},
+  {"id": "r/run-go:1"}]}
+J
 # run-go: two apps built on it, one twice (two images), with a .git URL.
 cat > "$tmp/deps/r_run-go" <<'J'
 {"base": "r/run-go", "dependents": [
@@ -59,12 +76,16 @@ cat > "$tmp/deps/r_run-go" <<'J'
   {"imageId": "b", "source": {"url": "https://github.com/Acme/billing.git", "basis": "label"}},
   {"imageId": "c", "source": {"url": "https://github.com/acme/checkout/", "basis": "label"}}]}
 J
-# run-node: nothing built on it.
+# run-node: nothing built on it by layer digest (by a label, yes).
 echo '{"base": "r/run-node", "dependents": []}' > "$tmp/deps/r_run-node"
 # run-python: a dependent from another owner, so the topic search stands.
 echo '{"base": "r/run-python", "dependents": [{"imageId": "x", "source": {"url": "https://github.com/mallory/x"}}]}' > "$tmp/deps/r_run-python"
-# run-rust: a dependent without a source, so the topic search stands. (run-java: the report can't tell.)
+# run-rust: a dependent without a source, so the topic search stands.
 echo '{"base": "r/run-rust", "dependents": [{"imageId": "y"}]}' > "$tmp/deps/r_run-rust"
+# run-ruby: a dependent of a base no image in the report names.
+echo '{"base": "r/run-ruby", "dependents": [{"imageId": "z", "source": {"url": "https://github.com/acme/checkout"}}]}' > "$tmp/deps/r_run-ruby"
+# run-java: no file, so no dependents (exit 0), as clearcutt-verify answers
+# for a base it doesn't know; run-php: estate dependents fails.
 
 published='[
   {"kind": "image", "image": "r/run-go@sha256:1", "repository": "r/run-go", "digest": "sha256:1", "roles": ["run"]},
@@ -72,6 +93,8 @@ published='[
   {"kind": "image", "image": "r/run-python@sha256:3", "repository": "r/run-python", "digest": "sha256:3", "roles": ["run"]},
   {"kind": "image", "image": "r/run-rust@sha256:4", "repository": "r/run-rust", "digest": "sha256:4", "roles": ["run"]},
   {"kind": "image", "image": "r/run-java@sha256:5", "repository": "r/run-java", "digest": "sha256:5", "roles": ["run"]},
+  {"kind": "image", "image": "r/run-php@sha256:8", "repository": "r/run-php", "digest": "sha256:8", "roles": ["run"]},
+  {"kind": "image", "image": "r/run-ruby@sha256:9", "repository": "r/run-ruby", "digest": "sha256:9", "roles": ["run"]},
   {"kind": "image", "image": "r/build-go@sha256:6", "repository": "r/build-go", "digest": "sha256:6", "roles": ["build"]},
   {"kind": "stack", "image": "r/stacks/go@sha256:7", "repository": "r/stacks/go", "digest": "sha256:7"}
 ]'
@@ -99,20 +122,30 @@ scenario() { # published, estate, changed, estate-report, signer, [PULL_FAILS=1]
 signer=https://github.com/acme/estate/.github/workflows/estate.yml@refs/heads/main
 topic() { for r in acme/checkout acme/catalog acme/storefront; do echo "$r $1 $2"; done; }
 
-# With the report: run-go wakes only the apps built on it; run-node none;
-# the others, the topic.
+# With the report: run-go wakes only the apps built on it; every other run
+# image the topic (the report can't answer for it), with a warning saying
+# why: an empty answer (run-node, run-java) never wakes nothing.
 scenario "$published" estate false ghcr.io/acme/estate:latest "$signer"
 check "estate report" "acme/checkout clearcutt.run-image-published r/run-go@sha256:1
 Acme/billing clearcutt.run-image-published r/run-go@sha256:1
+$(topic clearcutt.run-image-published r/run-node@sha256:2)
 $(topic clearcutt.run-image-published r/run-python@sha256:3)
 $(topic clearcutt.run-image-published r/run-rust@sha256:4)
 $(topic clearcutt.run-image-published r/run-java@sha256:5)
+$(topic clearcutt.run-image-published r/run-php@sha256:8)
+$(topic clearcutt.run-image-published r/run-ruby@sha256:9)
 $(topic clearcutt.build-image-published r/build-go@sha256:6)
 $(topic clearcutt.stack-published r/stacks/go@sha256:7)
 acme/estate clearcutt.estate-changed acme/platform"
-if ! grep -q 'r/run-python: no repository of the owner: x' "$tmp/run/report.log"; then
-  echo "FAIL: another owner's dependent isn't named"; cat "$tmp/run/report.log"; fail=1
-fi
+for want in '::warning::r/run-python: no repository of the owner: x' \
+  '::warning::r/run-java: no image in the estate report is built on it' \
+  '::warning::r/run-ruby: no image in the estate report is built on it' \
+  '::warning::r/run-node: the estate report proves no image is built on it by layer digest' \
+  "::warning::r/run-php: the estate report can't tell what is built on it"; do
+  if ! grep -qF "$want" "$tmp/run/report.log"; then
+    echo "FAIL: no warning: $want"; cat "$tmp/run/report.log"; fail=1
+  fi
+done
 
 # Without it, or when it can't be pulled or verified, or without a signer: the topic, for everything.
 everything="$(topic clearcutt.run-image-published r/run-go@sha256:1)
@@ -120,6 +153,8 @@ $(topic clearcutt.run-image-published r/run-node@sha256:2)
 $(topic clearcutt.run-image-published r/run-python@sha256:3)
 $(topic clearcutt.run-image-published r/run-rust@sha256:4)
 $(topic clearcutt.run-image-published r/run-java@sha256:5)
+$(topic clearcutt.run-image-published r/run-php@sha256:8)
+$(topic clearcutt.run-image-published r/run-ruby@sha256:9)
 $(topic clearcutt.build-image-published r/build-go@sha256:6)
 $(topic clearcutt.stack-published r/stacks/go@sha256:7)"
 scenario "$published" "" false "" ""

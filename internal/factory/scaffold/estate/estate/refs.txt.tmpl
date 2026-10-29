@@ -1,5 +1,7 @@
 # The images estate.yml verifies, one reference per line: the platform's by
-# their line tags, apps by latest. Add each app here as it starts publishing.
+# their line tags, apps by latest. Add each app here as it starts publishing:
+# the platform wakes an app built on a new run image by layer digest only
+# when this report covers the app's image (else by the clearcutt-app topic).
 {% .Registry %}/platform/run-go:1
 {% .Registry %}/platform/build-go:1
 # {% .Registry %}/apps/APP:latest

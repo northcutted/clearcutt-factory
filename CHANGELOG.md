@@ -98,7 +98,11 @@ what may change between releases.
   report proves, by layer digest, are built on it (`clearcutt-verify estate
   dependents`, v0.18.0, installed signature-verified). Build images, stacks,
   profiles, and a run image the report can't answer for keep the topic
-  search, which stays the default.
+  search, which stays the default. An empty answer is no answer: a run
+  image no image in the report is built on, or none by layer digest, goes
+  to the topic search with a warning naming it (`estate dependents` lists
+  nothing, and succeeds, for a base it doesn't know, as when the estate's
+  `refs.txt` doesn't list the apps' images yet).
 - `notify.yml`'s `estate` and `changed` inputs send `clearcutt.estate-changed`
   (`{source, sha}`) to the estate repository when anything was published,
   apps included, or `changed` is true, so the estate's report refreshes

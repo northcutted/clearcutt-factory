@@ -413,12 +413,20 @@ func nextSteps(kind string, d scaffold) string {
 		if d.Stack == "" {
 			s += "  Write app.yaml naming the platform's stack (init --app --stack REF writes one).\n"
 		}
+		estate := "the estate repository's"
+		if d.Estate != "" {
+			estate = d.Estate + "'s"
+		}
 		s += `  clearcutt-factory lock  -f app.yaml   # pin the stack, its build and run images
   clearcutt-factory build -f app.yaml   # build, test, scan locally
 ` + automation + `
-  Give the repository the topic clearcutt-app, so the platform's notify job
-  wakes it, and install the App on it. Require "app / images / result" in
-  branch protection.`
+  Once it publishes, add ` + d.Registry + "/" + d.Name + `:latest to ` + estate + `
+  estate/refs.txt: a new run image wakes the apps the estate's report proves,
+  by layer digest, are built on it, so only apps whose images the estate
+  verifies. For a run image the report can't answer for, the platform's
+  notify job falls back to the topic: give this repository the topic
+  clearcutt-app, and install the App on it. Require "app / images / result"
+  in branch protection.`
 		return s
 	case InitPlatform:
 		s := `
@@ -438,7 +446,9 @@ Next:
 	case InitEstate:
 		return `
 Next:
-  List the images to verify in estate/refs.txt. Commit and push; set Pages'
+  List the images to verify in estate/refs.txt, each app's as it starts
+  publishing: the platform wakes, by layer digest, only apps whose images
+  this report covers (the rest by topic). Commit and push; set Pages'
   source to GitHub Actions. The platform's trust policy must name this
   repository's estate.yml as its estate signer (init --platform --estate-repo
   ` + d.Repo + ` writes it), and its platform and apps send

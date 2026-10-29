@@ -770,10 +770,10 @@ Other CI systems call the same commands; nothing is GitHub-specific.
   registry.
 * The fleet workflow rebases the apps whose manifests are in its own
   repository. Apps elsewhere run it themselves, on their schedule or when
-  `notify.yml` wakes them; `notify.yml` finds them by a topic, not by what
-  they are built on. clearcutt-verify's `estate dependents` lists the images
-  actually built on a base (by layer digest), for `notify.yml`'s
-  `repositories` input or for `clearcutt-factory rebase --image`.
+  `notify.yml` wakes them; `notify.yml` finds them by a topic, or, with
+  its `estate-report` input, by what the estate's clearcutt-verify report
+  proves (by layer digest) is built on a run image: only for apps whose
+  images the estate verifies, with the topic as the fallback.
 * Smoke tests run images on the build machine, other architectures through
   emulation (QEMU in CI); `--no-test` skips them. A command test's container
   has no network unless the test sets `network: true`; an HTTP test's has the
