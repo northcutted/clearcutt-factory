@@ -329,7 +329,11 @@ func identityArgs(v manifest.VerifyIdentity, imageSource string) ([]string, erro
 	}
 	if owner := strings.TrimSuffix(v.SourceRepositoryOwner, "/"); owner != "" {
 		if repo == "" {
-			return nil, errors.New("sourceRepositoryOwner needs sourceRepository or sourceMatchesImage: cosign checks one exact repository")
+			// clearcutt-verify reads the repository from each certificate
+			// before it runs cosign; factory hands cosign the signer as
+			// configured, so it skips this signer rather than accept any
+			// repository at all.
+			return nil, fmt.Errorf("sourceRepositoryOwner %s alone: factory has cosign check one exact repository, so add sourceMatchesImage: true (the repository the image names as its source, which must be %s's) or sourceRepository", owner, owner)
 		}
 		if !strings.HasPrefix(repo, owner+"/") {
 			return nil, fmt.Errorf("%s is not one of %s's repositories", repo, owner)

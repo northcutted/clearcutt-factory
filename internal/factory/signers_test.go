@@ -120,13 +120,27 @@ signers:
 
 	for body, want := range map[string]string{
 		"apiVersion: v1\nkind: Trust\n": "expected apiVersion",
-		"apiVersion: clearcutt.dev/v1\nkind: TrustPolicy\nsigners: [{roles: [admin], identity: x, issuer: y}]\n":                         "role \"admin\"",
-		"apiVersion: clearcutt.dev/v1\nkind: TrustPolicy\nsigners: [{identity: x}]\n":                                                    "needs certificateOIDCIssuer",
-		"apiVersion: clearcutt.dev/v1\nkind: TrustPolicy\nsigners: [{key: k.pub, sourceRepository: https://github.com/a/b}]\n":           "keyless",
-		"apiVersion: clearcutt.dev/v1\nkind: TrustPolicy\nsigners: [{identity: x, issuer: y, sourceRepository: https://gitlab.com/a}]\n": "https://github.com/",
+		"apiVersion: clearcutt.dev/v1\nkind: TrustPolicy\nsigners: [{roles: [admin], identity: x, issuer: y}]\n":                                        "role \"admin\"",
+		"apiVersion: clearcutt.dev/v1\nkind: TrustPolicy\nsigners: [{identity: x}]\n":                                                                   "needs certificateOIDCIssuer",
+		"apiVersion: clearcutt.dev/v1\nkind: TrustPolicy\nsigners: [{key: k.pub, sourceRepository: https://github.com/a/b}]\n":                          "keyless",
+		"apiVersion: clearcutt.dev/v1\nkind: TrustPolicy\nsigners: [{identity: x, issuer: " + ghIssuer + ", sourceRepository: https://gitlab.com/a}]\n": "https://github.com/",
+		// Source constraints are GitHub Actions certificates' (as
+		// clearcutt-verify reads them), and the owner is exactly
+		// https://github.com/OWNER.
+		"apiVersion: clearcutt.dev/v1\nkind: TrustPolicy\nsigners: [{identity: x, issuer: https://gitlab.com, sourceRepository: https://github.com/a/b}]\n":                                        "need the GitHub Actions issuer",
+		"apiVersion: clearcutt.dev/v1\nkind: TrustPolicy\nsigners: [{identity: x, issuer: https://gitlab.com, sourceRef: refs/heads/main}]\n":                                                      "need the GitHub Actions issuer",
+		"apiVersion: clearcutt.dev/v1\nkind: TrustPolicy\nsigners: [{identity: x, issuer: " + ghIssuer + ", sourceRepositoryOwner: https://github.com/acme/checkout, sourceMatchesImage: true}]\n": "must be https://github.com/OWNER",
+		"apiVersion: clearcutt.dev/v1\nkind: TrustPolicy\nsigners: [{identity: x, issuer: " + ghIssuer + ", sourceRepositoryOwner: https://github.com/, sourceMatchesImage: true}]\n":              "must be https://github.com/OWNER",
+		"apiVersion: clearcutt.dev/v1\nkind: TrustPolicy\nsigners: [{identity: x, issuer: " + ghIssuer + ", sourceRepositoryOwner: https://gitlab.com/acme, sourceMatchesImage: true}]\n":          "https://github.com/",
 	} {
 		if _, err := manifest.LoadTrustPolicy(write("bad.yaml", body)); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: got %v, want %q", body, err, want)
+		}
+	}
+	for _, owner := range []string{"https://github.com/acme", "https://github.com/acme/"} {
+		body := "apiVersion: clearcutt.dev/v1\nkind: TrustPolicy\nsigners: [{identity: x, issuer: " + ghIssuer + ", sourceRepositoryOwner: '" + owner + "', sourceMatchesImage: true}]\n"
+		if _, err := manifest.LoadTrustPolicy(write("good.yaml", body)); err != nil {
+			t.Errorf("owner %s: %v", owner, err)
 		}
 	}
 	if _, err := manifest.LoadOrg(write("bad.org.yaml", "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nsigning:\n  verify: {certificateIdentity: x, certificateIdentityRegexp: y, certificateOIDCIssuer: z}\n"), ""); err == nil || !strings.Contains(err.Error(), "not both") {

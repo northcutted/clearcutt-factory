@@ -152,6 +152,12 @@ func (v VerifyIdentity) validate() error {
 	if constrained && !keyless {
 		return errors.New("source constraints apply to keyless (GitHub Actions) signers")
 	}
+	// The source fields are those of a GitHub Actions certificate, as in
+	// clearcutt-verify's trust policy, which refuses them with another
+	// issuer.
+	if constrained && v.CertificateOIDCIssuer != GitHubActionsIssuer {
+		return fmt.Errorf("source constraints need the GitHub Actions issuer (%s), not %q", GitHubActionsIssuer, v.CertificateOIDCIssuer)
+	}
 	for _, u := range []string{v.SourceRepository, v.SourceRepositoryOwner} {
 		if u != "" && !strings.HasPrefix(u, "https://github.com/") {
 			return fmt.Errorf("%q must be a https://github.com/ URL", u)
@@ -160,5 +166,17 @@ func (v VerifyIdentity) validate() error {
 	if r := strings.TrimPrefix(v.SourceRepository, "https://github.com/"); v.SourceRepository != "" && strings.Count(strings.TrimSuffix(r, "/"), "/") != 1 {
 		return fmt.Errorf("sourceRepository %q must be https://github.com/OWNER/REPO", v.SourceRepository)
 	}
+	// Exactly https://github.com/OWNER (a trailing slash allowed), as
+	// clearcutt-verify reads it: the certificate's repository must be
+	// https://github.com/OWNER/<repo>, its owner segment exactly OWNER.
+	if o := v.SourceRepositoryOwner; o != "" {
+		if rest, ok := strings.CutPrefix(strings.TrimSuffix(o, "/"), "https://github.com/"); !ok || rest == "" || strings.Contains(rest, "/") {
+			return fmt.Errorf("sourceRepositoryOwner %q must be https://github.com/OWNER", o)
+		}
+	}
 	return nil
 }
+
+// GitHubActionsIssuer is the OIDC issuer of GitHub Actions' certificates,
+// the only ones the source constraints apply to.
+const GitHubActionsIssuer = "https://token.actions.githubusercontent.com"

@@ -5,6 +5,21 @@ what may change between releases.
 
 ## Unreleased
 
+### Changed
+
+- **A trust signer's `sourceRepositoryOwner` is read as clearcutt-verify
+  reads it.** It must be exactly `https://github.com/OWNER` (a trailing
+  slash allowed), and any source constraint (`sourceRepository`,
+  `sourceRepositoryOwner`, `sourceMatchesImage`, `sourceRef`) needs the
+  GitHub Actions issuer; a profile or trust policy that breaks either is
+  refused when it loads, as clearcutt-verify refuses the same trust policy.
+  Before, `sourceRepositoryOwner: https://github.com/acme/checkout` loaded
+  and then matched nothing. An owner alone, without `sourceMatchesImage`
+  or `sourceRepository`, which clearcutt-verify accepts (it reads the
+  repository from each certificate first), still can't be checked by
+  factory, which hands cosign one exact repository: that signer is
+  skipped, and the message now says what to add.
+
 ### Fixed
 
 - `build` gives the container runtime the real paths of the directories it
