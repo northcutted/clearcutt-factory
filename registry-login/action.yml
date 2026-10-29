@@ -1,0 +1,150 @@
+# Logs in to a cloud's container registry by OIDC federation: the job's
+# GitHub OIDC token is exchanged for short-lived registry credentials, so no
+# long-lived registry secret is stored. ClearCutt Factory's reusable
+# workflows use it when their aws-role-arn, gcp-workload-identity-provider,
+# or azure-client-id input is set (and REGISTRY_USERNAME/REGISTRY_PASSWORD
+# otherwise). The job needs id-token: write.
+#
+#   Amazon ECR (registry ACCOUNT.dkr.ecr.REGION.amazonaws.com): assume
+#     aws-role-arn (aws-actions/configure-aws-credentials), then log in
+#     (aws-actions/amazon-ecr-login). The role's trust policy names the
+#     token.actions.githubusercontent.com provider and the calling repository.
+#   Google Artifact Registry (registry REGION-docker.pkg.dev): impersonate
+#     gcp-service-account through gcp-workload-identity-provider
+#     (google-github-actions/auth), and log in with its access token.
+#   Azure Container Registry (registry NAME.azurecr.io): sign in as
+#     azure-client-id, an app registration or user-assigned managed identity
+#     with a federated credential for the repository (azure/login), then
+#     az acr login. It needs AcrPush on the registry.
+#
+#   - uses: northcutted/clearcutt-factory/registry-login@v0.4.1
+#     with:
+#       registry: 123456789012.dkr.ecr.eu-west-1.amazonaws.com
+#       aws-role-arn: arn:aws:iam::123456789012:role/clearcutt-publish
+name: ClearCutt Factory registry login
+description: Log in to Amazon ECR, Google Artifact Registry, or Azure Container Registry by GitHub OIDC federation
+author: northcutted
+inputs:
+  registry:
+    description: The registry host, e.g. 123456789012.dkr.ecr.eu-west-1.amazonaws.com, europe-docker.pkg.dev, or acme.azurecr.io
+    required: true
+  aws-role-arn:
+    description: Amazon ECR, an IAM role to assume with GitHub OIDC
+    required: false
+    default: ""
+  aws-region:
+    description: Amazon ECR, the region (default the registry's)
+    required: false
+    default: ""
+  gcp-workload-identity-provider:
+    description: Google Artifact Registry, the workload identity provider (projects/NUMBER/locations/global/workloadIdentityPools/POOL/providers/PROVIDER)
+    required: false
+    default: ""
+  gcp-service-account:
+    description: Google Artifact Registry, the service account to impersonate (it needs Artifact Registry Writer)
+    required: false
+    default: ""
+  azure-client-id:
+    description: Azure Container Registry, the client ID of the app registration or managed identity to sign in as
+    required: false
+    default: ""
+  azure-tenant-id:
+    description: Azure Container Registry, its tenant ID
+    required: false
+    default: ""
+  azure-subscription-id:
+    description: Azure Container Registry, the subscription ID
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    # One cloud's inputs, complete, and a registry of that cloud: anything
+    # else fails here rather than logging in somewhere unexpected.
+    - name: Which cloud
+      id: cloud
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+        AWS_ROLE: ${{ inputs.aws-role-arn }}
+        AWS_REGION_INPUT: ${{ inputs.aws-region }}
+        GCP_PROVIDER: ${{ inputs.gcp-workload-identity-provider }}
+        GCP_ACCOUNT: ${{ inputs.gcp-service-account }}
+        AZURE_CLIENT: ${{ inputs.azure-client-id }}
+        AZURE_TENANT: ${{ inputs.azure-tenant-id }}
+        AZURE_SUBSCRIPTION: ${{ inputs.azure-subscription-id }}
+      run: |
+        fail() { echo "::error::registry login: $*"; exit 1; }
+        clouds=()
+        if [ -n "$AWS_ROLE$AWS_REGION_INPUT" ]; then clouds+=(aws); fi
+        if [ -n "$GCP_PROVIDER$GCP_ACCOUNT" ]; then clouds+=(gcp); fi
+        if [ -n "$AZURE_CLIENT$AZURE_TENANT$AZURE_SUBSCRIPTION" ]; then clouds+=(azure); fi
+        case "${#clouds[@]}" in
+          0) fail "set aws-role-arn, gcp-workload-identity-provider and gcp-service-account, or azure-client-id, azure-tenant-id, and azure-subscription-id" ;;
+          1) ;;
+          *) fail "inputs for more than one cloud are set (${clouds[*]}); set one cloud's" ;;
+        esac
+        host=${REGISTRY%%/*}
+        case "${clouds[0]}" in
+          aws)
+            [ -n "$AWS_ROLE" ] || fail "aws-region needs aws-role-arn, the role to assume"
+            [[ "$host" =~ ^([0-9]{12})\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com(\.cn)?$ ]] ||
+              fail "$REGISTRY is not an Amazon ECR registry (ACCOUNT.dkr.ecr.REGION.amazonaws.com)"
+            {
+              echo "account=${BASH_REMATCH[1]}"
+              echo "region=${AWS_REGION_INPUT:-${BASH_REMATCH[2]}}"
+            } >> "$GITHUB_OUTPUT"
+            ;;
+          gcp)
+            [ -n "$GCP_PROVIDER" ] && [ -n "$GCP_ACCOUNT" ] || fail "set both gcp-workload-identity-provider and gcp-service-account"
+            [[ "$host" =~ ^([a-z0-9-]+-docker\.pkg\.dev|([a-z]+\.)?gcr\.io)$ ]] ||
+              fail "$REGISTRY is not a Google Artifact Registry (REGION-docker.pkg.dev) or Container Registry host"
+            ;;
+          azure)
+            [ -n "$AZURE_CLIENT" ] && [ -n "$AZURE_TENANT" ] && [ -n "$AZURE_SUBSCRIPTION" ] ||
+              fail "set azure-client-id, azure-tenant-id, and azure-subscription-id"
+            [[ "$host" =~ ^([a-z0-9]+)\.azurecr\.(io|cn|us)$ ]] || fail "$REGISTRY is not an Azure Container Registry (NAME.azurecr.io)"
+            echo "name=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+            ;;
+        esac
+        echo "cloud=${clouds[0]}" >> "$GITHUB_OUTPUT"
+        echo "${clouds[0]}: logging in to $host by OIDC federation"
+
+    - if: steps.cloud.outputs.cloud == 'aws'
+      uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+      with:
+        role-to-assume: ${{ inputs.aws-role-arn }}
+        aws-region: ${{ steps.cloud.outputs.region }}
+        role-session-name: clearcutt-factory
+    - if: steps.cloud.outputs.cloud == 'aws'
+      uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+      with:
+        registries: ${{ steps.cloud.outputs.account }}
+        mask-password: "true"
+
+    - id: gcp
+      if: steps.cloud.outputs.cloud == 'gcp'
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      with:
+        workload_identity_provider: ${{ inputs.gcp-workload-identity-provider }}
+        service_account: ${{ inputs.gcp-service-account }}
+        token_format: access_token
+        create_credentials_file: false
+    - if: steps.cloud.outputs.cloud == 'gcp'
+      uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      with:
+        registry: ${{ inputs.registry }}
+        username: oauth2accesstoken
+        password: ${{ steps.gcp.outputs.access_token }}
+
+    - if: steps.cloud.outputs.cloud == 'azure'
+      uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        subscription-id: ${{ inputs.azure-subscription-id }}
+    - if: steps.cloud.outputs.cloud == 'azure'
+      shell: bash
+      env:
+        NAME: ${{ steps.cloud.outputs.name }}
+      run: az acr login --name "$NAME"

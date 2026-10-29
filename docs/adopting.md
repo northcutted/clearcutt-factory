@@ -95,7 +95,8 @@ Push, then in the repository (or organization) settings:
    maintainer approves them on each pull request (the runs show as
    `action_required`).
 2. For a registry other than `ghcr.io`: set the reusable workflows' `registry`
-   input and add `REGISTRY_USERNAME` and `REGISTRY_PASSWORD` secrets.
+   input and add `REGISTRY_USERNAME` and `REGISTRY_PASSWORD` secrets, or log
+   in by OIDC federation instead ([below](#registries-in-a-cloud-without-a-stored-secret)).
 3. **To merge the bot's pull requests by themselves** once CI passes, pass
    the `auto-merge` input to `fleet.yml` (`pin`, `rebuild`) and
    `update-locks.yml` (`update`, `rebuild`), or `all`, naming the kinds to
@@ -168,6 +169,43 @@ requires one waits forever on a pull request that doesn't build it.
 Require `images / result` (the job name in your workflow, then `result`):
 it passes when every manifest the run built passed, including when there
 was nothing to build, and fails otherwise.
+
+### Registries in a cloud, without a stored secret
+
+`images.yml`, `fleet.yml`, `reattest.yml`, and `app.yml` can log in to
+Amazon ECR, Google Artifact Registry, or Azure Container Registry with the
+job's GitHub OIDC token, exchanged for short-lived registry credentials, so
+no registry password is stored in GitHub. Set the `registry` input to the
+registry host and one cloud's inputs:
+
+| Registry | Inputs | The cloud side |
+|---|---|---|
+| Amazon ECR (`ACCOUNT.dkr.ecr.REGION.amazonaws.com`) | `aws-role-arn` (and `aws-region`, default the registry's) | An IAM role whose trust policy accepts `token.actions.githubusercontent.com` for `repo:OWNER/REPO:ref:refs/heads/main`, allowed to push to the repositories |
+| Google Artifact Registry (`REGION-docker.pkg.dev`) | `gcp-workload-identity-provider`, `gcp-service-account` | A workload identity pool and provider for GitHub, and a service account with Artifact Registry Writer that the repository may impersonate |
+| Azure Container Registry (`NAME.azurecr.io`) | `azure-client-id`, `azure-tenant-id`, `azure-subscription-id` | An app registration or user-assigned managed identity with a federated credential for the repository and branch, and `AcrPush` on the registry |
+
+```yaml
+  images:
+    uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.4.1
+    permissions: {contents: read, packages: write, id-token: write, attestations: write}
+    with:
+      registry: 123456789012.dkr.ecr.eu-west-1.amazonaws.com
+      aws-role-arn: arn:aws:iam::123456789012:role/clearcutt-publish
+```
+
+The jobs log in with
+[`registry-login`](../registry-login/action.yml), this repository's action
+(of the `factory-version` release), which runs the cloud's own actions,
+pinned by commit (`aws-actions/configure-aws-credentials` and
+`amazon-ecr-login`, `google-github-actions/auth`, `azure/login`), and fails
+when inputs of more than one cloud are set, or one cloud's are incomplete,
+or the registry isn't that cloud's. Workflows of your own can use it too
+(`uses: northcutted/clearcutt-factory/registry-login@v0.4.1`). Scope the
+cloud's trust to the default branch, as the signer's `sourceRef` is: only
+the default branch publishes. Without these inputs, the jobs log in with
+`REGISTRY_USERNAME` and `REGISTRY_PASSWORD`, or as `github.actor` with the
+workflow's token for `ghcr.io`, as before. `update-locks.yml` doesn't log in:
+it reads what it locks anonymously.
 
 ### A GitHub App for the automation
 
@@ -779,10 +817,10 @@ output start right after the images are published
 
 | Workflow | Inputs | Secrets | Caller permissions |
 |---|---|---|---|
-| `images.yml` | `manifests` (globs, default `**/image.yaml **/app.yaml`), `registry`, `provenance`, `reproduce` (default `true`), `published` (only reproduce this), `changed-only` (default `false`: on a pull request, only the manifests it affects; [above](#pull-requests-build-what-they-change)), `publish-ref` | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write`, `attestations: write` |
+| `images.yml` | `manifests` (globs, default `**/image.yaml **/app.yaml`), `registry`, `provenance`, `reproduce` (default `true`), `published` (only reproduce this), `changed-only` (default `false`: on a pull request, only the manifests it affects; [above](#pull-requests-build-what-they-change)), `publish-ref`, the OIDC login inputs ([above](#registries-in-a-cloud-without-a-stored-secret)) | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write`, `attestations: write` |
 | `update-locks.yml` | `manifests`, `update` (`all`, default, or `stack`: apps only, the stack and its build and run images, as a rebuild pull request), `app-id`, `auto-merge` (`update`, `rebuild`, or `all`) | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: write`, `pull-requests: write` |
-| `fleet.yml` | `apps` (default `**/app.yaml`), `registry`, `provenance`, `app-id`, `auto-merge` (`pin`, `rebuild`, or `all`) | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: write`, `pull-requests: write`, `packages: write`, `id-token: write`, `attestations: write` |
-| `reattest.yml` | `manifests`, `registry`, `older-than` (default `6d`), `reproduce` (default `true`), `publish-ref` | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write` |
+| `fleet.yml` | `apps` (default `**/app.yaml`), `registry`, `provenance`, `app-id`, `auto-merge` (`pin`, `rebuild`, or `all`), the OIDC login inputs | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: write`, `pull-requests: write`, `packages: write`, `id-token: write`, `attestations: write` |
+| `reattest.yml` | `manifests`, `registry`, `older-than` (default `6d`), `reproduce` (default `true`), `publish-ref`, the OIDC login inputs | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write` |
 | `notify.yml` | `published` (required), `topic` (default `clearcutt-app`), `owner`, `repositories`, `app-id`, `estate-report` and `estate-report-signer` (a run image's dependents by layer digest, [above](#only-the-apps-built-on-it)), `estate` and `changed` (send `clearcutt.estate-changed`) | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: read` |
 
 `reattest.yml` renews published images' evidence on a schedule: each

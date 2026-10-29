@@ -7,6 +7,16 @@ what may change between releases.
 
 ### Added
 
+- **Registry login by OIDC federation.** `images.yml`, `fleet.yml`, and
+  `reattest.yml` take `aws-role-arn` (and `aws-region`) for Amazon ECR,
+  `gcp-workload-identity-provider` and `gcp-service-account` for Google
+  Artifact Registry, and `azure-client-id`, `azure-tenant-id`, and
+  `azure-subscription-id` for Azure Container Registry: the job's GitHub
+  OIDC token is exchanged for short-lived registry credentials, so no
+  registry password is stored. The new `registry-login` action does it
+  (with the clouds' own actions, pinned by commit) and refuses inputs of
+  two clouds, one cloud's incomplete inputs, or a registry that isn't that
+  cloud's. `REGISTRY_USERNAME`/`REGISTRY_PASSWORD` work as before.
 - **`notify.yml` wakes only the apps built on a run image**, with the new
   `estate-report` (an estate report bundle clearcutt-verify `estate push`
   published) and `estate-report-signer` (who must have signed it) inputs:
