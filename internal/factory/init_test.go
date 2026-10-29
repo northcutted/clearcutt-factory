@@ -36,30 +36,48 @@ func TestInit(t *testing.T) {
 		}
 	}
 	// The identity is that of factory's signing reusable workflows, at the
-	// release tags the workflow calls them by (#11).
+	// release tags the workflow calls them by (#11); at a commit only with
+	// --allow-commit-pins, since a commit can be any in the fork network.
 	o, err := manifest.LoadOrg(filepath.Join(dir, "factory.org.yaml"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	re := regexp.MustCompile(o.Signing.Verify.CertificateIdentityRegexp)
-	for san, want := range map[string]bool{
-		"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@refs/tags/v1.2.3":       true,
-		"https://github.com/northcutted/clearcutt-factory/.github/workflows/fleet.yml@refs/tags/v1.3.0":        true,
-		"https://github.com/northcutted/clearcutt-factory/.github/workflows/reattest.yml@refs/tags/v1.2.3":     true,
-		"https://github.com/northcutted/clearcutt-factory/.github/workflows/update-locks.yml@refs/tags/v1.2.3": false,
-		"https://github.com/Acme/platform-images/.github/workflows/clearcutt-factory.yml@refs/heads/main":      false,
-		// A caller that pins the workflows by commit (and app.yml at one).
-		"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@0123456789abcdef0123456789abcdef01234567":      true,
-		"https://github.com/northcutted/clearcutt-factory/.github/workflows/fleet.yml@0123456789abcdef0123456789abcdef01234567":       true,
-		"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@0123456":                                       false,
-		"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@0123456789ABCDEF0123456789ABCDEF01234567":      false,
-		"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@0123456789abcdef0123456789abcdef012345678":     false,
-		"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@refs/heads/main":                               false,
-		"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@refs/tags/v1.2.3-rc.1":                         false,
-		"https://github.com/northcutted/clearcutt-factory-evil/.github/workflows/images.yml@0123456789abcdef0123456789abcdef01234567": false,
+	pinned := t.TempDir()
+	if err := Init(context.Background(), Options{Version: "v1.2.3", Stdout: &out, Stderr: &out}, InitOptions{Dir: pinned, Repo: "Acme/platform-images", AllowCommitPins: true}); err != nil {
+		t.Fatal(err)
+	}
+	op, err := manifest.LoadOrg(filepath.Join(pinned, "factory.org.yaml"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	re, reCommits := regexp.MustCompile(o.Signing.Verify.CertificateIdentityRegexp), regexp.MustCompile(op.Signing.Verify.CertificateIdentityRegexp)
+	for _, c := range []struct {
+		san                 string
+		byDefault, withPins bool
+	}{
+		{"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@refs/tags/v1.2.3", true, true},
+		{"https://github.com/northcutted/clearcutt-factory/.github/workflows/fleet.yml@refs/tags/v1.3.0", true, true},
+		{"https://github.com/northcutted/clearcutt-factory/.github/workflows/reattest.yml@refs/tags/v1.2.3", true, true},
+		{"https://github.com/northcutted/clearcutt-factory/.github/workflows/update-locks.yml@refs/tags/v1.2.3", false, false},
+		{"https://github.com/Acme/platform-images/.github/workflows/clearcutt-factory.yml@refs/heads/main", false, false},
+		// A caller that pins the workflows by commit: any commit, a fork's
+		// included, so only with --allow-commit-pins.
+		{"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@0123456789abcdef0123456789abcdef01234567", false, true},
+		{"https://github.com/northcutted/clearcutt-factory/.github/workflows/fleet.yml@0123456789abcdef0123456789abcdef01234567", false, true},
+		{"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@0123456", false, false},
+		{"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@0123456789ABCDEF0123456789ABCDEF01234567", false, false},
+		{"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@0123456789abcdef0123456789abcdef012345678", false, false},
+		{"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@refs/heads/main", false, false},
+		{"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@refs/tags/v1.2.3-rc.1", false, false},
+		{"https://github.com/northcutted/clearcutt-factory/.github/workflows/images.yml@refs/tags/v1.2.3x", false, false},
+		{"https://github.com/northcutted/clearcutt-factory-evil/.github/workflows/images.yml@0123456789abcdef0123456789abcdef01234567", false, false},
+		{"https://github.com/northcutted/clearcutt-factory-evil/.github/workflows/images.yml@refs/tags/v1.2.3", false, false},
 	} {
-		if re.MatchString(san) != want {
-			t.Errorf("identity regexp %s on %s: want %v", re, san, want)
+		if re.MatchString(c.san) != c.byDefault {
+			t.Errorf("identity regexp %s on %s: want %v", re, c.san, c.byDefault)
+		}
+		if reCommits.MatchString(c.san) != c.withPins {
+			t.Errorf("--allow-commit-pins identity regexp %s on %s: want %v", reCommits, c.san, c.withPins)
 		}
 	}
 	args, err := signerArgs(o, manifest.RoleImage, "")

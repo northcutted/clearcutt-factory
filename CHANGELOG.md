@@ -108,6 +108,16 @@ what may change between releases.
   apps included, or `changed` is true, so the estate's report refreshes
   now. The showcase's platform and app workflows did this with a job of
   their own.
+- `init --allow-commit-pins` writes a signer identity that accepts
+  factory's signing workflows at any 40-hex commit as well as a release tag
+  (`…(images|fleet|reattest)\.yml@(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$`),
+  for callers that pin `images.yml`, `fleet.yml`, or `reattest.yml` by SHA.
+  Without it, `init` writes the tag-only regexp, as before. A commit can be
+  any in the repository's fork network (an impostor commit), so
+  docs/adopting.md recommends naming the exact commits pinned instead.
+  `app.yml` at a release, by its tag or its commit, calls its nested
+  workflows at the release's tag, so pinning `app.yml` by SHA needs no
+  change to the identity.
 
 ### Changed
 
@@ -120,11 +130,7 @@ what may change between releases.
   commit no release tag points at still builds from source at that commit,
   now with a `::notice::` saying so. A failed tag lookup (`git ls-remote`)
   fails the step instead of quietly building from source.
-- **The signer identity `init` writes accepts a commit as well as a release
-  tag**: `…(images|fleet|reattest)\.yml@(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$`,
-  so a caller may pin factory's workflows by SHA (and `app.yml` calls them
-  at one when pinned so). Existing profiles keep their regexp; widen it to
-  pin by commit.
+
 ### Fixed
 
 - `build` gives the container runtime the real paths of the directories it

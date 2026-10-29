@@ -8,7 +8,9 @@ kind: TrustPolicy
 signers:
   # Images are signed inside factory's reusable workflows (images.yml when
   # built, fleet.yml when rebased, reattest.yml when rescanned), at a release
-  # tag or a commit, which any repository can call. So the signer also says
+  # tag{% if .CommitPins %} or, with init --allow-commit-pins, any commit in the
+  # repository's fork network (naming the commits you pin is safer:
+  # docs/adopting.md){% end %}, which any repository can call. So the signer also says
   # whose runs count: those in a repository of {% .Owner %}
   # (sourceRepositoryOwner) that is the one the image names as its source
   # (sourceMatchesImage: its org.opencontainers.image.source label, which

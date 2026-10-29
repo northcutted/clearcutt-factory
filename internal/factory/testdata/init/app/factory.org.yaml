@@ -14,14 +14,14 @@ signing:
   mode: keyless # Sigstore, with the CI workflow's OIDC identity
   verify:
     # Images are signed inside ClearCutt Factory's reusable workflows, so the
-    # certificate names those workflows, at the release tag (or commit) they
-    # are called by. Keep reattest in the regexp before enabling its
-    # schedule: a newly attached report must verify too.
+    # certificate names those workflows, at the release tag they are called
+    # by. Keep reattest in the regexp before enabling its schedule: a newly
+    # attached report must verify too.
     # Any repository can call them, so
     # sourceRepository binds signatures to runs in this repository, and
     # sourceRef to runs on the branch that publishes (the reusable workflows
     # publish only from the default branch, or their publish-ref input).
-    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$
+    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@refs/tags/v\d+\.\d+\.\d+$
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
     sourceRepository: https://github.com/acme/checkout
     sourceRef: refs/heads/main

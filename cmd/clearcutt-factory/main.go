@@ -23,9 +23,12 @@ const usage = `clearcutt-factory: declarative, reproducible, signed OCI images (
 Usage:
   clearcutt-factory init    [--dir .] [--repo OWNER/NAME] [--registry REGISTRY] [--default-branch BRANCH] [--force]
                             [--extends REF (--extends-identity URL [--extends-issuer URL] | --extends-key K)]
+                            [--allow-commit-pins]
       Set up a repository of images: an org profile, an example image, and a GitHub
       Actions workflow that publishes, updates, and rebases with ClearCutt Factory.
       --extends makes the org profile extend a shared one, signed by that identity or key.
+      The image signer accepts factory's signing workflows at a release tag;
+      --allow-commit-pins also at any commit (see docs/adopting.md first).
   clearcutt-factory init --platform [--estate-repo OWNER/NAME] [same flags]
       A platform repository: run and build images, a stack, the shared org profile
       with the trust policy (images: any repository of the owner the image names as
@@ -253,6 +256,7 @@ var commands = []command{
 		fs.StringVar(&io.Name, "name", "", "the app's name (--app; default the repository's), or the estate's (--estate; default the owner)")
 		fs.StringVar(&io.Stack, "stack", "", "the stack the app builds on (--app), e.g. ghcr.io/acme/stacks/go:1; writes app.yaml")
 		fs.StringVar(&io.PlatformRepo, "platform-repo", "", "the platform repository (OWNER/NAME) whose profile.yml signs <registry>/factory/org:1: --app extends it, --estate reads its trust policy")
+		fs.BoolVar(&io.AllowCommitPins, "allow-commit-pins", false, "the image signer also accepts factory's signing workflows at any commit, not only a release tag, for callers that pin them by SHA (any commit in the fork network: see docs/adopting.md)")
 		fs.StringVar(&io.EstateRepo, "estate-repo", "", "the estate repository (OWNER/NAME): --app and --platform send it clearcutt.estate-changed; --platform trusts its estate.yml and wakes only the apps its report proves are built on a run image")
 		return func(ctx context.Context) error {
 			n := 0

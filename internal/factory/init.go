@@ -87,6 +87,13 @@ type InitOptions struct {
 	// workflow as the estate signer, and a platform wakes only the apps its
 	// report proves are built on a run image.
 	EstateRepo string
+	// AllowCommitPins makes the image signer's identity regexp accept
+	// factory's signing workflows at any 40-hex commit as well as at a
+	// release tag, for callers that pin images.yml, fleet.yml, or
+	// reattest.yml by SHA. A commit can be any in the repository's fork
+	// network (an impostor commit), so naming the exact commits pinned is
+	// safer; docs/adopting.md says how.
+	AllowCommitPins bool
 }
 
 var (
@@ -111,8 +118,9 @@ type scaffold struct {
 	LoginHost string
 	Branch    string
 	// IdentityRegexp matches the certificate identity of factory's signing
-	// workflows.
+	// workflows; CommitPins says it accepts them at any commit too.
 	IdentityRegexp string
+	CommitPins     bool
 	Name, Stack    string
 	// App is set for an app repository.
 	App bool
@@ -172,7 +180,8 @@ func Init(ctx context.Context, opts Options, io InitOptions) error {
 	}
 	d := scaffold{
 		Ref: ref, Repo: repo, Owner: owner, Registry: registry, Branch: branch,
-		IdentityRegexp: workflowIdentityRegexp(ref),
+		IdentityRegexp: workflowIdentityRegexp(ref, io.AllowCommitPins),
+		CommitPins:     io.AllowCommitPins && releaseRE.MatchString(ref),
 		Stack:          io.Stack,
 		VerifyRef:      verifyRelease, PortalRef: portalRelease,
 		GrypeVersion: grypeVersion, GrypeSHA256: grypeSHA256,
@@ -280,6 +289,7 @@ func checkInitOptions(io InitOptions) error {
 		{io.PlatformRepo != "", "--platform-repo", []string{InitApp, InitEstate}},
 		{io.EstateRepo != "", "--estate-repo", []string{InitApp, InitPlatform}},
 		{io.Extends != "" || io.ExtendsIdentity != "" || io.ExtendsIssuer != "" || io.ExtendsKey != "", "--extends", []string{InitImages, InitApp}},
+		{io.AllowCommitPins, "--allow-commit-pins", []string{InitImages, InitApp, InitPlatform}},
 	} {
 		if c.set && !slices.Contains(c.kinds, kind) {
 			return fmt.Errorf("%s doesn't apply to %s", c.flag, what)
@@ -534,10 +544,16 @@ func extendingOrg(ctx context.Context, opts Options, dir string, io InitOptions,
 // workflowIdentityRegexp matches the certificate identity of ClearCutt
 // Factory's signing reusable workflows (images.yml, fleet.yml, and
 // reattest.yml) at the ref the generated workflows call them by: any
-// release tag, or a commit (a caller that pins them by SHA, or app.yml at
-// one), or, for a development build, main.
-func workflowIdentityRegexp(ref string) string {
-	at := `(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$`
+// release tag (app.yml at a release, by tag or commit, calls them at its
+// tag), or, for a development build, main. With commits, also at any
+// 40-hex commit, for callers that pin them by SHA: any commit in the
+// repository's fork network, an impostor commit included, so the source
+// constraints are then all that bind a signature to the caller's runs.
+func workflowIdentityRegexp(ref string, commits bool) string {
+	at := `refs/tags/v\d+\.\d+\.\d+$`
+	if commits {
+		at = `(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$`
+	}
 	if !releaseRE.MatchString(ref) {
 		at = `refs/heads/` + regexp.QuoteMeta(ref) + `$`
 	}
@@ -602,10 +618,13 @@ const orgVerifyBlock = `
 signing:
   verify:
     # Images are signed inside ClearCutt Factory's reusable workflows, so the
-    # certificate names those workflows, at the release tag (or commit) they
-    # are called by. Keep reattest in the regexp before enabling its
-    # schedule: a newly attached report must verify too.
-    # Any repository can call them, so
+    # certificate names those workflows, at the release tag they are called
+    # by. Keep reattest in the regexp before enabling its schedule: a newly
+    # attached report must verify too.
+{% if .CommitPins %}    # It also accepts them at any commit (init --allow-commit-pins), for
+    # callers that pin them by SHA: any commit in the repository's fork
+    # network, so naming the commits you pin is safer (docs/adopting.md).
+{% end %}    # Any repository can call them, so
     # sourceRepository binds signatures to runs in this repository, and
     # sourceRef to runs on the branch that publishes (the reusable workflows
     # publish only from the default branch, or their publish-ref input).

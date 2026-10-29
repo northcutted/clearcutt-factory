@@ -14,10 +14,13 @@ signing:
   mode: keyless # Sigstore, with the CI workflow's OIDC identity
   verify:
     # Images are signed inside ClearCutt Factory's reusable workflows, so the
-    # certificate names those workflows, at the release tag (or commit) they
-    # are called by. Keep reattest in the regexp before enabling its
-    # schedule: a newly attached report must verify too.
-    # Any repository can call them, so
+    # certificate names those workflows, at the release tag they are called
+    # by. Keep reattest in the regexp before enabling its schedule: a newly
+    # attached report must verify too.
+{% if .CommitPins %}    # It also accepts them at any commit (init --allow-commit-pins), for
+    # callers that pin them by SHA: any commit in the repository's fork
+    # network, so naming the commits you pin is safer (docs/adopting.md).
+{% end %}    # Any repository can call them, so
     # sourceRepository binds signatures to runs in this repository, and
     # sourceRef to runs on the branch that publishes (the reusable workflows
     # publish only from the default branch, or their publish-ref input).

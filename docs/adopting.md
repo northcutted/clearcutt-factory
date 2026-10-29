@@ -112,7 +112,7 @@ toolchains, not the app's own dependencies, so a CVE in those reaches the
 app through Dependabot (turn on its security updates, which don't wait for
 the schedule). A version is proposed once it is seven days old
 (`cooldown`). The signer identity `init` writes accepts any factory release
-tag or commit, so a factory bump keeps images verifiable.
+tag, so a factory bump keeps images verifiable.
 
 ### init for a platform, its apps, and its estate
 
@@ -135,7 +135,9 @@ clearcutt-factory init --estate --repo acme/estate --platform-repo acme/platform
 | `--estate` | `.github/workflows/estate.yml`, `estate/policy.yaml`, `estate/refs.txt`, `.github/dependabot.yml` | clearcutt-verify (by release tag) over `estate/refs.txt`, daily, on `clearcutt.estate-changed`, and by hand, with `--rescan` (a checksum-pinned grype) and `--reproduce`, the trust policy read from the platform's signed profile (`--platform-repo`'s `profile.yml` must have signed it), the last report bundle pulled only if this workflow signed it, the new one pushed and signed; then clearcutt-portal (by release tag) publishes it to Pages. `--name` (default the owner) names the estate |
 
 Each takes `--repo`, `--registry`, `--default-branch`, and `--force` as
-before; a flag that doesn't apply to the kind is refused. The workflows
+before (and all but `--estate` take `--allow-commit-pins`: [Who
+signs](#who-signs-and-binding-signatures-to-your-repository)); a flag that
+doesn't apply to the kind is refused. The workflows
 call factory's at the release `init` is, and the other tools at the
 releases it was tested with; Dependabot moves them all. Owner-scoped trust
 accepts any of the owner's repositories that build on factory's workflows,
@@ -698,7 +700,7 @@ extends:
 registry: ghcr.io/acme/checkout       # what the shared profile leaves to each repository
 signing:
   verify:
-    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$
+    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@refs/tags/v\d+\.\d+\.\d+$
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
     sourceRepository: https://github.com/acme/checkout
     sourceRef: refs/heads/main
@@ -867,7 +869,7 @@ writes all three, with the origin remote's default branch (or
 signing:
   mode: keyless
   verify:          # this repository's images
-    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$
+    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@refs/tags/v\d+\.\d+\.\d+$
     certificateOIDCIssuer: https://token.actions.githubusercontent.com
     sourceRepository: https://github.com/acme/checkout
     sourceRef: refs/heads/main
@@ -882,12 +884,25 @@ the image names as its source (`org.opencontainers.image.source`), and
 bind images only: a stack names no source, so a stack
 signer names its repository with `sourceRepository` (or is a workflow in it,
 as above), and with `policy.requireSignedStacks` a stack signer with
-`sourceMatchesImage` is an error. Pinning the workflows by commit SHA changes
-the identity's `@…` suffix to the commit; the regexp `init` writes accepts a
-release tag or a 40-hex commit (`@(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$`).
-A commit can be any in the repository's network, a fork's included, so the
-source constraints, not the workflow's ref, are what bind a signature to
-your runs.
+`sourceMatchesImage` is an error.
+
+**Pinning factory's workflows by commit.** The regexp `init` writes accepts
+the signing workflows at a release tag only (`@refs/tags/v\d+\.\d+\.\d+$`).
+Calling `images.yml`, `fleet.yml`, or `reattest.yml` by commit SHA changes
+the identity's `@…` suffix to that commit. (`app.yml` at a release, by its
+tag or its commit, calls them at the release's tag, so pinning `app.yml`
+by SHA needs nothing here.) `init --allow-commit-pins` writes
+`@(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$` instead, but a pattern that
+accepts any commit accepts commits nobody reviewed: GitHub resolves
+`northcutted/clearcutt-factory/…@<sha>` for a commit anywhere in the
+repository's fork network (an *impostor commit*), so anyone can push a
+modified workflow to a fork and sign as "factory's `images.yml`" at that
+commit. The source constraints still require the run to be in one of your
+repositories on the publishing branch, so it takes a change merged there to
+call one; but the workflow's identity then proves nothing about the code
+that signed. Name the exact commits you pin instead of the pattern:
+`…\.yml@(refs/tags/v\d+\.\d+\.\d+|1a2b3c…40 hex…)$`, one alternative per
+pinned commit, added in the same pull request that moves the pin.
 
 `sourceRepositoryOwner` is read as clearcutt-verify reads it: exactly
 `https://github.com/OWNER`, and the repository it resolves to (the image's
@@ -949,7 +964,7 @@ apiVersion: clearcutt.dev/v1
 kind: TrustPolicy
 signers:
   - name: factory-builds              # images (the default role)
-    identityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$
+    identityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@refs/tags/v\d+\.\d+\.\d+$
     issuer: https://token.actions.githubusercontent.com
     sourceRepositoryOwner: https://github.com/acme   # a run in one of acme's repositories,
     sourceMatchesImage: true                         # the one the image names as its source,

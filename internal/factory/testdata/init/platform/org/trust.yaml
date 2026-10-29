@@ -8,7 +8,7 @@ kind: TrustPolicy
 signers:
   # Images are signed inside factory's reusable workflows (images.yml when
   # built, fleet.yml when rebased, reattest.yml when rescanned), at a release
-  # tag or a commit, which any repository can call. So the signer also says
+  # tag, which any repository can call. So the signer also says
   # whose runs count: those in a repository of acme
   # (sourceRepositoryOwner) that is the one the image names as its source
   # (sourceMatchesImage: its org.opencontainers.image.source label, which
@@ -17,7 +17,7 @@ signers:
   # each a signer of its own with sourceRepository instead.
   - name: images
     roles: [image]
-    identityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$
+    identityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@refs/tags/v\d+\.\d+\.\d+$
     issuer: https://token.actions.githubusercontent.com
     sourceRepositoryOwner: https://github.com/acme
     sourceMatchesImage: true

@@ -37,7 +37,7 @@ var initCases = []initCase{
 		files: map[string]string{"go.mod": "module example.com/checkout\n", "package.json": "{}\n"}},
 	{name: "app-platform", opts: InitOptions{Kind: InitApp, Repo: "acme/storefront", PlatformRepo: "acme/platform", Stack: "HOST/stacks/node:24", EstateRepo: "acme/estate"}, extends: true},
 	{name: "platform", opts: InitOptions{Kind: InitPlatform, Repo: "acme/platform", EstateRepo: "acme/estate"}},
-	{name: "platform-registry", opts: InitOptions{Kind: InitPlatform, Repo: "acme/platform", Registry: "registry.example.com/acme", Branch: "trunk"}},
+	{name: "platform-registry", opts: InitOptions{Kind: InitPlatform, Repo: "acme/platform", Registry: "registry.example.com/acme", Branch: "trunk", AllowCommitPins: true}},
 	{name: "estate", opts: InitOptions{Kind: InitEstate, Repo: "acme/estate", PlatformRepo: "acme/platform", Name: "acme"}},
 }
 
@@ -50,7 +50,7 @@ func runInitCase(t *testing.T, c initCase) (dir, host string) {
 	if c.extends {
 		w := newProfileWorld(t, map[string]string{
 			"org/profile.yaml": "apiVersion: factory.clearcutt.dev/v1alpha1\nkind: OrgProfile\nsigning:\n  trustPolicy: trust.yaml\n  profile: {certificateIdentity: " + profileIdentity + ", certificateOIDCIssuer: " + ghIssuer + "}\n",
-			"org/trust.yaml":   "apiVersion: clearcutt.dev/v1\nkind: TrustPolicy\nsigners:\n  - {name: images, identityRegexp: '" + workflowIdentityRegexp("v1.2.3") + "', issuer: " + ghIssuer + ", sourceRepositoryOwner: https://github.com/acme, sourceMatchesImage: true}\n",
+			"org/trust.yaml":   "apiVersion: clearcutt.dev/v1\nkind: TrustPolicy\nsigners:\n  - {name: images, identityRegexp: '" + workflowIdentityRegexp("v1.2.3", false) + "', issuer: " + ghIssuer + ", sourceRepositoryOwner: https://github.com/acme, sourceMatchesImage: true}\n",
 		})
 		digest := w.push("org/profile.yaml")
 		newFakeCosign(t, "--certificate-identity "+profileIdentity, w.host+"/factory/org@"+digest)
@@ -330,6 +330,7 @@ func TestInitRefusesFlagsOfOtherKinds(t *testing.T) {
 		{InitOptions{Kind: InitApp, Name: "Checkout App"}, "--name"},
 		{InitOptions{Kind: InitApp, Stack: "go:1 # x"}, "--stack"},
 		{InitOptions{Kind: "service"}, "not \"service\""},
+		{InitOptions{Kind: InitEstate, PlatformRepo: "acme/platform", AllowCommitPins: true}, "--allow-commit-pins doesn't apply"},
 	} {
 		dir := t.TempDir()
 		c.opts.Dir, c.opts.Repo = dir, "acme/x"
