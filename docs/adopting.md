@@ -1023,6 +1023,16 @@ plus cosign, syft, and grype:
 - run: clearcutt-factory build -f images/example/image.yaml
 ```
 
+Pinned by commit (`uses: northcutted/clearcutt-factory@<40-hex SHA>`), it
+installs the release whose tag points at exactly that commit, and its
+signature must come from the release workflow running at that commit
+(`cosign verify-blob --certificate-github-workflow-sha`), so a tag moved or
+added later can't hand it another commit's binary. A commit no release tag
+points at is built from source at that commit (Go, from the action's own
+checkout), with a notice in the run's log saying so: pin a release's commit
+to get its signed binary. If the repository's tags can't be listed, the step
+fails rather than building from source.
+
 ## Other CI systems
 
 Nothing is GitHub-specific except the workflows. The same commands run anywhere
