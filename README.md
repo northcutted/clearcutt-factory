@@ -59,6 +59,11 @@ that is its `app.yaml` plus a short caller of `app.yml`; and the estate's
 clearcutt-verify and clearcutt-portal workflow
 ([adopting](docs/adopting.md#init-for-a-platform-its-apps-and-its-estate)).
 
+`clearcutt-factory doctor` checks that this machine can build: docker or
+podman (and that it sees the repository and `--out`), BuildKit and QEMU for
+every platform, syft, grype, and cosign, registry push access, the GitHub
+App, and that this binary is the release the workflows pin; each failure
+comes with its fix ([adopting](docs/adopting.md#1-install)).
 [docs/adopting.md](docs/adopting.md) walks through the rest. To try the
 examples here:
 

@@ -136,7 +136,7 @@ func Build(ctx context.Context, cfg Config, req Request) (*Result, error) {
 	cmd.Stderr = io.MultiWriter(writerOrDiscard(cfg.Stderr), head)
 	if err := cmd.Run(); err != nil {
 		if rt != "" {
-			if nse := notShared(rt, head.String()); nse != nil {
+			if nse := NotShared(rt, head.String()); nse != nil {
 				return nil, nse
 			}
 		}
@@ -223,10 +223,10 @@ var (
 	dockerNotShared = regexp.MustCompile(`(?s)Mounts denied:.*?[Tt]he path (\S+) is not shared`)
 )
 
-// notShared recognizes the runtime's message for a bind mount source it
+// NotShared recognizes the runtime's message for a bind mount source it
 // can't see, in the start of its stderr, and returns it as an error that
 // names the cause and the fix; nil for any other failure.
-func notShared(runtimeBin, stderr string) error {
+func NotShared(runtimeBin, stderr string) error {
 	rt := "docker"
 	if strings.Contains(filepath.Base(runtimeBin), "podman") {
 		rt = "podman"

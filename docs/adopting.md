@@ -35,6 +35,40 @@ and how to share it. Keep the repository and `--out` under your home directory
 and a local build matches CI's: an app the showcase publishes rebuilds locally,
 on a Podman machine, to the same digest in about 30 seconds.
 
+`clearcutt-factory doctor` checks all of this before a build does, and
+prints a fix for each failure (exit 1 when any check fails; `--json` for a
+machine):
+
+```
+$ clearcutt-factory doctor -f checkout/app.yaml
+clearcutt-factory doctor (v0.4.1)
+OK    manifest           checkout/app.yaml loads with its org profile, and app.lock.yaml is current (written by v0.4.1)
+FAIL  container runtime  podman version 6.1.4, but its server doesn't answer: Cannot connect to Podman. …
+                         fix: start the Podman machine (podman machine start); if it runs, check that the default connection points at it (podman system connection list)
+…
+```
+
+| Check | What it looks at |
+|---|---|
+| `manifest` | `-f` loads with its org profile (a shared profile's signature checked) and its lock is current; a lock a newer release wrote names the release to install |
+| `container runtime` | docker or podman (`builder.runtime`, `CLEARCUTT_FACTORY_RUNTIME`) is on `PATH` and its server answers |
+| `file sharing` | a container sees the repository and `--out` (default `out`) by their real paths: a Podman machine or Docker Desktop shares only some directories |
+| `buildkit`, `platforms` | the pinned BuildKit starts (privileged, or at `builder.addr`), and builds every platform the manifest does, natively or with QEMU (binfmt) |
+| `syft`, `grype`, `cosign` | on `PATH`, with their versions; cosign 3 |
+| `registry push` | the credentials here may push to the manifest's repository, checked without pushing (a failure is a warning outside Actions) |
+| `github app` | in Actions, or wherever `CLEARCUTT_APP_ID` and `CLEARCUTT_APP_PRIVATE_KEY` (or `CLEARCUTT_BOT_TOKEN`) are set: the App's key signs a token GitHub accepts, and the App is installed on the repository with contents and pull-requests write |
+| `factory version` | this binary is the release the repository's workflows pin (their `uses:` ref, a commit mapped to its release tag, or `factory-version`), so a lock written here matches CI's |
+
+In a workflow, pass the App's credentials to the step to check them:
+
+```yaml
+- uses: northcutted/clearcutt-factory@v0.4.1
+- run: clearcutt-factory doctor -f checkout/app.yaml
+  env:
+    CLEARCUTT_APP_ID: ${{ vars.CLEARCUTT_APP_ID }}
+    CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+```
+
 ## 2. Scaffold
 
 In your repository:

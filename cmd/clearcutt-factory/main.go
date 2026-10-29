@@ -89,6 +89,13 @@ Usage:
       other repositories can extend it (extends: {ref: REF, signer: …}), and sign
       it as stacks are signed. An unchanged profile signing.profile signed only
       moves the tag.
+  clearcutt-factory doctor  [-f image.yaml] [--out DIR] [--json]
+      Check that this machine (or runner) can do what factory does: docker or
+      podman, and that it sees the repository and --out; BuildKit with every
+      platform the manifest builds (QEMU); syft, grype, cosign; push access to
+      the manifest's repository (without pushing); the GitHub App or token
+      (CLEARCUTT_APP_ID, CLEARCUTT_APP_PRIVATE_KEY, CLEARCUTT_BOT_TOKEN); and the
+      factory release the workflows pin. A fix for each failure; exit 1 on one.
   clearcutt-factory version
 
 Common flags:
@@ -277,6 +284,12 @@ var commands = []command{
 			}
 			return factory.Reattest(ctx, *opts, ro)
 		}
+	}},
+	{"doctor", func(fs *flag.FlagSet, opts *factory.Options) func(context.Context) error {
+		var do factory.DoctorOptions
+		fs.StringVar(&do.OutDir, "out", "out", "the directory builds write to (build --out), which the container runtime must see")
+		fs.BoolVar(&do.JSON, "json", false, "print the checks as JSON: {version, ok, checks: [{name, status (ok, warn, fail, skip), detail, fix}]}")
+		return func(ctx context.Context) error { return factory.Doctor(ctx, *opts, do) }
 	}},
 	{"affected", func(fs *flag.FlagSet, opts *factory.Options) func(context.Context) error {
 		var ao factory.AffectedOptions

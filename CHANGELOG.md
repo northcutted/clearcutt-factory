@@ -7,6 +7,20 @@ what may change between releases.
 
 ### Added
 
+- **`clearcutt-factory doctor`** checks what factory needs, each failure
+  with its fix: the manifest, its org profile, and its lock (a lock a newer
+  release wrote names the release to install); docker or podman and its
+  server; that a container sees the repository and `--out` (a Podman
+  machine or Docker Desktop shares only some directories); the pinned
+  BuildKit, and every platform the manifest builds (QEMU); syft, grype, and
+  cosign (cosign 3) with their versions; push access to the manifest's
+  repository, without pushing; the GitHub App (its key signs a token GitHub
+  accepts; installed on the repository with contents and pull-requests
+  write) or `CLEARCUTT_BOT_TOKEN`; and that this binary is the release the
+  repository's workflows pin (their `uses:` ref, a commit mapped to its
+  release tag, or `factory-version`). `--json` prints `{version, ok,
+  checks: [{name, status (ok, warn, fail, skip), detail, fix}]}`; exit 1
+  when a check fails.
 - **`init --platform`, `init --app`, `init --estate`** write the three
   shapes of repository the showcase runs, consistent with each other under
   one registry layout (`<registry>/platform`, `/stacks`, `/factory/org:1`,
