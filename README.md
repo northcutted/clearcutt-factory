@@ -720,8 +720,14 @@ failed reproduction still fails the run. `clearcutt-factory build`, `rebase`,
 [`notify.yml`](.github/workflows/notify.yml) keep the fleet current (see
 [Running a fleet](#running-a-fleet)), and
 [`reattest.yml`](.github/workflows/reattest.yml) its evidence
-([Renewing the evidence](#renewing-the-evidence)). Other CI systems call the same commands;
-nothing is GitHub-specific.
+([Renewing the evidence](#renewing-the-evidence)).
+[`app.yml`](.github/workflows/app.yml) calls all of them for an app
+repository, choosing from the event, so an app repository's workflow is one
+job ([adopting](docs/adopting.md#an-app-repository-is-its-appyaml-and-one-call)).
+The workflows that push log in with `REGISTRY_USERNAME`/`REGISTRY_PASSWORD`,
+or by OIDC federation to Amazon ECR, Google Artifact Registry, or Azure
+Container Registry ([adopting](docs/adopting.md#registries-in-a-cloud-without-a-stored-secret)).
+Other CI systems call the same commands; nothing is GitHub-specific.
 
 ## Limitations
 

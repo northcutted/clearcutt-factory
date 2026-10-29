@@ -12,3 +12,12 @@ rules:
       - fleet.yml
       - update-locks.yml
       - reattest.yml
+  # app.yml calls this repository's own reusable workflows at the release
+  # it is (scripts/release.sh moves the refs from main to the tag), so a
+  # caller pinning app.yml by tag or commit runs those of the same release.
+  # Everything else is pinned by commit.
+  unpinned-uses:
+    config:
+      policies:
+        "northcutted/clearcutt-factory/*": ref-pin
+        "*": hash-pin

@@ -7,6 +7,23 @@ what may change between releases.
 
 ### Added
 
+- **`app.yml`: an app repository in one call.** The new reusable workflow
+  runs everything an app repository needs, choosing from the caller's
+  event: `images.yml` (pull requests, pushes), a second-runner reproduction,
+  `fleet.yml` (after a push, daily, `clearcutt.run-image-published`),
+  `update-locks.yml` (weekly: every input; daily and on
+  `clearcutt.build-image-published`/`clearcutt.stack-published`: the stack;
+  on `clearcutt.profile-published`: every input), `reattest.yml` (daily),
+  and, with its `estate` input, `clearcutt.estate-changed` to the estate
+  repository. An app repository is its `app.yaml`, its org profile, and a
+  caller of about twenty lines, instead of a 95-line workflow with an
+  inline dispatch job. Its inputs are `manifests`, `estate`, `registry`,
+  `changed-only` (default `true`), `publish-ref`, `auto-merge` (`pin`,
+  `rebuild`, `update`, `all`), `weekly`, `run`, `reattest`, `older-than`,
+  `provenance`, `app-id`, `factory-version`, and the OIDC login inputs; its
+  secrets `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN`,
+  `REGISTRY_USERNAME`, `REGISTRY_PASSWORD`; its output `published`.
+  Branch protection requires `<caller job> / images / result`.
 - **Registry login by OIDC federation.** `images.yml`, `fleet.yml`, and
   `reattest.yml` take `aws-role-arn` (and `aws-region`) for Amazon ECR,
   `gcp-workload-identity-provider` and `gcp-service-account` for Google
@@ -22,7 +39,7 @@ what may change between releases.
   published) and `estate-report-signer` (who must have signed it) inputs:
   a run image's dependents are the owner's repositories whose images the
   report proves, by layer digest, are built on it (`clearcutt-verify estate
-  dependents`, v0.17.0, installed signature-verified). Build images, stacks,
+  dependents`, v0.18.0, installed signature-verified). Build images, stacks,
   profiles, and a run image the report can't answer for keep the topic
   search, which stays the default.
 - `notify.yml`'s `estate` and `changed` inputs send `clearcutt.estate-changed`

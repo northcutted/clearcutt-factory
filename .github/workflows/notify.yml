@@ -193,7 +193,7 @@ jobs:
       # verifies against estate-report-signer.
       - name: Install clearcutt-verify
         if: steps.events.outputs.any == 'true' && inputs.estate-report != ''
-        uses: northcutted/clearcutt-verify@8e1aec561ece55d8a1a9a6f7c8e11d9143bf45e4 # v0.17.0
+        uses: northcutted/clearcutt-verify@644ff22d61bd34545368cb81da24e2c74722ddac # v0.18.0
       - name: Dependents by layer digest, from the estate report
         id: report
         if: steps.events.outputs.any == 'true' && inputs.estate-report != ''

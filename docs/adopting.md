@@ -246,6 +246,67 @@ identity.
 
 ## 5. Apps and stacks across repositories
 
+### An app repository is its app.yaml and one call
+
+An app repository needs everything factory does for an app (publish on
+merge, reproduce, rebase onto new run images, propose lock updates and
+rebuilds, renew its evidence, and refresh the estate's report) but none of
+it varies between apps. `app.yml` does all of it in one call, choosing what
+to run from the event, so the repository holds its `app.yaml`, its org
+profile, and a short caller (`clearcutt-factory init --app` writes all
+three, [below](#init-for-a-platform-its-apps-and-its-estate)):
+
+```yaml
+name: factory
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 6 * * 1" # weekly: every input (app.yml's weekly input)
+    - cron: "41 5 * * *" # daily: rebase, rebuild on new build images, rescan
+  workflow_dispatch:
+  repository_dispatch:
+    types: [clearcutt.run-image-published, clearcutt.build-image-published, clearcutt.stack-published, clearcutt.profile-published]
+permissions:
+  contents: read
+jobs:
+  app:
+    uses: northcutted/clearcutt-factory/.github/workflows/app.yml@v0.4.1
+    permissions: {contents: write, pull-requests: write, packages: write, id-token: write, attestations: write}
+    with:
+      estate: estate # the estate repository to refresh; omit for none
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+```
+
+| Event | What runs |
+|---|---|
+| pull request, merge queue | `images.yml`: build, smoke-test, scan, gate (only the manifests it affects) |
+| push to the default branch | `images.yml` publishes; then `fleet.yml`, while `images.yml` reproduces on a second runner |
+| the weekly schedule (the `weekly` input's cron) | `update-locks.yml`, every input |
+| any other schedule (daily) | `fleet.yml`, `update-locks.yml` with `update: stack`, and `reattest.yml` |
+| `clearcutt.run-image-published` | `fleet.yml` |
+| `clearcutt.build-image-published`, `clearcutt.stack-published` | `update-locks.yml` with `update: stack` |
+| `clearcutt.profile-published` | `update-locks.yml`, every input |
+| `workflow_dispatch` | what the `run` input names (or the dispatch's own `run` input, when the caller declares one): `images`, `fleet`, `update-locks`, `reattest`, or `all` (images, fleet, and update-locks; the default) |
+
+With `estate`, it then sends `clearcutt.estate-changed` to the estate
+repository once the app was published and reproduced, or rebased (not on
+pull requests or schedules: the estate's daily run follows those). Its
+other inputs are those of the workflows it calls: `manifests` (default
+`**/app.yaml`), `registry`, `changed-only` (default `true`), `publish-ref`,
+`auto-merge` (`pin`, `rebuild`, `update`, or `all`, handed to each workflow
+in its own kinds), `reattest` and `older-than`, `provenance`, `app-id`,
+`factory-version`, and the OIDC login inputs; its secrets, the four the
+others take. Branch protection requires `app / images / result` (the
+caller's job name, then `images / result`). Images are signed by
+`images.yml`, `fleet.yml`, and `reattest.yml` as when they are called
+directly, so the signer identity needn't change.
+
+### Platform stacks
+
 A platform team publishes stacks once:
 
 ```sh
@@ -821,6 +882,7 @@ output start right after the images are published
 | `update-locks.yml` | `manifests`, `update` (`all`, default, or `stack`: apps only, the stack and its build and run images, as a rebuild pull request), `app-id`, `auto-merge` (`update`, `rebuild`, or `all`) | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: write`, `pull-requests: write` |
 | `fleet.yml` | `apps` (default `**/app.yaml`), `registry`, `provenance`, `app-id`, `auto-merge` (`pin`, `rebuild`, or `all`), the OIDC login inputs | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: write`, `pull-requests: write`, `packages: write`, `id-token: write`, `attestations: write` |
 | `reattest.yml` | `manifests`, `registry`, `older-than` (default `6d`), `reproduce` (default `true`), `publish-ref`, the OIDC login inputs | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write` |
+| `app.yml` | `manifests` (default `**/app.yaml`), `estate`, `registry`, `changed-only` (default `true`), `publish-ref`, `auto-merge` (`pin`, `rebuild`, `update`, `all`), `weekly` (default `23 6 * * 1`), `run`, `reattest` (default `true`), `older-than`, `provenance`, `app-id`, the OIDC login inputs ([above](#an-app-repository-is-its-appyaml-and-one-call)) | all four | `contents: write`, `pull-requests: write`, `packages: write`, `id-token: write`, `attestations: write` |
 | `notify.yml` | `published` (required), `topic` (default `clearcutt-app`), `owner`, `repositories`, `app-id`, `estate-report` and `estate-report-signer` (a run image's dependents by layer digest, [above](#only-the-apps-built-on-it)), `estate` and `changed` (send `clearcutt.estate-changed`) | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: read` |
 
 `reattest.yml` renews published images' evidence on a schedule: each

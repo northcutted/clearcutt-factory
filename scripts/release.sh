@@ -19,6 +19,9 @@ semver='v\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?'
 perl -pi -e 's/^(\s+default: )'"$semver"'$/${1}'"$version"'/' .github/workflows/*.yml
 perl -pi -e 's#(northcutted/clearcutt-factory(?:/\.github/workflows/[a-z-]+\.yml|/cmd/clearcutt-factory)?\@(?:refs/tags/)?)'"$semver"'#${1}'"$version"'#g' \
   .github/workflows/*.yml action.yml README.md docs/*.md
+# app.yml calls this repository's reusable workflows at the release it is
+# part of: from main (between releases) to the tag.
+perl -pi -e 's#(northcutted/clearcutt-factory/\.github/workflows/[a-z-]+\.yml\@)main$#${1}'"$version"'#' .github/workflows/app.yml
 # The release the install instructions download (v=… in docs/adopting.md).
 perl -pi -e 's/^v='"$semver"'(?= )/v='"$version"'/' README.md docs/*.md
 

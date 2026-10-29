@@ -32,6 +32,8 @@ jobs:
         run: .github/scripts/notify-events_test.sh
       - name: notify.yml wakes the run images' dependents by layer digest, and the estate
         run: .github/scripts/notify-dependents_test.sh
+      - name: app.yml runs what each event needs
+        run: .github/scripts/app-plan_test.sh
       - name: registry-login picks one cloud's complete inputs, or fails
         run: .github/scripts/registry-login_test.sh
       - name: open-pr.sh opens, updates, closes, and auto-merges
