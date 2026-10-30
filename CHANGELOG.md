@@ -149,6 +149,13 @@ what may change between releases.
 
 ### Fixed
 
+- A release can't ship `app.yml` calling `main`: `scripts/release.sh`
+  checks, after moving the refs, that every reusable workflow calls
+  factory's own workflows and action at the new tag and defaults
+  `factory-version` to it (`scripts/check-release-refs.sh`), and commits
+  and tags nothing otherwise; `release.yml` runs the same check on the
+  tagged tree and fails the release if it fails, and the tests, run there
+  on the tag, require `app.yml`'s nested refs to be the tag.
 - `build` gives the container runtime the real paths of the directories it
   mounts into the BuildKit container (symbolic links resolved). On macOS,
   `/tmp` is `/private/tmp`: a Podman machine shares `/private`, but the

@@ -53,10 +53,14 @@
 # The jobs are factory's own reusable workflows, so images are signed as
 # before, by images.yml, fleet.yml, and reattest.yml, and the signer
 # identity init writes accepts them. A release's app.yml calls them at
-# that release (scripts/release.sh moves the refs from main to the tag;
-# between releases, main's may name main). The caller grants every
-# permission they ask for: GitHub fails a run whose called workflow asks
-# for more.
+# that release's tag, whether the caller pins app.yml by the tag or by
+# its commit (so pinning app.yml by SHA doesn't freeze them at that
+# commit). scripts/release.sh moves the refs to the tag in the release
+# commit, on main, and release.yml fails a tag whose refs don't name it;
+# so after a release main's app.yml calls the last release's workflows
+# (before the first, main's), and a change to them reaches app.yml at
+# the next release. The caller grants every permission they ask for:
+# GitHub fails a run whose called workflow asks for more.
 name: app
 on:
   workflow_call:

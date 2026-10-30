@@ -189,9 +189,12 @@ func checkCalls(t *testing.T, where string, b []byte, local func(path string) []
 }
 
 // app.yml calls factory's reusable workflows as they take it, all at one
-// ref: main between releases, else the release its factory-version
-// default names (scripts/release.sh moves both), so a caller pinning
-// app.yml gets the workflows of the same release.
+// ref: main (before the first release), else a release, the one its
+// factory-version default names (scripts/release.sh moves both). In a
+// release's own build (GITHUB_REF_TYPE tag, as release.yml runs the
+// tests), they must name that tag: a caller pinning app.yml gets the
+// workflows of the same release. scripts/check-release-refs.sh checks the
+// same in release.sh and release.yml.
 func TestAppWorkflowCalls(t *testing.T) {
 	b := repoFile(t, ".github/workflows/app.yml")
 	refs := checkCalls(t, "app.yml", b, nil)
@@ -215,8 +218,16 @@ func TestAppWorkflowCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	release, _ := wf.On.WorkflowCall.Inputs["factory-version"].Default.(string)
+	if tag := os.Getenv("GITHUB_REF_NAME"); os.Getenv("GITHUB_REF_TYPE") == "tag" && releaseRE.MatchString(tag) {
+		for _, ref := range refs {
+			if ref != tag || release != tag {
+				t.Errorf("release %s: app.yml calls factory's workflows at %v, factory-version %s; want them all at %s", tag, refs, release, tag)
+				break
+			}
+		}
+	}
 	for _, ref := range refs {
-		if ref != refs[0] || (ref != "main" && ref != release) {
+		if ref != refs[0] || (ref != "main" && (!releaseRE.MatchString(ref) || ref != release)) {
 			t.Errorf("app.yml calls factory's workflows at %v; want them all at main or %s (its factory-version)", refs, release)
 			break
 		}

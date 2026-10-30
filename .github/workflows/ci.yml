@@ -34,6 +34,8 @@ jobs:
         run: .github/scripts/notify-dependents_test.sh
       - name: The action installs the release its tag or commit names
         run: .github/scripts/action-version_test.sh
+      - name: release.sh tags only a tree whose workflows name the release
+        run: .github/scripts/release_test.sh
       - name: app.yml runs what each event needs
         run: .github/scripts/app-plan_test.sh
       - name: registry-login picks one cloud's complete inputs, or fails
