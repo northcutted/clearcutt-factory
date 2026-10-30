@@ -1,0 +1,42 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/northcutted/clearcutt-factory/v1.2.3/schemas/org.schema.json
+# Org profile: every manifest below this directory inherits these choices.
+apiVersion: factory.clearcutt.dev/v1alpha1
+kind: OrgProfile
+
+registry: ghcr.io/acme # images go to <registry>/<metadata.name>
+tags: [latest]
+
+defaults:
+  base: cgr.dev/chainguard/wolfi-base:latest
+  platforms: [linux/amd64, linux/arm64]
+
+signing:
+  mode: keyless # Sigstore, with the CI workflow's OIDC identity
+  verify:
+    # Images are signed inside ClearCutt Factory's reusable workflows, so the
+    # certificate names those workflows, at the release tag they are called
+    # by. Keep reattest in the regexp before enabling its schedule: a newly
+    # attached report must verify too.
+    # Any repository can call them, so
+    # sourceRepository binds signatures to runs in this repository, and
+    # sourceRef to runs on the branch that publishes (the reusable workflows
+    # publish only from the default branch, or their publish-ref input).
+    certificateIdentityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@refs/tags/v\d+\.\d+\.\d+$
+    certificateOIDCIssuer: https://token.actions.githubusercontent.com
+    sourceRepository: https://github.com/Acme/platform-images
+    sourceRef: refs/heads/main
+  # Stacks from a platform repository have their own signer, for
+  # policy.requireSignedStacks:
+  # stacks:
+  #   certificateIdentity: https://github.com/OWNER/platform/.github/workflows/stacks.yml@refs/heads/main
+  #   certificateOIDCIssuer: https://token.actions.githubusercontent.com
+
+vulnerabilities:
+  scanner: grype
+  failOn: critical
+  onlyFixed: true # don't block on CVEs nobody can fix yet
+
+policy:
+  requireNonRoot: true
+  # allowedRegistries: [cgr.dev/chainguard/, ghcr.io/]
+  # allowedHosts: [github.com, dl.k8s.io]

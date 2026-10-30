@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/northcutted/clearcutt-factory/{% .Ref %}/schemas/manifest.schema.json
+# This repository's app. The platform's stack builds its source (this
+# directory, less what git doesn't track and what exclude leaves out) in the
+# stack's build image and puts the result on its run image. Run
+# clearcutt-factory lock to pin both.
+apiVersion: factory.clearcutt.dev/v1alpha1
+kind: App
+metadata:
+  name: {% .Name %}
+spec:
+  stack: {% .Stack %}
+  exclude: [.github/] # a workflow change doesn't change the app
+  labels:
+    # Required by the platform's policy, and the repository the image
+    # signer accepts runs from (sourceMatchesImage).
+    org.opencontainers.image.source: https://github.com/{% .Repo %}

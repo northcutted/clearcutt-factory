@@ -217,6 +217,15 @@ type Policy struct {
 	// a signature from the org's stack signer: signing.stacks (else
 	// signing.verify), or the stack signers of signing.trustPolicy.
 	RequireSignedStacks bool `yaml:"requireSignedStacks,omitempty"`
+	// RequireSignedBases requires an app's bases, the build and run images
+	// its stack names, to carry a signature from one of the org's
+	// repository-scoped image signers: those that name a sourceRepository
+	// (BaseSigners). An owner-scoped signer (sourceRepositoryOwner alone)
+	// accepts a run in any of the owner's repositories, so it never
+	// vouches for an image every app builds or ships on. Checked when a
+	// lock pins the bases, when an app is built on them or rebased onto a
+	// run image, and when stack push publishes a stack naming them.
+	RequireSignedBases bool `yaml:"requireSignedBases,omitempty"`
 	// RequireOfflineBuildTools runs the scripts of from: build tools with
 	// no network (RUN --network=none), so they can only use what their
 	// builder image holds.

@@ -4,8 +4,13 @@
 #
 # At a release tag, the action downloads that release's binary and verifies
 # its Sigstore signature (made by this repository's release workflow at that
-# tag) before putting it on PATH. At any other ref, or as a local action
-# (uses: ./), it builds the binary from the action's own source.
+# tag) before putting it on PATH. Pinned by commit, it does the same for the
+# release whose tag points at exactly that commit, and also requires the
+# signature to come from the release workflow running at that commit, so a
+# tag moved or added elsewhere can't substitute another commit's binary. A
+# commit no release tag points at is built from source at that commit, with
+# a notice saying so. At any other ref, or as a local action (uses: ./), it
+# builds the binary from the action's own source.
 name: ClearCutt Factory
 description: Install clearcutt-factory (signature-verified) and the cosign, syft, and grype it uses
 author: northcutted
@@ -14,7 +19,7 @@ branding:
   color: green
 inputs:
   version:
-    description: Release to install, e.g. v0.1.0. Default is the tag this action was used at; "source" (or a non-tag ref) builds from the action's source.
+    description: Release to install, e.g. v0.1.0. Default is the tag this action was used at, or the release whose tag points at the commit it is pinned to (signed at that commit); "source", a commit no release tag points at (with a notice), or another ref builds from the action's source.
     required: false
     default: ""
   tools:
@@ -37,6 +42,30 @@ runs:
       run: |
         v=$INPUT
         if [ -z "$v" ] && [[ "$ACTION_REF" =~ ^v[0-9] ]]; then v=$ACTION_REF; fi
+        # Pinned by commit: the release whose tag points at exactly that
+        # commit (an annotated tag by its peeled commit; the newest, if
+        # several do). The install step also checks that the release
+        # workflow signed it at that commit (commit, below). A failed lookup
+        # is an error: it never turns a pin into a build from source.
+        if [ -z "$v" ] && [[ "$ACTION_REF" =~ ^[0-9a-f]{40}$ ]]; then
+          if ! tags=$(git ls-remote --tags https://github.com/northcutted/clearcutt-factory); then
+            echo "::error::could not list clearcutt-factory's tags to find the release at commit $ACTION_REF; rerun, or set the version input"
+            exit 1
+          fi
+          v=$(awk -v sha="$ACTION_REF" '
+              { name = $2; sub("^refs/tags/", "", name)
+                if (sub("[\\^][{][}]$", "", name)) peeled[name] = $1; else direct[name] = $1 }
+              END { for (name in direct) if (((name in peeled) ? peeled[name] : direct[name]) == sha && name ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/) print substr(name, 2) }' <<<"$tags" |
+            sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
+          if [ -n "$v" ]; then
+            v=v$v
+            echo "commit=$ACTION_REF" >> "$GITHUB_OUTPUT"
+            echo "commit $ACTION_REF is release $v"
+          else
+            echo "::notice::no clearcutt-factory release tag points at commit $ACTION_REF: building it from source at that commit, not installing a signed release"
+            v=source
+          fi
+        fi
         if [ -z "$v" ] || ! [[ "$v" =~ ^v[0-9] ]]; then v=source; fi
         echo "version=$v" >> "$GITHUB_OUTPUT"
 
@@ -71,6 +100,7 @@ runs:
       shell: bash
       env:
         VERSION: ${{ steps.version.outputs.version }}
+        COMMIT: ${{ steps.version.outputs.commit }}
         SRC: ${{ github.action_path }}
         REPO: northcutted/clearcutt-factory
       run: | # zizmor: ignore[github-env]
@@ -91,10 +121,15 @@ runs:
           url="https://github.com/$REPO/releases/download/$VERSION"
           curl -fsSL --retry 3 -o "$bin/clearcutt-factory" "$url/$asset"
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/clearcutt-factory/$asset.sigstore.json" "$url/$asset.sigstore.json"
+          # Pinned by commit: signed by the release workflow running at
+          # that commit, not just at a tag that now names it.
+          at=()
+          if [ -n "${COMMIT:-}" ]; then at=(--certificate-github-workflow-sha "$COMMIT"); fi
           cosign verify-blob \
             --bundle "$RUNNER_TEMP/clearcutt-factory/$asset.sigstore.json" \
             --certificate-identity "https://github.com/$REPO/.github/workflows/release.yml@refs/tags/$VERSION" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            ${at[@]+"${at[@]}"} \
             "$bin/clearcutt-factory"
           chmod +x "$bin/clearcutt-factory"
         fi

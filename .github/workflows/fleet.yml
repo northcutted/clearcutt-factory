@@ -76,6 +76,34 @@ on:
         description: 'Turn on GitHub auto-merge (merge commit) for the pull requests of these kinds, space-separated, so each merges by itself once the base branch''s required checks pass: pin (the lock pinned to the run image the app was rebased onto), rebuild (the rebase was refused; the lock moves to the newest run and build images), or all. Default none. Needs "Allow auto-merge" in the repository settings, branch protection with required status checks, and pull requests from a GitHub App or CLEARCUTT_BOT_TOKEN (GITHUB_TOKEN''s get no CI). When it can''t be turned on, the pull request stays open with a warning'
         type: string
         default: ""
+      aws-role-arn:
+        description: 'Log in to Amazon ECR (the registry input: ACCOUNT.dkr.ecr.REGION.amazonaws.com) by assuming this IAM role with GitHub OIDC, instead of with REGISTRY_USERNAME and REGISTRY_PASSWORD (registry-login/action.yml, in the factory-version release)'
+        type: string
+        default: ""
+      aws-region:
+        description: With aws-role-arn, the region (default the registry's)
+        type: string
+        default: ""
+      gcp-workload-identity-provider:
+        description: 'Log in to Google Artifact Registry (the registry input: REGION-docker.pkg.dev) as gcp-service-account, through this workload identity provider (projects/NUMBER/locations/global/workloadIdentityPools/POOL/providers/PROVIDER) with GitHub OIDC'
+        type: string
+        default: ""
+      gcp-service-account:
+        description: With gcp-workload-identity-provider, the service account to impersonate
+        type: string
+        default: ""
+      azure-client-id:
+        description: 'Log in to Azure Container Registry (the registry input: NAME.azurecr.io) as this app registration or managed identity, federated with GitHub OIDC; with azure-tenant-id and azure-subscription-id'
+        type: string
+        default: ""
+      azure-tenant-id:
+        description: With azure-client-id, its tenant ID
+        type: string
+        default: ""
+      azure-subscription-id:
+        description: With azure-client-id, the subscription ID
+        type: string
+        default: ""
     secrets:
       CLEARCUTT_APP_PRIVATE_KEY:
         description: Private key of the GitHub App named by app-id or CLEARCUTT_APP_ID
@@ -101,6 +129,9 @@ env:
   FACTORY_VERSION: ${{ inputs.factory-version || 'source' }}
   APPS: ${{ inputs.apps || 'examples/*/app.yaml' }}
   REGISTRY: ${{ inputs.registry || 'ghcr.io' }}
+  # Log in by OIDC federation (registry-login/action.yml) instead of with a
+  # username and password, when any of its inputs is set.
+  OIDC_LOGIN: ${{ format('{0}{1}{2}{3}{4}{5}{6}', inputs.aws-role-arn, inputs.aws-region, inputs.gcp-workload-identity-provider, inputs.gcp-service-account, inputs.azure-client-id, inputs.azure-tenant-id, inputs.azure-subscription-id) != '' }}
 jobs:
   apps:
     # After the images workflow, only a successful push: it also runs for
@@ -216,11 +247,23 @@ jobs:
           # The privileged binfmt image, pinned (update: crane digest tonistiigi/binfmt:<tag>).
           image: docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.PUBLISH == 'true'
+        if: env.PUBLISH == 'true' && env.OIDC_LOGIN != 'true'
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.REGISTRY_USERNAME || github.actor }}
           password: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
+      - name: Log in to ${{ env.REGISTRY }} by OIDC federation
+        if: env.PUBLISH == 'true' && env.OIDC_LOGIN == 'true'
+        uses: ./.clearcutt-factory/registry-login
+        with:
+          registry: ${{ env.REGISTRY }}
+          aws-role-arn: ${{ inputs.aws-role-arn }}
+          aws-region: ${{ inputs.aws-region }}
+          gcp-workload-identity-provider: ${{ inputs.gcp-workload-identity-provider }}
+          gcp-service-account: ${{ inputs.gcp-service-account }}
+          azure-client-id: ${{ inputs.azure-client-id }}
+          azure-tenant-id: ${{ inputs.azure-tenant-id }}
+          azure-subscription-id: ${{ inputs.azure-subscription-id }}
 
       - name: Rebase onto the newest run image
         id: rebase

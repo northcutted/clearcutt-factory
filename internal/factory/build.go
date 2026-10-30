@@ -84,6 +84,10 @@ func Build(ctx context.Context, opts Options, bo BuildOptions) error {
 	if err := policy.Check(m, org, l); err != nil {
 		return err
 	}
+	// A lock edited to pin another base fails here, before it is built on.
+	if err := verifyLockedBases(ctx, org, l); err != nil {
+		return err
+	}
 	out, err := render.Render(m, l)
 	if err != nil {
 		return err
@@ -322,6 +326,12 @@ func runBuild(ctx context.Context, opts Options, org *manifest.Org, req builder.
 	}
 	res, err := builder.Build(ctx, cfg, req)
 	if err != nil {
+		// The runtime couldn't see a directory: the error says why, and
+		// the log holds nothing more.
+		var nse *builder.NotSharedError
+		if errors.As(err, &nse) {
+			return nil, err
+		}
 		if !opts.Verbose {
 			opts.logf("%s", buildFailure(logPath))
 		}

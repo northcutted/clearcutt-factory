@@ -75,6 +75,9 @@ func Verify(ctx context.Context, opts Options, vo VerifyOptions) error {
 		if err != nil {
 			return err
 		}
+		if err := verifyLockedBases(ctx, o, l); err != nil {
+			return err
+		}
 		org = o
 		out, err := render.Render(m, l)
 		if err != nil {
@@ -279,9 +282,14 @@ func safeName(s string) string {
 // with sourceMatchesImage. A signer whose constraints can't be met is
 // skipped; if none is left, the reasons are returned.
 func signerArgs(o *manifest.Org, role, imageSource string) ([][]string, error) {
+	return argsOf(o.Signers(role), imageSource)
+}
+
+// argsOf is signerArgs for the signers given.
+func argsOf(signers []manifest.VerifyIdentity, imageSource string) ([][]string, error) {
 	var out [][]string
 	var errs []error
-	for _, v := range o.Signers(role) {
+	for _, v := range signers {
 		args, err := identityArgs(v, imageSource)
 		if err != nil {
 			errs = append(errs, err)
@@ -329,7 +337,11 @@ func identityArgs(v manifest.VerifyIdentity, imageSource string) ([]string, erro
 	}
 	if owner := strings.TrimSuffix(v.SourceRepositoryOwner, "/"); owner != "" {
 		if repo == "" {
-			return nil, errors.New("sourceRepositoryOwner needs sourceRepository or sourceMatchesImage: cosign checks one exact repository")
+			// clearcutt-verify reads the repository from each certificate
+			// before it runs cosign; factory hands cosign the signer as
+			// configured, so it skips this signer rather than accept any
+			// repository at all.
+			return nil, fmt.Errorf("sourceRepositoryOwner %s alone: factory has cosign check one exact repository, so add sourceMatchesImage: true (the repository the image names as its source, which must be %s's) or sourceRepository", owner, owner)
 		}
 		if !strings.HasPrefix(repo, owner+"/") {
 			return nil, fmt.Errorf("%s is not one of %s's repositories", repo, owner)
@@ -351,7 +363,11 @@ func identityArgs(v manifest.VerifyIdentity, imageSource string) ([]string, erro
 // needsImageSource reports whether any signer for role checks the image's
 // source repository.
 func needsImageSource(o *manifest.Org, role string) bool {
-	for _, v := range o.Signers(role) {
+	return matchesImage(o.Signers(role))
+}
+
+func matchesImage(signers []manifest.VerifyIdentity) bool {
+	for _, v := range signers {
 		if v.SourceMatchesImage {
 			return true
 		}

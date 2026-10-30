@@ -199,6 +199,9 @@ func rebaseImage(ctx context.Context, opts Options, org *manifest.Org, ro Rebase
 	if err := policy.CheckImages(org, plan.onto.Name); err != nil {
 		return "", "", err
 	}
+	if err := verifyBase(ctx, org, "run image", plan.onto.Ref); err != nil {
+		return "", "", err
+	}
 	tags := ro.Tags
 	if len(tags) == 0 && plan.tag != "" {
 		tags = []string{plan.tag}

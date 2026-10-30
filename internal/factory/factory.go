@@ -214,6 +214,11 @@ func lockManifest(ctx context.Context, opts Options, m *manifest.Manifest, org *
 	if err := policy.Check(m, org, l); err != nil {
 		return err
 	}
+	// The bases it pins, under policy.requireSignedBases: a lock never pins
+	// a base the platform's signer didn't sign.
+	if err := verifyLockedBases(ctx, org, l); err != nil {
+		return err
+	}
 	// Rendered before anything is written: a lock the Containerfile can't
 	// be rendered from is never on disk.
 	out, err := render.Render(m, l)

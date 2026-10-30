@@ -23,6 +23,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # A caller pinning app.yml (or any reusable workflow) at this tag must
+      # get this release's nested workflows and binary, not main's: every
+      # call of factory's own, and every factory-version default, names it.
+      - name: The workflows call factory's own at this tag
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: scripts/check-release-refs.sh "$VERSION"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod

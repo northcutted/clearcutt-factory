@@ -183,6 +183,8 @@ func TestExtendRefusesLoosening(t *testing.T) {
 		{"no scanner", sharedProfile, "vulnerabilities: {scanner: none}\n", "vulnerabilities.scanner: the shared profile sets grype"},
 		{"no SBOM scan", sharedProfile, "sbom: {scan: false}\n", "sbom.scan: the shared profile scans"},
 		{"requireSignedStacks off", sharedProfile, "policy: {requireSignedStacks: false}\n", "policy.requireSignedStacks: the shared profile turns it on"},
+		{"requireSignedBases off", strings.Replace(sharedProfile, "  stacks: {", "  verify: {certificateIdentityRegexp: x, certificateOIDCIssuer: \""+GitHubActionsIssuer+"\", sourceRepository: \"https://github.com/acme/platform\"}\n  stacks: {", 1) + "  requireSignedBases: true\n",
+			"policy: {requireSignedBases: false}\n", "policy.requireSignedBases: the shared profile turns it on"},
 		{"requireNonRoot off", sharedProfile + "  requireNonRoot: true\n", "policy: {requireNonRoot: false}\n", "policy.requireNonRoot: the shared profile turns it on"},
 		{"registry outside", sharedProfile, "policy: {allowedRegistries: [ghcr.io/acme/apps/, docker.io/]}\n", "policy.allowedRegistries: docker.io/ is outside"},
 		{"registry beside a shared entry", strings.Replace(sharedProfile, "ghcr.io/acme/,", "ghcr.io/acme,", 1), "policy: {allowedRegistries: [ghcr.io/acme-evil]}\n", "policy.allowedRegistries: ghcr.io/acme-evil is outside"},
@@ -333,6 +335,9 @@ func TestSharedProfileChecks(t *testing.T) {
 		{"this machine's builder", map[string]string{OrgFileName: strings.Replace(sharedProfile, "builder:\n", "builder:\n  network: host\n", 1)}, "builder.network describes the machine that builds"},
 		{"a private key file", map[string]string{OrgFileName: strings.Replace(sharedProfile, "  mode: keyless\n", "  mode: key\n  key: cosign.key\n", 1)}, "signing.key is a key file, and a published profile can't carry a private key"},
 		{"signed stacks, no stack signer", map[string]string{OrgFileName: strings.Replace(sharedProfile, "  stacks: {", "  # {", 1)}, "policy.requireSignedStacks: name the stack signer"},
+		// An owner-scoped image signer never vouches for a base.
+		{"signed bases, an owner-scoped signer only", map[string]string{OrgFileName: strings.Replace(sharedProfile, "  stacks: {", "  verify: {certificateIdentityRegexp: x, certificateOIDCIssuer: \""+GitHubActionsIssuer+"\", sourceRepositoryOwner: \"https://github.com/acme\", sourceMatchesImage: true}\n  stacks: {", 1) + "  requireSignedBases: true\n"},
+			"policy.requireSignedBases: name the image signer of the repository that publishes the stacks' images"},
 		{"VEX outside", map[string]string{OrgFileName: strings.Replace(sharedProfile, "vex/platform.json", "../platform.json", 1)}, "is outside the shared profile"},
 		{"a trust policy key outside", map[string]string{
 			OrgFileName:  strings.Replace(sharedProfile, "  stacks: {", "  trustPolicy: trust.yaml\n  # {", 1),

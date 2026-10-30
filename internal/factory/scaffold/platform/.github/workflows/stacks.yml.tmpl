@@ -1,0 +1,82 @@
+# Pushes the stacks (stacks/*.yaml) to {% .Registry %}/stacks/<name>:1 and
+# signs them keylessly as this workflow:
+#
+#   https://github.com/{% .Repo %}/.github/workflows/stacks.yml@refs/heads/{% .Branch %}
+#
+# which org/trust.yaml names as the only stack signer. It must stay a
+# workflow file of its own (called from platform.yml, or dispatched) for that
+# identity to hold. A stack is published by its content: an unchanged one
+# only moves its tag, so this can run after every publish.
+#
+# Output: published, the newly pushed stacks as a JSON array of
+# {kind: stack, image, repository, digest, tags}, for notify.yml.
+name: stacks
+on:
+  workflow_call:
+    outputs:
+      published:
+        description: Newly pushed stacks, a JSON array for notify.yml
+        value: ${{ jobs.push.outputs.published }}
+{% if .LoginHost %}    secrets:
+      REGISTRY_USERNAME:
+        required: true
+      REGISTRY_PASSWORD:
+        required: true
+{% end %}  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: stacks-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  push:
+    if: github.ref == 'refs/heads/{% .Branch %}'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write # push the stacks
+      id-token: write # keyless signing
+    outputs:
+      published: ${{ steps.push.outputs.published }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: northcutted/clearcutt-factory@{% .Ref %}
+        with:
+          tools: "false"
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+{% if .LoginHost %}          registry: {% .LoginHost %}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+{% else %}          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+{% end %}      - name: Push and sign every stack
+        id: push
+        env:
+          REGISTRY: {% .Registry %}/stacks
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          : > "$RUNNER_TEMP/published.jsonl"
+          for file in stacks/*.yaml; do
+            name=$(basename "$file" .yaml)
+            out="$RUNNER_TEMP/stack-$name.out"
+            # stack push writes image, repository, digest, and published to
+            # $GITHUB_OUTPUT; give each stack a file of its own.
+            GITHUB_OUTPUT="$out" clearcutt-factory stack push -f "$file" --ref "$REGISTRY/$name:1"
+            if grep -qx 'published=true' "$out"; then
+              jq -n -c --arg image "$(sed -n 's/^image=//p' "$out")" --arg repository "$(sed -n 's/^repository=//p' "$out")" \
+                --arg digest "$(sed -n 's/^digest=//p' "$out")" \
+                '{kind: "stack", image: $image, repository: $repository, digest: $digest, tags: ["1"]}' >> "$RUNNER_TEMP/published.jsonl"
+            fi
+          done
+          published=$(jq -s -c . "$RUNNER_TEMP/published.jsonl")
+          echo "published=$published" >> "$GITHUB_OUTPUT"
+          echo "newly published: $published"

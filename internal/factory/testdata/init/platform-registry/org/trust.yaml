@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/northcutted/clearcutt-verify/main/contract/trust-policy.v1.schema.json
+# Whose signatures acme accepts, and for what. One file, read by
+# clearcutt-factory (signing.trustPolicy in profile.yaml, which every
+# repository extends) and by clearcutt-verify (the estate's policy), so
+# building, rebasing, and verifying the estate trust the same signers.
+apiVersion: clearcutt.dev/v1
+kind: TrustPolicy
+signers:
+  # Images are signed inside factory's reusable workflows (images.yml when
+  # built, fleet.yml when rebased, reattest.yml when rescanned), at a release
+  # tag, which any repository can call. So each signer also says whose runs
+  # count, and requires the image to name that repository as its source
+  # (sourceMatchesImage: its org.opencontainers.image.source label, which
+  # the profile requires) and the run to be on trunk (sourceRef).
+  # With init --allow-commit-pins, they also accept the workflows at any
+  # commit in factory's fork network; naming the commits you pin is safer
+  # (docs/adopting.md).
+  #
+  # This repository's images: the run and build images the stacks name,
+  # which every app builds and ships on. With policy.requireSignedBases
+  # (profile.yaml), factory checks an app's bases only against signers that
+  # name one repository (sourceRepository), like this one, never against
+  # the owner-scoped signer below: that would let any of acme's
+  # repositories vouch for what every app ships on, with write access to
+  # the registry the only other boundary.
+  - name: platform-images
+    roles: [image]
+    identityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$
+    issuer: https://token.actions.githubusercontent.com
+    sourceRepository: https://github.com/acme/platform
+    sourceMatchesImage: true
+    sourceRef: refs/heads/trunk
+  # The apps' images: a run in any repository of acme
+  # (sourceRepositoryOwner) that the image names as its source, so a new
+  # app repository needs no change here. To trust only some of the owner's
+  # repositories, give each a signer of its own with sourceRepository
+  # instead.
+  - name: app-images
+    roles: [image]
+    identityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$
+    issuer: https://token.actions.githubusercontent.com
+    sourceRepositoryOwner: https://github.com/acme
+    sourceMatchesImage: true
+    sourceRef: refs/heads/trunk
+  # Stacks: only this repository's stacks workflow, on trunk.
+  - name: stacks
+    roles: [stack]
+    identity: https://github.com/acme/platform/.github/workflows/stacks.yml@refs/heads/trunk
+    issuer: https://token.actions.githubusercontent.com

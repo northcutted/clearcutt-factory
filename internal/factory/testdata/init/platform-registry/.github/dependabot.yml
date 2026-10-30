@@ -1,0 +1,21 @@
+# Dependabot keeps what this repository pins current: the actions and ClearCutt
+# reusable workflows its workflows call. The ClearCutt pins
+# (clearcutt-factory, -verify, -portal) are grouped so they move together;
+# the image signer identity accepts any factory release tag (or commit), so
+# a factory bump keeps images verifiable. Image inputs are factory's own:
+# its lock updates re-resolve them. A new version is proposed once it is a
+# week old (cooldown), so a release that is withdrawn soon after it was
+# published never arrives; security updates don't wait.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      clearcutt:
+        patterns: ["northcutted/clearcutt-*"]
+      actions:
+        patterns: ["*"]

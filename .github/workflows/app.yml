@@ -1,0 +1,373 @@
+# Everything an app repository runs, in one call: build and publish the app
+# (images.yml), reproduce it on a second runner, rebase it onto new run
+# images (fleet.yml), propose lock updates and rebuilds (update-locks.yml),
+# renew its evidence (reattest.yml), and tell the estate repository it
+# changed (notify.yml). An app repository is then its app.yaml, its org
+# profile, and a caller like this one (clearcutt-factory init --app writes
+# it):
+#
+#   on:
+#     push:
+#       branches: [main]
+#     pull_request:
+#     schedule:
+#       - cron: "23 6 * * 1" # weekly: every input (the weekly input)
+#       - cron: "41 5 * * *" # daily: rebase, rebuild on new build images, rescan
+#     workflow_dispatch:
+#     repository_dispatch:
+#       types: [clearcutt.run-image-published, clearcutt.build-image-published, clearcutt.stack-published, clearcutt.profile-published]
+#   permissions:
+#     contents: read
+#   jobs:
+#     app:
+#       uses: northcutted/clearcutt-factory/.github/workflows/app.yml@v0.4.1
+#       permissions: {contents: write, pull-requests: write, packages: write, id-token: write, attestations: write}
+#       with:
+#         estate: estate # the estate repository to refresh; omit for none
+#       secrets:
+#         CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+#         CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+#
+# What each event runs (the plan job decides, from the caller's event):
+#
+#   pull_request, merge_group        images: build, smoke-test, scan, gate (changed-only)
+#   push                             images: publish; then fleet, while reproduce
+#                                    rebuilds what was published on a second runner
+#   schedule, the weekly input's     update-locks, update: all
+#   any other schedule (daily)       fleet, update-locks (update: stack), reattest
+#   clearcutt.run-image-published    fleet
+#   clearcutt.build-image-published,
+#   clearcutt.stack-published        update-locks, update: stack
+#   clearcutt.profile-published      update-locks, update: all
+#   workflow_dispatch                the run input, or the dispatch's own run
+#                                    input: images, fleet, update-locks,
+#                                    reattest, or all (images, fleet, and
+#                                    update-locks; the default)
+#
+# Then, with the estate input, clearcutt.estate-changed goes to the estate
+# repository once the app was published (and reproduced) or rebased, on any
+# event but pull requests and schedules (the estate's own daily run follows
+# those). Branch protection requires <caller job> / images / result (app /
+# images / result for the caller above).
+#
+# The jobs are factory's own reusable workflows, so images are signed as
+# before, by images.yml, fleet.yml, and reattest.yml, and the signer
+# identity init writes accepts them. A release's app.yml calls them at
+# that release's tag, whether the caller pins app.yml by the tag or by
+# its commit (so pinning app.yml by SHA doesn't freeze them at that
+# commit). scripts/release.sh moves the refs to the tag in the release
+# commit, on main, and release.yml fails a tag whose refs don't name it;
+# so after a release main's app.yml calls the last release's workflows
+# (before the first, main's), and a change to them reaches app.yml at
+# the next release. The caller grants every permission they ask for:
+# GitHub fails a run whose called workflow asks for more.
+name: app
+on:
+  workflow_call:
+    inputs:
+      manifests:
+        description: App manifest globs, space-separated (bash globstar)
+        type: string
+        default: "**/app.yaml"
+      estate:
+        description: 'The estate repository (a name in the owner, or OWNER/NAME) to send clearcutt.estate-changed when the app is published or rebased, so its report refreshes now; empty for none'
+        type: string
+        default: ""
+      registry:
+        description: Registry to log in to before pushing
+        type: string
+        default: ghcr.io
+      changed-only:
+        description: On a pull request, build only the manifests its changes affect (see images.yml)
+        type: boolean
+        default: true
+      publish-ref:
+        description: 'A ref (or bash glob, e.g. refs/heads/release/*) that publishes too, besides the default branch'
+        type: string
+        default: ""
+      auto-merge:
+        description: 'Turn on GitHub auto-merge for the bot''s pull requests of these kinds, space-separated: pin and rebuild (fleet.yml), update and rebuild (update-locks.yml), or all. Default none. Needs "Allow auto-merge", branch protection with required checks (<caller job> / images / result), and pull requests from a GitHub App or CLEARCUTT_BOT_TOKEN'
+        type: string
+        default: ""
+      weekly:
+        description: The caller's weekly schedule (its cron string), which re-resolves every input; any other schedule is the daily run
+        type: string
+        default: "23 6 * * 1"
+      run:
+        description: 'What a workflow_dispatch runs: images, fleet, update-locks, reattest, or all (space-separated). Default: the dispatch''s own run input, if the caller declares one, else all'
+        type: string
+        default: ""
+      reattest:
+        description: Renew the published image's vulnerability report (reattest.yml) on the daily run
+        type: boolean
+        default: true
+      older-than:
+        description: Rescan only reports older than this (reattest.yml)
+        type: string
+        default: 6d
+      provenance:
+        description: Add SLSA build provenance (GitHub artifact attestations)
+        type: boolean
+        default: true
+      app-id:
+        description: GitHub App to open pull requests and dispatch as, by Client ID or App ID (default the CLEARCUTT_APP_ID variable); needs the CLEARCUTT_APP_PRIVATE_KEY secret
+        type: string
+        default: ""
+      factory-version:
+        description: clearcutt-factory release to use
+        type: string
+        default: v0.4.1
+      aws-role-arn:
+        description: Log in to Amazon ECR by OIDC federation (see images.yml)
+        type: string
+        default: ""
+      aws-region:
+        description: With aws-role-arn, the region (default the registry's)
+        type: string
+        default: ""
+      gcp-workload-identity-provider:
+        description: Log in to Google Artifact Registry by OIDC federation, with gcp-service-account (see images.yml)
+        type: string
+        default: ""
+      gcp-service-account:
+        description: With gcp-workload-identity-provider, the service account to impersonate
+        type: string
+        default: ""
+      azure-client-id:
+        description: Log in to Azure Container Registry by OIDC federation, with azure-tenant-id and azure-subscription-id (see images.yml)
+        type: string
+        default: ""
+      azure-tenant-id:
+        description: With azure-client-id, its tenant ID
+        type: string
+        default: ""
+      azure-subscription-id:
+        description: With azure-client-id, the subscription ID
+        type: string
+        default: ""
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY:
+        description: Private key of the GitHub App named by app-id or CLEARCUTT_APP_ID
+        required: false
+      CLEARCUTT_BOT_TOKEN:
+        description: Token for the bot's pull requests and dispatches when there is no GitHub App
+        required: false
+      REGISTRY_USERNAME:
+        description: Registry user, for a registry other than ghcr.io
+        required: false
+      REGISTRY_PASSWORD:
+        description: Registry password or token, for a registry other than ghcr.io
+        required: false
+    outputs:
+      published:
+        description: What images.yml newly published (its published output); [] when it didn't run or published nothing
+        value: ${{ jobs.images.outputs.published || '[]' }}
+permissions:
+  contents: read
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      images: ${{ steps.plan.outputs.images }}
+      fleet: ${{ steps.plan.outputs.fleet }}
+      update: ${{ steps.plan.outputs.update }}
+      reattest: ${{ steps.plan.outputs.reattest }}
+      fleet-auto-merge: ${{ steps.plan.outputs.fleet-auto-merge }}
+      locks-auto-merge: ${{ steps.plan.outputs.locks-auto-merge }}
+    steps:
+      - name: What this event runs
+        id: plan
+        shell: bash
+        env:
+          WEEKLY: ${{ inputs.weekly }}
+          RUN: ${{ inputs.run }}
+          REATTEST: ${{ inputs.reattest }}
+          AUTO_MERGE: ${{ inputs.auto-merge }}
+        run: |
+          action=$(jq -r '.action // empty' "$GITHUB_EVENT_PATH")
+          schedule=$(jq -r '.schedule // empty' "$GITHUB_EVENT_PATH")
+          images=false fleet=false update="" reattest=false
+          case "$GITHUB_EVENT_NAME" in
+            pull_request | merge_group) images=true ;;
+            # After a push publishes, the fleet rebases onto any newer run image.
+            push) images=true fleet=true ;;
+            schedule)
+              if [ "$schedule" = "$WEEKLY" ]; then
+                update=all
+              else
+                fleet=true update=stack reattest=$REATTEST
+              fi
+              ;;
+            repository_dispatch)
+              case "$action" in
+                clearcutt.run-image-published) fleet=true ;;
+                clearcutt.build-image-published | clearcutt.stack-published) update=stack ;;
+                clearcutt.profile-published) update=all ;;
+                *) echo "::notice::repository_dispatch $action is not one of ClearCutt's: nothing to run" ;;
+              esac
+              ;;
+            workflow_dispatch)
+              run=${RUN:-$(jq -r '.inputs.run // empty' "$GITHUB_EVENT_PATH")}
+              for r in ${run//,/ }; do
+                case "$r" in
+                  images) images=true ;;
+                  fleet) fleet=true ;;
+                  update-locks) update=all ;;
+                  reattest) reattest=true ;;
+                  all) images=true fleet=true update=all ;;
+                  *) echo "::error::run names images, fleet, update-locks, reattest, or all, not '$r'"; exit 1 ;;
+                esac
+              done
+              if [ -z "${run//[ ,]/}" ]; then images=true fleet=true update=all; fi
+              ;;
+            *) echo "::notice::$GITHUB_EVENT_NAME: nothing to run" ;;
+          esac
+          # auto-merge, as each workflow names its kinds.
+          fleet_merge="" locks_merge=""
+          for k in $AUTO_MERGE; do
+            case "$k" in
+              pin) fleet_merge+=" pin" ;;
+              update) locks_merge+=" update" ;;
+              rebuild | all) fleet_merge+=" $k" locks_merge+=" $k" ;;
+              *) echo "::error::auto-merge names pin, rebuild, update, or all, not '$k'"; exit 1 ;;
+            esac
+          done
+          {
+            echo "images=$images"
+            echo "fleet=$fleet"
+            echo "update=$update"
+            echo "reattest=$reattest"
+            echo "fleet-auto-merge=${fleet_merge# }"
+            echo "locks-auto-merge=${locks_merge# }"
+          } | tee -a "$GITHUB_OUTPUT"
+
+  images:
+    needs: plan
+    if: needs.plan.outputs.images == 'true'
+    uses: northcutted/clearcutt-factory/.github/workflows/images.yml@main
+    permissions: {contents: read, packages: write, id-token: write, attestations: write}
+    with:
+      manifests: ${{ inputs.manifests }}
+      registry: ${{ inputs.registry }}
+      provenance: ${{ inputs.provenance }}
+      changed-only: ${{ inputs.changed-only }}
+      publish-ref: ${{ inputs.publish-ref }}
+      factory-version: ${{ inputs.factory-version }}
+      reproduce: false # the reproduce job does it, so fleet and the estate don't wait
+      aws-role-arn: ${{ inputs.aws-role-arn }}
+      aws-region: ${{ inputs.aws-region }}
+      gcp-workload-identity-provider: ${{ inputs.gcp-workload-identity-provider }}
+      gcp-service-account: ${{ inputs.gcp-service-account }}
+      azure-client-id: ${{ inputs.azure-client-id }}
+      azure-tenant-id: ${{ inputs.azure-tenant-id }}
+      azure-subscription-id: ${{ inputs.azure-subscription-id }}
+    secrets:
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+
+  # images.yml again, given what images published: the app is rebuilt on a
+  # second runner from its signed recipe alone, and a match is attested. A
+  # failed reproduction fails the run.
+  reproduce:
+    needs: images
+    if: ${{ !cancelled() && needs.images.outputs.published != '[]' && needs.images.outputs.published != '' }}
+    uses: northcutted/clearcutt-factory/.github/workflows/images.yml@main
+    permissions: {contents: read, packages: write, id-token: write, attestations: write}
+    with:
+      published: ${{ needs.images.outputs.published }}
+      registry: ${{ inputs.registry }}
+      factory-version: ${{ inputs.factory-version }}
+      aws-role-arn: ${{ inputs.aws-role-arn }}
+      aws-region: ${{ inputs.aws-region }}
+      gcp-workload-identity-provider: ${{ inputs.gcp-workload-identity-provider }}
+      gcp-service-account: ${{ inputs.gcp-service-account }}
+      azure-client-id: ${{ inputs.azure-client-id }}
+      azure-tenant-id: ${{ inputs.azure-tenant-id }}
+      azure-subscription-id: ${{ inputs.azure-subscription-id }}
+    secrets:
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+
+  # After images, when it ran: only once it succeeded.
+  fleet:
+    needs: [plan, images]
+    if: ${{ !cancelled() && needs.plan.outputs.fleet == 'true' && (needs.plan.outputs.images != 'true' || needs.images.result == 'success') }}
+    uses: northcutted/clearcutt-factory/.github/workflows/fleet.yml@main
+    permissions: {contents: write, pull-requests: write, packages: write, id-token: write, attestations: write}
+    with:
+      apps: ${{ inputs.manifests }}
+      registry: ${{ inputs.registry }}
+      provenance: ${{ inputs.provenance }}
+      publish-ref: ${{ inputs.publish-ref }}
+      factory-version: ${{ inputs.factory-version }}
+      app-id: ${{ inputs.app-id }}
+      auto-merge: ${{ needs.plan.outputs.fleet-auto-merge }}
+      aws-role-arn: ${{ inputs.aws-role-arn }}
+      aws-region: ${{ inputs.aws-region }}
+      gcp-workload-identity-provider: ${{ inputs.gcp-workload-identity-provider }}
+      gcp-service-account: ${{ inputs.gcp-service-account }}
+      azure-client-id: ${{ inputs.azure-client-id }}
+      azure-tenant-id: ${{ inputs.azure-tenant-id }}
+      azure-subscription-id: ${{ inputs.azure-subscription-id }}
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+
+  update-locks:
+    needs: plan
+    if: needs.plan.outputs.update != ''
+    uses: northcutted/clearcutt-factory/.github/workflows/update-locks.yml@main
+    permissions: {contents: write, pull-requests: write}
+    with:
+      manifests: ${{ inputs.manifests }}
+      update: ${{ needs.plan.outputs.update }}
+      publish-ref: ${{ inputs.publish-ref }}
+      factory-version: ${{ inputs.factory-version }}
+      app-id: ${{ inputs.app-id }}
+      auto-merge: ${{ needs.plan.outputs.locks-auto-merge }}
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+
+  reattest:
+    needs: plan
+    if: needs.plan.outputs.reattest == 'true'
+    uses: northcutted/clearcutt-factory/.github/workflows/reattest.yml@main
+    permissions: {contents: read, packages: write, id-token: write}
+    with:
+      manifests: ${{ inputs.manifests }}
+      registry: ${{ inputs.registry }}
+      older-than: ${{ inputs.older-than }}
+      publish-ref: ${{ inputs.publish-ref }}
+      factory-version: ${{ inputs.factory-version }}
+      aws-role-arn: ${{ inputs.aws-role-arn }}
+      aws-region: ${{ inputs.aws-region }}
+      gcp-workload-identity-provider: ${{ inputs.gcp-workload-identity-provider }}
+      gcp-service-account: ${{ inputs.gcp-service-account }}
+      azure-client-id: ${{ inputs.azure-client-id }}
+      azure-tenant-id: ${{ inputs.azure-tenant-id }}
+      azure-subscription-id: ${{ inputs.azure-subscription-id }}
+    secrets:
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+
+  # The app changed (published, and reproduced, or rebased): refresh the
+  # estate's report now. Not on schedules: the estate's own daily run
+  # follows the daily fleet.
+  estate-changed:
+    needs: [plan, images, reproduce, fleet]
+    if: ${{ !cancelled() && inputs.estate != '' && github.event_name != 'pull_request' && github.event_name != 'merge_group' && github.event_name != 'schedule' && (needs.fleet.result == 'success' || needs.fleet.result == 'failure' || (needs.images.result == 'success' && needs.images.outputs.published != '[]' && needs.images.outputs.published != '')) }}
+    uses: northcutted/clearcutt-factory/.github/workflows/notify.yml@main
+    permissions: {contents: read}
+    with:
+      published: ${{ needs.images.outputs.published || '[]' }}
+      estate: ${{ inputs.estate }}
+      changed: ${{ needs.fleet.result == 'success' || needs.fleet.result == 'failure' }}
+      app-id: ${{ inputs.app-id }}
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}

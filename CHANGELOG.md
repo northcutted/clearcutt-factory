@@ -5,6 +5,167 @@ what may change between releases.
 
 ## Unreleased
 
+### Breaking
+
+- **A trust signer's `sourceRepositoryOwner` is read as clearcutt-verify
+  reads it.** It must be exactly `https://github.com/OWNER` (a trailing
+  slash allowed), and any source constraint (`sourceRepository`,
+  `sourceRepositoryOwner`, `sourceMatchesImage`, `sourceRef`) needs the
+  GitHub Actions issuer; a profile or trust policy that breaks either is
+  refused when it loads, as clearcutt-verify refuses the same trust policy.
+  Before, `sourceRepositoryOwner: https://github.com/acme/checkout` loaded
+  and then matched nothing. An owner alone, without `sourceMatchesImage`
+  or `sourceRepository`, which clearcutt-verify accepts (it reads the
+  repository from each certificate first), still can't be checked by
+  factory, which hands cosign one exact repository: that signer is
+  skipped, and the message now says what to add.
+
+### Added
+
+- **`policy.requireSignedBases`**: an app's bases, the build and run
+  images its stack names, must carry a signature from an image signer that
+  names one repository (`sourceRepository`), never an owner-scoped one
+  (`sourceRepositoryOwner` alone), which would let any of the owner's
+  repositories vouch for what every app ships on. `lock` and
+  `update-locks.yml` check what they pin, `build` and `verify` what the
+  lock pins, `rebase` and `fleet.yml` the run image they move an app onto,
+  and `stack push` the images a stack names before publishing it. It can
+  only be turned on by a profile that extends one, and a shared profile
+  that turns it on must name such a signer. `init --platform` turns it on,
+  and its trust policy now has two image signers: `platform-images`
+  (`sourceRepository`: the platform repository) and `app-images` (the
+  owner-scoped signer, as before, for apps).
+- **`clearcutt-factory doctor`** checks what factory needs, each failure
+  with its fix: the manifest, its org profile, and its lock (a lock a newer
+  release wrote names the release to install); docker or podman and its
+  server; that a container sees the repository and `--out` (a Podman
+  machine or Docker Desktop shares only some directories); the pinned
+  BuildKit, and every platform the manifest builds (QEMU); syft, grype, and
+  cosign (cosign 3) with their versions; push access to the manifest's
+  repository, without pushing; the GitHub App (its key signs a token GitHub
+  accepts; installed on the repository with contents and pull-requests
+  write) or `CLEARCUTT_BOT_TOKEN`; and that this binary is the release the
+  repository's workflows pin (their `uses:` ref, a commit mapped to its
+  release tag, or `factory-version`). `--json` prints `{version, ok,
+  checks: [{name, status (ok, warn, fail, skip), detail, fix}]}`; exit 1
+  when a check fails.
+- **`init --platform`, `init --app`, `init --estate`** write the three
+  shapes of repository the showcase runs, consistent with each other under
+  one registry layout (`<registry>/platform`, `/stacks`, `/factory/org:1`,
+  `/apps`, `/estate:latest`). `--platform`: run and build images, a Go
+  stack, the shared profile with an **owner-scoped trust policy for apps**
+  (the `app-images` signer has `sourceRepositoryOwner`, `sourceMatchesImage`,
+  and `sourceRef`, so a new app repository needs no platform change), a
+  repository-scoped `platform-images` signer for the platform's own images,
+  and `policy.requireSignedBases` (apps' bases rest on that signer only),
+  and the `platform.yml`,
+  `stacks.yml`, `profile.yml`, `update-locks.yml`, and `reattest.yml`
+  workflows. `--app`: `app.yaml` (with `--stack`), an org profile extending
+  the platform's (`--platform-repo`; its signature checked), and a caller
+  of `app.yml`. `--estate`: clearcutt-verify (v0.18.0) and clearcutt-portal
+  (v0.3.0) by release tag, with `--rescan`, a checksum-pinned grype,
+  `--reproduce`, the trust policy from the platform's signed profile, and
+  `estate pull` checked by the estate signer, as the showcase's estate
+  workflow does. New flags: `--app`, `--platform`, `--estate`, `--name`,
+  `--stack`, `--platform-repo`, `--estate-repo`; one that doesn't apply to
+  the kind is refused. With `--estate-repo`, the platform trusts the
+  estate's workflow as its estate signer, wakes only the apps its report
+  proves are built on a run image, and both platform and app send it
+  `clearcutt.estate-changed`. Golden files (`internal/factory/testdata/init`)
+  pin what each writes; CI runs actionlint and zizmor on them as adopters'
+  workflows.
+- **Every repository `init` sets up gets `.github/dependabot.yml`**: the
+  actions and ClearCutt workflows its workflows pin (the
+  `northcutted/clearcutt-*` pins grouped), and for an app its own
+  ecosystems (`gomod`, `npm`, `pip`, `cargo`, `maven`, `gradle`, `bundler`,
+  `composer`, `nuget`, by the manifests beside `app.yaml`), each proposed
+  once a week old.
+- **`app.yml`: an app repository in one call.** The new reusable workflow
+  runs everything an app repository needs, choosing from the caller's
+  event: `images.yml` (pull requests, pushes), a second-runner reproduction,
+  `fleet.yml` (after a push, daily, `clearcutt.run-image-published`),
+  `update-locks.yml` (weekly: every input; daily and on
+  `clearcutt.build-image-published`/`clearcutt.stack-published`: the stack;
+  on `clearcutt.profile-published`: every input), `reattest.yml` (daily),
+  and, with its `estate` input, `clearcutt.estate-changed` to the estate
+  repository. An app repository is its `app.yaml`, its org profile, and a
+  caller of about twenty lines, instead of a 95-line workflow with an
+  inline dispatch job. Its inputs are `manifests`, `estate`, `registry`,
+  `changed-only` (default `true`), `publish-ref`, `auto-merge` (`pin`,
+  `rebuild`, `update`, `all`), `weekly`, `run`, `reattest`, `older-than`,
+  `provenance`, `app-id`, `factory-version`, and the OIDC login inputs; its
+  secrets `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN`,
+  `REGISTRY_USERNAME`, `REGISTRY_PASSWORD`; its output `published`.
+  Branch protection requires `<caller job> / images / result`.
+- **Registry login by OIDC federation.** `images.yml`, `fleet.yml`, and
+  `reattest.yml` take `aws-role-arn` (and `aws-region`) for Amazon ECR,
+  `gcp-workload-identity-provider` and `gcp-service-account` for Google
+  Artifact Registry, and `azure-client-id`, `azure-tenant-id`, and
+  `azure-subscription-id` for Azure Container Registry: the job's GitHub
+  OIDC token is exchanged for short-lived registry credentials, so no
+  registry password is stored. The new `registry-login` action does it
+  (with the clouds' own actions, pinned by commit) and refuses inputs of
+  two clouds, one cloud's incomplete inputs, or a registry that isn't that
+  cloud's. `REGISTRY_USERNAME`/`REGISTRY_PASSWORD` work as before.
+- **`notify.yml` wakes only the apps built on a run image**, with the new
+  `estate-report` (an estate report bundle clearcutt-verify `estate push`
+  published) and `estate-report-signer` (who must have signed it) inputs:
+  a run image's dependents are the owner's repositories whose images the
+  report proves, by layer digest, are built on it (`clearcutt-verify estate
+  dependents`, v0.18.0, installed signature-verified). Build images, stacks,
+  profiles, and a run image the report can't answer for keep the topic
+  search, which stays the default. An empty answer is no answer: a run
+  image no image in the report is built on, or none by layer digest, goes
+  to the topic search with a warning naming it (`estate dependents` lists
+  nothing, and succeeds, for a base it doesn't know, as when the estate's
+  `refs.txt` doesn't list the apps' images yet).
+- `notify.yml`'s `estate` and `changed` inputs send `clearcutt.estate-changed`
+  (`{source, sha}`) to the estate repository when anything was published,
+  apps included, or `changed` is true, so the estate's report refreshes
+  now. The showcase's platform and app workflows did this with a job of
+  their own.
+- `init --allow-commit-pins` writes a signer identity that accepts
+  factory's signing workflows at any 40-hex commit as well as a release tag
+  (`…(images|fleet|reattest)\.yml@(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$`),
+  for callers that pin `images.yml`, `fleet.yml`, or `reattest.yml` by SHA.
+  Without it, `init` writes the tag-only regexp, as before. A commit can be
+  any in the repository's fork network (an impostor commit), so
+  docs/adopting.md recommends naming the exact commits pinned instead.
+  `app.yml` at a release, by its tag or its commit, calls its nested
+  workflows at the release's tag, so pinning `app.yml` by SHA needs no
+  change to the identity.
+
+### Changed
+
+- The action pinned by commit (`uses: northcutted/clearcutt-factory@<sha>`)
+  installs the release whose tag points at exactly that commit, its
+  signature checked as at the tag and also required to come from the
+  release workflow running at that commit
+  (`--certificate-github-workflow-sha`), so a moved or extra tag can't
+  substitute another commit's binary; it built the commit from source. A
+  commit no release tag points at still builds from source at that commit,
+  now with a `::notice::` saying so. A failed tag lookup (`git ls-remote`)
+  fails the step instead of quietly building from source.
+
+### Fixed
+
+- A release can't ship `app.yml` calling `main`: `scripts/release.sh`
+  checks, after moving the refs, that every reusable workflow calls
+  factory's own workflows and action at the new tag and defaults
+  `factory-version` to it (`scripts/check-release-refs.sh`), and commits
+  and tags nothing otherwise; `release.yml` runs the same check on the
+  tagged tree and fails the release if it fails, and the tests, run there
+  on the tag, require `app.yml`'s nested refs to be the tag.
+- `build` gives the container runtime the real paths of the directories it
+  mounts into the BuildKit container (symbolic links resolved). On macOS,
+  `/tmp` is `/private/tmp`: a Podman machine shares `/private`, but the
+  path `/tmp/x` named the VM's own `/tmp`, so `build --out /tmp/x` failed
+  with podman's `Error: statfs /tmp/x/…/context: no such file or
+  directory … exit status 125`. When the runtime still can't see a path
+  (a directory its VM doesn't share), `build` now says so in one sentence,
+  naming the path and how to share it, instead of that message and the
+  build log's tail.
+
 ## v0.4.1 (2026-10-26)
 
 ### Fixed

@@ -18,9 +18,29 @@
 # changes nothing.
 #
 # Dependents are the owner's repositories with the topic clearcutt-app (the
-# topic and owner inputs), or the repositories input. The repository that
-# published is left out: its own jobs already follow its publishes. Search
-# results can lag a topic change by a few minutes.
+# topic and owner inputs), or the repositories input. With estate-report, a
+# run image's dependents are instead the owner's repositories whose images
+# the estate's clearcutt-verify report proves, by layer digest, are built on
+# it (clearcutt-verify estate dependents, from the report bundle estate push
+# published, once its signature verifies against estate-report-signer), so
+# a publish wakes only the apps built on it. Build images, stacks, and
+# profiles have no layer relation to an app, so they go to the topic search,
+# as does a run image the report can't answer for, with a warning naming it
+# and why: the bundle can't be pulled or verified; no image in the report is
+# built on it (the estate's refs.txt doesn't list the apps' images, say), or
+# none by layer digest, so an empty answer never wakes nothing; or a
+# dependent names no repository of the owner as its source. An app the
+# report doesn't list yet, while it lists others built on the same run
+# image (it joined the estate after the report's run), is not woken: its
+# daily fleet run catches up. The repository that published is left out:
+# its own jobs already follow its publishes. Search results can lag a topic
+# change by a few minutes.
+#
+# With estate, it also sends clearcutt.estate-changed ({source, sha}) to
+# that repository (an estate workflow, as clearcutt-factory init --estate
+# writes it) when published lists anything, apps included, or changed is
+# true (a rebase, which published doesn't list), so its report and portal
+# refresh now rather than at its next scheduled run.
 #
 # Dispatching to other repositories needs an identity that can write to them;
 # the workflow's GITHUB_TOKEN reaches only its own repository. In order:
@@ -29,7 +49,8 @@
 #      CLEARCUTT_APP_ID variable, and a CLEARCUTT_APP_PRIVATE_KEY secret)
 #      with Contents: read and write. One token, with metadata read on the
 #      owner's repositories the App is installed on, finds the dependents;
-#      another, with contents write on only those repositories, dispatches.
+#      another, with contents write on only those repositories (and the
+#      estate repository), dispatches.
 #   2. A CLEARCUTT_BOT_TOKEN secret with Contents: read and write on them.
 #
 # Call it as soon as images.yml has published: with reproduce: false there,
@@ -84,6 +105,22 @@ on:
         description: GitHub App to dispatch as, by Client ID or App ID (default the CLEARCUTT_APP_ID variable); needs the CLEARCUTT_APP_PRIVATE_KEY secret
         type: string
         default: ""
+      estate-report:
+        description: 'An estate report bundle clearcutt-verify estate push published (REGISTRY/REPOSITORY:TAG, pulled anonymously). A run image''s dependents are then the owner''s repositories whose images the report proves, by layer digest, are built on it, instead of the topic search; build images, stacks, profiles, and a run image the report can''t answer for (no image in it is built on the run image by layer digest, say) keep the topic search, with a warning. Needs estate-report-signer'
+        type: string
+        default: ""
+      estate-report-signer:
+        description: 'With estate-report, the certificate identity that must have signed the bundle, exactly: the estate workflow, e.g. https://github.com/OWNER/estate/.github/workflows/estate.yml@refs/heads/main (GitHub Actions issuer)'
+        type: string
+        default: ""
+      estate:
+        description: 'Also send clearcutt.estate-changed ({source, sha}) to this repository (a name in the owner, or OWNER/NAME): the estate repository, whose report should refresh now. Sent when published lists anything (apps too), or changed is true'
+        type: string
+        default: ""
+      changed:
+        description: 'With estate: something changed that published doesn''t list (an app rebased, say), so send clearcutt.estate-changed even when published is empty'
+        type: boolean
+        default: false
     secrets:
       CLEARCUTT_APP_PRIVATE_KEY:
         description: Private key of the GitHub App named by app-id or CLEARCUTT_APP_ID
@@ -142,6 +179,86 @@ jobs:
             echo "nothing to announce"
           fi
 
+      - name: Estate changed?
+        id: estate
+        env:
+          ESTATE: ${{ inputs.estate }}
+          CHANGED: ${{ inputs.changed }}
+          PUBLISHED: ${{ inputs.published }}
+        run: |
+          if [ -n "$ESTATE" ] && { [ "$CHANGED" = true ] || [ "$(jq 'length' <<<"${PUBLISHED:-[]}")" -gt 0 ]; }; then
+            echo "send=true" >> "$GITHUB_OUTPUT"
+            echo "clearcutt.estate-changed to $ESTATE"
+          fi
+
+      # The estate report, for the run images' dependents by layer digest:
+      # a signature-verified clearcutt-verify release (the one this action
+      # commit is tagged with), and the bundle, read only once its signature
+      # verifies against estate-report-signer.
+      - name: Install clearcutt-verify
+        if: steps.events.outputs.any == 'true' && inputs.estate-report != ''
+        uses: northcutted/clearcutt-verify@644ff22d61bd34545368cb81da24e2c74722ddac # v0.18.0
+      - name: Dependents by layer digest, from the estate report
+        id: report
+        if: steps.events.outputs.any == 'true' && inputs.estate-report != ''
+        env:
+          ESTATE_REPORT: ${{ inputs.estate-report }}
+          SIGNER: ${{ inputs.estate-report-signer }}
+        run: |
+          # {"<run image repository>": ["owner/name", …]} for each run image
+          # the report answers for; any other is left to the topic search.
+          set +e
+          if [ -z "$SIGNER" ]; then
+            echo "::warning::estate-report needs estate-report-signer, who must have signed the bundle; finding dependents by topic"
+            exit 0
+          fi
+          dir=$RUNNER_TEMP/estate
+          if ! clearcutt-verify estate pull "$ESTATE_REPORT" --output "$dir" \
+            --certificate-identity "$SIGNER" --certificate-oidc-issuer https://token.actions.githubusercontent.com ||
+            [ ! -s "$dir/estate-report.json" ]; then
+            echo "::warning::could not pull $ESTATE_REPORT, or its signature didn't verify against $SIGNER; finding dependents by topic"
+            exit 0
+          fi
+          echo '{}' > "$RUNNER_TEMP/report.json"
+          jq -r 'select(.event_type == "clearcutt.run-image-published") | .client_payload.repository' "$RUNNER_TEMP/events" | sort -u |
+            while IFS= read -r repo; do
+              # The report answers only for a base some image in it is built
+              # on. estate dependents lists nothing (and succeeds) for a base
+              # it doesn't know, as when the estate's refs.txt lists the
+              # platform's images but not the apps': that is "can't say",
+              # not "nothing is built on it".
+              if ! jq -e --arg repo "$repo" 'any(.images[]?; ((.base.repository? // "") | sub("^index\\.docker\\.io/"; "docker.io/")) == $repo)' \
+                "$dir/estate-report.json" > /dev/null 2>&1; then
+                echo "::warning::$repo: no image in the estate report is built on it, so the report can't say which apps are (does the estate's refs.txt list the apps' images?); finding its dependents by topic"
+                continue
+              fi
+              if ! clearcutt-verify --format json estate dependents --report "$dir/estate-report.json" --base "$repo" > "$RUNNER_TEMP/dependents.json"; then
+                echo "::warning::$repo: the estate report can't tell what is built on it; finding its dependents by topic"
+                continue
+              fi
+              # Images built on it, but none proven by layer digest (a label
+              # or an assisted match only): no answer either.
+              if ! jq -e '(.dependents // []) | length > 0' "$RUNNER_TEMP/dependents.json" > /dev/null; then
+                echo "::warning::$repo: the estate report proves no image is built on it by layer digest; finding its dependents by topic"
+                continue
+              fi
+              # Each dependent's source must be a GitHub repository of the
+              # owner; one that isn't leaves this image to the topic search.
+              if ! repos=$(jq -e -c --arg owner "$OWNER" '
+                  [.dependents[]
+                   | ((.source.url // "") | sub("\\.git$"; "") | sub("/+$"; "")) as $url
+                   | ([$url | capture("^https://github\\.com/(?<o>[^/]+)/(?<n>[^/]+)$")?] | .[0]) as $m
+                   | if $m != null and ($m.o | ascii_downcase) == ($owner | ascii_downcase) then "\($m.o)/\($m.n)" else error("no repository of the owner: \(.imageId)") end]
+                  | unique' "$RUNNER_TEMP/dependents.json" 2> "$RUNNER_TEMP/dependents.err"); then
+                echo "::warning::$repo: $(sed -E 's/^jq: error \(at [^)]*\): //' "$RUNNER_TEMP/dependents.err"); finding its dependents by topic"
+                continue
+              fi
+              jq --arg repo "$repo" --argjson repos "$repos" '.[$repo] = $repos' "$RUNNER_TEMP/report.json" > "$RUNNER_TEMP/report.next" &&
+                mv "$RUNNER_TEMP/report.next" "$RUNNER_TEMP/report.json"
+              echo "$repo: built on it, by layer digest: $(jq -r 'join(", ") | if . == "" then "nothing" else . end' <<<"$repos")"
+            done
+          exit 0
+
       # Half an App (an ID without a key, or a key without an ID) fails here
       # rather than quietly falling back to another identity.
       - name: Mint a GitHub App token to find dependents
@@ -157,27 +274,57 @@ jobs:
           owner: ${{ env.OWNER }} # zizmor: ignore[github-app]
           permission-metadata: read
 
+      # One line per dispatch: the repository, a tab, the body.
       - name: Find dependents
         id: find
-        if: steps.events.outputs.any == 'true'
+        if: steps.events.outputs.any == 'true' || steps.estate.outputs.send == 'true'
         env:
           GH_TOKEN: ${{ steps.find-token.outputs.token || secrets.CLEARCUTT_BOT_TOKEN || github.token }}
           TOPIC: ${{ inputs.topic }}
           REPOSITORIES: ${{ inputs.repositories }}
+          ESTATE: ${{ inputs.estate }}
+          ESTATE_SEND: ${{ steps.estate.outputs.send }}
         run: |
-          if [ -n "$REPOSITORIES" ]; then
-            for r in $REPOSITORIES; do
-              case "$r" in */*) echo "$r" ;; *) echo "$OWNER/$r" ;; esac
-            done > "$RUNNER_TEMP/found"
-          else
-            gh search repos --owner "$OWNER" --topic "$TOPIC" --archived=false --limit 1000 --json fullName --jq '.[].fullName' > "$RUNNER_TEMP/found"
+          : > "$RUNNER_TEMP/targets"
+          # The topic search (or the repositories input), once, when an
+          # event needs it.
+          by_topic() {
+            if [ ! -f "$RUNNER_TEMP/found" ]; then
+              if [ -n "$REPOSITORIES" ]; then
+                for r in $REPOSITORIES; do
+                  case "$r" in */*) echo "$r" ;; *) echo "$OWNER/$r" ;; esac
+                done > "$RUNNER_TEMP/found"
+              else
+                gh search repos --owner "$OWNER" --topic "$TOPIC" --archived=false --limit 1000 --json fullName --jq '.[].fullName' > "$RUNNER_TEMP/found"
+              fi
+            fi
+            cat "$RUNNER_TEMP/found"
+          }
+          if [ -s "$RUNNER_TEMP/events" ]; then
+            while IFS= read -r event; do
+              type=$(jq -r .event_type <<<"$event")
+              repo=$(jq -r .client_payload.repository <<<"$event")
+              if [ "$type" = clearcutt.run-image-published ] && [ -f "$RUNNER_TEMP/report.json" ] &&
+                jq -e --arg r "$repo" 'has($r)' "$RUNNER_TEMP/report.json" > /dev/null; then
+                jq -r --arg r "$repo" '.[$r][]' "$RUNNER_TEMP/report.json" > "$RUNNER_TEMP/these"
+              else
+                by_topic > "$RUNNER_TEMP/these"
+              fi
+              { grep -vixF "$GITHUB_REPOSITORY" "$RUNNER_TEMP/these" || true; } | sort -u |
+                while IFS= read -r r; do printf '%s\t%s\n' "$r" "$event"; done >> "$RUNNER_TEMP/targets"
+            done < "$RUNNER_TEMP/events"
           fi
-          { grep -vixF "$GITHUB_REPOSITORY" "$RUNNER_TEMP/found" || true; } | sort -u > "$RUNNER_TEMP/dependents"
+          if [ "$ESTATE_SEND" = true ]; then
+            case "$ESTATE" in */*) estate=$ESTATE ;; *) estate=$OWNER/$ESTATE ;; esac
+            printf '%s\t%s\n' "$estate" "$(jq -n -c --arg source "$GITHUB_REPOSITORY" --arg sha "$GITHUB_SHA" \
+              '{event_type: "clearcutt.estate-changed", client_payload: {source: $source, sha: $sha}}')" >> "$RUNNER_TEMP/targets"
+          fi
+          cut -f1 "$RUNNER_TEMP/targets" | sort -u > "$RUNNER_TEMP/dependents"
           if [ -s "$RUNNER_TEMP/dependents" ]; then
             echo "repositories=$(paste -sd, "$RUNNER_TEMP/dependents")" >> "$GITHUB_OUTPUT"
             cat "$RUNNER_TEMP/dependents"
           else
-            echo "no dependents of $GITHUB_REPOSITORY (repositories of $OWNER with the topic $TOPIC, or the repositories input)"
+            echo "no dependents of $GITHUB_REPOSITORY (repositories of $OWNER with the topic $TOPIC, the repositories input, or the estate report)"
           fi
 
       - name: Mint a GitHub App token for the dependents
@@ -197,15 +344,13 @@ jobs:
           GH_TOKEN: ${{ steps.dispatch-token.outputs.token || secrets.CLEARCUTT_BOT_TOKEN || github.token }}
         run: |
           failed=0
-          while read -r repo; do
-            while read -r event; do
-              what=$(jq -r '"\(.event_type) \(.client_payload.image)"' <<<"$event")
-              if gh api --method POST "repos/$repo/dispatches" --input - <<<"$event" >/dev/null; then
-                echo "$repo: $what"
-              else
-                echo "::error::could not send $what to $repo: the GitHub App must be installed there, or CLEARCUTT_BOT_TOKEN needs Contents read and write on it"
-                failed=1
-              fi
-            done < "$RUNNER_TEMP/events"
-          done < "$RUNNER_TEMP/dependents"
+          while IFS=$'\t' read -r repo event; do
+            what=$(jq -r '"\(.event_type) \(.client_payload.image // .client_payload.source)"' <<<"$event")
+            if gh api --method POST "repos/$repo/dispatches" --input - <<<"$event" >/dev/null; then
+              echo "$repo: $what"
+            else
+              echo "::error::could not send $what to $repo: the GitHub App must be installed there, or CLEARCUTT_BOT_TOKEN needs Contents read and write on it"
+              failed=1
+            fi
+          done < "$RUNNER_TEMP/targets"
           exit "$failed"

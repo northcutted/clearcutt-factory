@@ -1,0 +1,133 @@
+# Builds and publishes the platform: run and build images, stacks, and the
+# shared org profile, then wakes the repositories that build on them.
+#
+#   pull request   images.yml builds, smoke-tests, scans, and gates the images it affects
+#   push to {% .Branch %}   images.yml publishes (sign, attest, SLSA provenance); as soon
+#                  as it has, stacks.yml pushes the stacks and profile.yml the
+#                  shared profile, each signed by its own workflow identity,
+#                  and notify.yml wakes the app repositories; beside them,
+#                  images.yml rebuilds what was published on a second runner
+#                  and attests the match{% if .Estate %}; then the estate's report refreshes{% end %}
+#
+# Waking other repositories needs a GitHub App installed on them (a
+# CLEARCUTT_APP_ID variable and a CLEARCUTT_APP_PRIVATE_KEY secret) or a
+# CLEARCUTT_BOT_TOKEN that can write to them. Secrets are passed by name:
+# secrets: inherit doesn't reach another owner's workflows.
+name: platform
+on:
+  push:
+    branches: [{% .Branch %}]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: platform-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  images:
+    uses: northcutted/clearcutt-factory/.github/workflows/images.yml@{% .Ref %}
+    permissions: {contents: read, packages: write, id-token: write, attestations: write}
+    with:
+      manifests: images/*/image.yaml
+      # A pull request builds only the images it affects. Require images / result.
+      changed-only: true
+      reproduce: false # the reproduce job does it, so stacks and notify don't wait
+{% if .LoginHost %}      registry: {% .LoginHost %}
+    secrets:
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+{% end %}
+  # images.yml again, given what images published: each image is rebuilt on
+  # a second runner from its signed recipe alone, and a match is attested
+  # (still signed by images.yml). A failed reproduction fails the run.
+  reproduce:
+    needs: images
+    if: ${{ !cancelled() && needs.images.outputs.published != '[]' && needs.images.outputs.published != '' }}
+    uses: northcutted/clearcutt-factory/.github/workflows/images.yml@{% .Ref %}
+    permissions: {contents: read, packages: write, id-token: write, attestations: write}
+    with:
+      published: ${{ needs.images.outputs.published }}
+{% if .LoginHost %}      registry: {% .LoginHost %}
+    secrets:
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+{% end %}
+  # Signed as stacks.yml in this repository, on {% .Branch %}: the stack signer in
+  # org/trust.yaml. It needs images: a stack pins its build image by the
+  # digest the tag holds when it is pushed.
+  stacks:
+    needs: images
+    if: ${{ !cancelled() && needs.images.result != 'skipped' && github.event_name != 'pull_request' && github.ref == 'refs/heads/{% .Branch %}' }}
+    uses: ./.github/workflows/stacks.yml
+    permissions: {contents: read, packages: write, id-token: write}
+{% if .LoginHost %}    secrets:
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+{% end %}
+  # Signed as profile.yml in this repository, on {% .Branch %}: the signer each app
+  # repository names in extends.signer.
+  profile:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/{% .Branch %}'
+    uses: ./.github/workflows/profile.yml
+    permissions: {contents: read, packages: write, id-token: write}
+{% if .LoginHost %}    secrets:
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+{% end %}
+  # Wakes the app repositories (the owner's with the topic clearcutt-app):
+  # a run image starts their fleet, a build image their rebuild pull
+  # request. It needs images, not reproduce: the apps verify what they get.
+  notify-images:
+    needs: images
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.images.outputs.published != '[]' && needs.images.outputs.published != '' }}
+    uses: northcutted/clearcutt-factory/.github/workflows/notify.yml@{% .Ref %}
+    permissions: {contents: read}
+    with:
+      published: ${{ needs.images.outputs.published }}
+{% if .Estate %}      # A run image wakes only the apps the estate's report proves, by layer
+      # digest, are built on it; the rest go by topic.
+      estate-report: {% .EstateRef %}
+      estate-report-signer: {% .EstateSigner %}
+{% end %}    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+
+  notify-stacks:
+    needs: stacks
+    if: ${{ !cancelled() && needs.stacks.outputs.published != '[]' && needs.stacks.outputs.published != '' }}
+    uses: northcutted/clearcutt-factory/.github/workflows/notify.yml@{% .Ref %}
+    permissions: {contents: read}
+    with:
+      published: ${{ needs.stacks.outputs.published }}
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+
+  notify-profile:
+    needs: profile
+    if: ${{ !cancelled() && needs.profile.outputs.published != '[]' && needs.profile.outputs.published != '' }}
+    uses: northcutted/clearcutt-factory/.github/workflows/notify.yml@{% .Ref %}
+    permissions: {contents: read}
+    with:
+      published: ${{ needs.profile.outputs.published }}
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+{% if .Estate %}
+  # The estate changed: refresh {% .Estate %}'s clearcutt-verify report and
+  # portal now rather than at its daily run. It needs reproduce, so the
+  # report finds the new images' reproduction attestations.
+  estate-changed:
+    needs: [images, reproduce, stacks, profile]
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && ((needs.images.outputs.published != '[]' && needs.images.outputs.published != '') || (needs.stacks.outputs.published != '[]' && needs.stacks.outputs.published != '') || (needs.profile.outputs.published != '[]' && needs.profile.outputs.published != '')) }}
+    uses: northcutted/clearcutt-factory/.github/workflows/notify.yml@{% .Ref %}
+    permissions: {contents: read}
+    with:
+      published: "[]"
+      estate: {% .EstateName %}
+      changed: true
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+{% end %}

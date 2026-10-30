@@ -25,6 +25,50 @@ Or build it: `go install github.com/northcutted/clearcutt-factory/cmd/clearcutt-
 Building needs Docker or Podman (BuildKit runs in a container). Scanning and
 signing need `syft`, `grype`, and `cosign` on `PATH`.
 
+On macOS and Windows the runtime runs in a VM (a Podman machine, Docker
+Desktop) that sees only the host directories shared with it: by default a
+Podman machine shares your home directory, `/private`, and `/var/folders`.
+`build` mounts the repository's staged context and the `--out` directory into
+the BuildKit container by their real paths (so `/tmp`, which is
+`/private/tmp`, works), and when the runtime can't see one it says which path
+and how to share it. Keep the repository and `--out` under your home directory
+and a local build matches CI's: an app the showcase publishes rebuilds locally,
+on a Podman machine, to the same digest in about 30 seconds.
+
+`clearcutt-factory doctor` checks all of this before a build does, and
+prints a fix for each failure (exit 1 when any check fails; `--json` for a
+machine):
+
+```
+$ clearcutt-factory doctor -f checkout/app.yaml
+clearcutt-factory doctor (v0.4.1)
+OK    manifest           checkout/app.yaml loads with its org profile, and app.lock.yaml is current (written by v0.4.1)
+FAIL  container runtime  podman version 6.1.4, but its server doesn't answer: Cannot connect to Podman. …
+                         fix: start the Podman machine (podman machine start); if it runs, check that the default connection points at it (podman system connection list)
+…
+```
+
+| Check | What it looks at |
+|---|---|
+| `manifest` | `-f` loads with its org profile (a shared profile's signature checked) and its lock is current; a lock a newer release wrote names the release to install |
+| `container runtime` | docker or podman (`builder.runtime`, `CLEARCUTT_FACTORY_RUNTIME`) is on `PATH` and its server answers |
+| `file sharing` | a container sees the repository and `--out` (default `out`) by their real paths: a Podman machine or Docker Desktop shares only some directories |
+| `buildkit`, `platforms` | the pinned BuildKit starts (privileged, or at `builder.addr`), and builds every platform the manifest does, natively or with QEMU (binfmt) |
+| `syft`, `grype`, `cosign` | on `PATH`, with their versions; cosign 3 |
+| `registry push` | the credentials here may push to the manifest's repository, checked without pushing (a failure is a warning outside Actions) |
+| `github app` | in Actions, or wherever `CLEARCUTT_APP_ID` and `CLEARCUTT_APP_PRIVATE_KEY` (or `CLEARCUTT_BOT_TOKEN`) are set: the App's key signs a token GitHub accepts, and the App is installed on the repository with contents and pull-requests write |
+| `factory version` | this binary is the release the repository's workflows pin (their `uses:` ref, a commit mapped to its release tag, or `factory-version`), so a lock written here matches CI's |
+
+In a workflow, pass the App's credentials to the step to check them:
+
+```yaml
+- uses: northcutted/clearcutt-factory@v0.4.1
+- run: clearcutt-factory doctor -f checkout/app.yaml
+  env:
+    CLEARCUTT_APP_ID: ${{ vars.CLEARCUTT_APP_ID }}
+    CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+```
+
 ## 2. Scaffold
 
 In your repository:
@@ -33,13 +77,14 @@ In your repository:
 clearcutt-factory init
 ```
 
-It writes three files and keeps any that exist (`--force` overwrites):
+It writes four files and keeps any that exist (`--force` overwrites):
 
 | File | What it is |
 |---|---|
-| `factory.org.yaml` | Your registry (default `ghcr.io/<owner>`), signer identity (keyless: ClearCutt Factory's reusable workflows, bound to runs in this repository; see [Who signs](#who-signs-and-binding-signatures-to-your-repository)), vulnerability gate, and policy |
+| `factory.org.yaml` | Your registry (default `ghcr.io/<owner>`), signer identity (keyless: ClearCutt Factory's reusable workflows, at a release tag or a commit, bound to runs in this repository; see [Who signs](#who-signs-and-binding-signatures-to-your-repository)), vulnerability gate, and policy |
 | `images/example/image.yaml` | An example image to replace |
 | `.github/workflows/clearcutt-factory.yml` | Calls the reusable workflows: build, test, and scan on pull requests; publish on the default branch; weekly lock updates; daily app rebases; across repositories, notify dependents of what it published and answer such notices ([below](#waking-the-apps-when-the-platform-publishes)) |
+| `.github/dependabot.yml` | Keeps the actions and ClearCutt workflows the workflow pins current, the ClearCutt pins grouped, each version a week old ([below](#dependabot)) |
 
 `--repo owner/name`, `--registry`, and `--default-branch` override what it
 reads from the `origin` remote (the branch is the one the signer identity
@@ -48,6 +93,57 @@ profile, `--extends REF --extends-identity ID` (or `--extends-key K`) checks
 that profile's signature and writes a `factory.org.yaml` that extends it
 ([section 6](#6-one-org-profile-for-every-repository)). Every file names its JSON Schema, so editors with the YAML language
 server complete and check fields as you type.
+
+An organization with a platform team, app teams, and an estate report sets
+up each kind of repository with its own flag instead
+([below](#init-for-a-platform-its-apps-and-its-estate)): `init --platform`,
+`init --app`, and `init --estate`.
+
+### Dependabot
+
+Every repository `init` sets up gets a `.github/dependabot.yml`: the
+actions and ClearCutt reusable workflows its workflows pin (one group for
+`northcutted/clearcutt-*`, so factory, verify, and portal move together),
+and, for an app, its own dependencies, for each manifest `init` finds
+beside `app.yaml` (`go.mod`, `package.json`, `requirements.txt` or
+`pyproject.toml`, `Cargo.toml`, `pom.xml`, `build.gradle`, `Gemfile`,
+`composer.json`): factory's lock updates move the OS packages and
+toolchains, not the app's own dependencies, so a CVE in those reaches the
+app through Dependabot (turn on its security updates, which don't wait for
+the schedule). A version is proposed once it is seven days old
+(`cooldown`). The signer identity `init` writes accepts any factory release
+tag, so a factory bump keeps images verifiable.
+
+### init for a platform, its apps, and its estate
+
+Three flags write the three shapes of repository a ClearCutt organization
+runs, each consistent with the others' (the registry layout under
+`--registry`, default `ghcr.io/<owner>`: `platform/`, `stacks/`,
+`factory/org:1`, `apps/`, `estate:latest`):
+
+```sh
+clearcutt-factory init --platform --repo acme/platform --estate-repo acme/estate
+clearcutt-factory init --app --repo acme/checkout --platform-repo acme/platform \
+  --stack ghcr.io/acme/stacks/go:1 --estate-repo acme/estate
+clearcutt-factory init --estate --repo acme/estate --platform-repo acme/platform
+```
+
+| Flag | Files | What they do |
+|---|---|---|
+| `--platform` | `factory.org.yaml` (extends `org/profile.yaml` by path), `org/profile.yaml` (the shared profile: builder, keyless signing, `signing.trustPolicy`, the gate, policy requiring signed stacks and a source label), `org/trust.yaml`, `images/run-go/`, `images/build-go/`, `stacks/go.yaml`, `.github/workflows/` `platform.yml`, `stacks.yml`, `profile.yml`, `update-locks.yml`, `reattest.yml`, `.github/dependabot.yml`, `.gitignore` | `platform.yml` publishes the images, then the stacks (`stacks.yml`) and the shared profile (`profile.yml`), each signed by its own workflow, wakes the app repositories (`notify.yml`), reproduces, and with `--estate-repo` refreshes the estate. The trust policy has two image signers. `app-images` is **owner-scoped**: `sourceRepositoryOwner: https://github.com/<owner>` with `sourceMatchesImage: true` and `sourceRef`, so an app's image is trusted when it was signed by factory's workflows in a run of the owner's repository it names as its source, on the default branch; a new app repository needs no change to it. `platform-images` names the platform repository (`sourceRepository`), and the profile's `policy.requireSignedBases` checks the run and build images apps use against it alone, never the owner-scoped one ([Signed bases](#platform-stacks)). Its stack signer is `stacks.yml`; with `--estate-repo`, its estate signer is that repository's `estate.yml`, and `notify.yml` wakes only the apps the estate's report proves are built on a run image ([above](#only-the-apps-built-on-it)) |
+| `--app` | `app.yaml` (with `--stack`), `factory.org.yaml`, `.github/workflows/factory.yml`, `.github/dependabot.yml`, `.gitignore` | With `--platform-repo`, the org profile extends `<registry>/factory/org:1`, signed by that repository's `profile.yml` (checked now), and images go to `<registry>/apps`; the workflow is a caller of [`app.yml`](#an-app-repository-is-its-appyaml-and-one-call), with `estate:` from `--estate-repo`. `--name` (default the repository's) names the app |
+| `--estate` | `.github/workflows/estate.yml`, `estate/policy.yaml`, `estate/refs.txt`, `.github/dependabot.yml` | clearcutt-verify (by release tag) over `estate/refs.txt`, daily, on `clearcutt.estate-changed`, and by hand, with `--rescan` (a checksum-pinned grype) and `--reproduce`, the trust policy read from the platform's signed profile (`--platform-repo`'s `profile.yml` must have signed it), the last report bundle pulled only if this workflow signed it, the new one pushed and signed; then clearcutt-portal (by release tag) publishes it to Pages. `--name` (default the owner) names the estate |
+
+Each takes `--repo`, `--registry`, `--default-branch`, and `--force` as
+before (and all but `--estate` take `--allow-commit-pins`: [Who
+signs](#who-signs-and-binding-signatures-to-your-repository)); a flag that
+doesn't apply to the kind is refused. The workflows
+call factory's at the release `init` is, and the other tools at the
+releases it was tested with; Dependabot moves them all. Owner-scoped trust
+accepts any of the owner's repositories that build on factory's workflows,
+so it suits an organization where every repository is the owner's; to trust
+only some, give each a signer of its own with `sourceRepository`, as the
+default `init` does for its one repository.
 
 ## 3. Write manifests and lock them
 
@@ -85,7 +181,8 @@ Push, then in the repository (or organization) settings:
    maintainer approves them on each pull request (the runs show as
    `action_required`).
 2. For a registry other than `ghcr.io`: set the reusable workflows' `registry`
-   input and add `REGISTRY_USERNAME` and `REGISTRY_PASSWORD` secrets.
+   input and add `REGISTRY_USERNAME` and `REGISTRY_PASSWORD` secrets, or log
+   in by OIDC federation instead ([below](#registries-in-a-cloud-without-a-stored-secret)).
 3. **To merge the bot's pull requests by themselves** once CI passes, pass
    the `auto-merge` input to `fleet.yml` (`pin`, `rebuild`) and
    `update-locks.yml` (`update`, `rebuild`), or `all`, naming the kinds to
@@ -159,6 +256,43 @@ Require `images / result` (the job name in your workflow, then `result`):
 it passes when every manifest the run built passed, including when there
 was nothing to build, and fails otherwise.
 
+### Registries in a cloud, without a stored secret
+
+`images.yml`, `fleet.yml`, `reattest.yml`, and `app.yml` can log in to
+Amazon ECR, Google Artifact Registry, or Azure Container Registry with the
+job's GitHub OIDC token, exchanged for short-lived registry credentials, so
+no registry password is stored in GitHub. Set the `registry` input to the
+registry host and one cloud's inputs:
+
+| Registry | Inputs | The cloud side |
+|---|---|---|
+| Amazon ECR (`ACCOUNT.dkr.ecr.REGION.amazonaws.com`) | `aws-role-arn` (and `aws-region`, default the registry's) | An IAM role whose trust policy accepts `token.actions.githubusercontent.com` for `repo:OWNER/REPO:ref:refs/heads/main`, allowed to push to the repositories |
+| Google Artifact Registry (`REGION-docker.pkg.dev`) | `gcp-workload-identity-provider`, `gcp-service-account` | A workload identity pool and provider for GitHub, and a service account with Artifact Registry Writer that the repository may impersonate |
+| Azure Container Registry (`NAME.azurecr.io`) | `azure-client-id`, `azure-tenant-id`, `azure-subscription-id` | An app registration or user-assigned managed identity with a federated credential for the repository and branch, and `AcrPush` on the registry |
+
+```yaml
+  images:
+    uses: northcutted/clearcutt-factory/.github/workflows/images.yml@v0.4.1
+    permissions: {contents: read, packages: write, id-token: write, attestations: write}
+    with:
+      registry: 123456789012.dkr.ecr.eu-west-1.amazonaws.com
+      aws-role-arn: arn:aws:iam::123456789012:role/clearcutt-publish
+```
+
+The jobs log in with
+[`registry-login`](../registry-login/action.yml), this repository's action
+(of the `factory-version` release), which runs the cloud's own actions,
+pinned by commit (`aws-actions/configure-aws-credentials` and
+`amazon-ecr-login`, `google-github-actions/auth`, `azure/login`), and fails
+when inputs of more than one cloud are set, or one cloud's are incomplete,
+or the registry isn't that cloud's. Workflows of your own can use it too
+(`uses: northcutted/clearcutt-factory/registry-login@v0.4.1`). Scope the
+cloud's trust to the default branch, as the signer's `sourceRef` is: only
+the default branch publishes. Without these inputs, the jobs log in with
+`REGISTRY_USERNAME` and `REGISTRY_PASSWORD`, or as `github.actor` with the
+workflow's token for `ghcr.io`, as before. `update-locks.yml` doesn't log in:
+it reads what it locks anonymously.
+
 ### A GitHub App for the automation
 
 An App's installation tokens expire within the hour, carry only the
@@ -198,6 +332,67 @@ identity.
 
 ## 5. Apps and stacks across repositories
 
+### An app repository is its app.yaml and one call
+
+An app repository needs everything factory does for an app (publish on
+merge, reproduce, rebase onto new run images, propose lock updates and
+rebuilds, renew its evidence, and refresh the estate's report) but none of
+it varies between apps. `app.yml` does all of it in one call, choosing what
+to run from the event, so the repository holds its `app.yaml`, its org
+profile, and a short caller (`clearcutt-factory init --app` writes all
+three, [below](#init-for-a-platform-its-apps-and-its-estate)):
+
+```yaml
+name: factory
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 6 * * 1" # weekly: every input (app.yml's weekly input)
+    - cron: "41 5 * * *" # daily: rebase, rebuild on new build images, rescan
+  workflow_dispatch:
+  repository_dispatch:
+    types: [clearcutt.run-image-published, clearcutt.build-image-published, clearcutt.stack-published, clearcutt.profile-published]
+permissions:
+  contents: read
+jobs:
+  app:
+    uses: northcutted/clearcutt-factory/.github/workflows/app.yml@v0.4.1
+    permissions: {contents: write, pull-requests: write, packages: write, id-token: write, attestations: write}
+    with:
+      estate: estate # the estate repository to refresh; omit for none
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+```
+
+| Event | What runs |
+|---|---|
+| pull request, merge queue | `images.yml`: build, smoke-test, scan, gate (only the manifests it affects) |
+| push to the default branch | `images.yml` publishes; then `fleet.yml`, while `images.yml` reproduces on a second runner |
+| the weekly schedule (the `weekly` input's cron) | `update-locks.yml`, every input |
+| any other schedule (daily) | `fleet.yml`, `update-locks.yml` with `update: stack`, and `reattest.yml` |
+| `clearcutt.run-image-published` | `fleet.yml` |
+| `clearcutt.build-image-published`, `clearcutt.stack-published` | `update-locks.yml` with `update: stack` |
+| `clearcutt.profile-published` | `update-locks.yml`, every input |
+| `workflow_dispatch` | what the `run` input names (or the dispatch's own `run` input, when the caller declares one): `images`, `fleet`, `update-locks`, `reattest`, or `all` (images, fleet, and update-locks; the default) |
+
+With `estate`, it then sends `clearcutt.estate-changed` to the estate
+repository once the app was published and reproduced, or rebased (not on
+pull requests or schedules: the estate's daily run follows those). Its
+other inputs are those of the workflows it calls: `manifests` (default
+`**/app.yaml`), `registry`, `changed-only` (default `true`), `publish-ref`,
+`auto-merge` (`pin`, `rebuild`, `update`, or `all`, handed to each workflow
+in its own kinds), `reattest` and `older-than`, `provenance`, `app-id`,
+`factory-version`, and the OIDC login inputs; its secrets, the four the
+others take. Branch protection requires `app / images / result` (the
+caller's job name, then `images / result`). Images are signed by
+`images.yml`, `fleet.yml`, and `reattest.yml` as when they are called
+directly, so the signer identity needn't change.
+
+### Platform stacks
+
 A platform team publishes stacks once:
 
 ```sh
@@ -230,6 +425,22 @@ The app's lock pins the stack's digest, so a moved tag changes nothing until
 unset). Every command that uses the stack (`lock`, `render`, `build`,
 `verify`, `rebase`) checks the version the lock pins, so a pull request that
 edits the lock to an unsigned version fails CI too.
+
+**Signed bases.** A signed stack names its build and run images, but the
+run image is a tag apps follow, and anyone who can write to the registry
+can move it. `policy.requireSignedBases: true` also requires an app's bases
+to carry a signature from a **repository-scoped** image signer: one that
+names the repository whose runs count with `sourceRepository` (the
+platform's). `lock` and `update-locks` check the build and run images they
+pin, `build` (and `verify`) the ones the lock pins, `rebase` and `fleet.yml`
+the run image they move an app onto, and `stack push` the images a stack
+names before publishing it. An owner-scoped signer (`sourceRepositoryOwner`
+without `sourceRepository`) is never asked for a base, even when it would
+accept the image: it accepts a run in any of the owner's repositories, so
+any app repository could build a "run image", sign it, and, with write
+access to the registry (the only other boundary), put it under the tag
+every app ships on. `init --platform` turns it on, with a signer for the
+platform repository's own images beside the owner-scoped one for apps.
 
 ### Waking the apps when the platform publishes
 
@@ -379,6 +590,54 @@ jobs:
 
 Dispatches queue behind any fleet or lock-update run already going in the
 app repository, so a burst of them costs at most one more run.
+
+### Only the apps built on it
+
+The topic wakes every app repository for every publish. When the
+organization runs [clearcutt-verify](https://github.com/northcutted/clearcutt-verify)
+over its estate (as `init --estate` sets up), `notify.yml` can ask the
+estate's report instead which images are built on a run image, proven by
+layer digest (`clearcutt-verify estate dependents`), and wake only the
+repositories they come from:
+
+```yaml
+  notify-images:
+    needs: images
+    if: ${{ !cancelled() && github.event_name == 'push' && needs.images.outputs.published != '[]' && needs.images.outputs.published != '' }}
+    uses: northcutted/clearcutt-factory/.github/workflows/notify.yml@v0.4.1
+    permissions: {contents: read}
+    with:
+      published: ${{ needs.images.outputs.published }}
+      estate-report: ghcr.io/acme/estate:latest # the bundle the estate workflow pushes
+      estate-report-signer: https://github.com/acme/estate/.github/workflows/estate.yml@refs/heads/main
+    secrets:
+      CLEARCUTT_APP_PRIVATE_KEY: ${{ secrets.CLEARCUTT_APP_PRIVATE_KEY }}
+      CLEARCUTT_BOT_TOKEN: ${{ secrets.CLEARCUTT_BOT_TOKEN }}
+```
+
+The bundle is pulled anonymously (a public package) and read only once its
+signature verifies against `estate-report-signer`. A dependent's repository
+is its image's source (verified provenance where there is any, else its
+`org.opencontainers.image.source` label), and must be one of the owner's.
+The topic search stays for what has no layer relation to an app (build
+images, stacks, profiles), and for a run image the report can't answer for,
+with a warning naming the image and why: the bundle can't be pulled or
+verified; no image in the report is built on the run image, or none by
+layer digest; or a dependent names no repository of the owner. An empty
+answer never wakes nothing: `estate dependents` lists nothing, and
+succeeds, for a base the report doesn't know, as when the estate's
+`refs.txt` lists the platform's images but not the apps' (as `init
+--estate` writes it). So add each app's image to the estate's `refs.txt`
+as it starts publishing (`init --app` says which). An app the report
+doesn't list yet, while it lists others built on the same run image (it
+joined after the estate's last run), isn't woken; its daily fleet run
+catches up.
+
+`estate: NAME` (or `OWNER/NAME`) also sends `clearcutt.estate-changed`
+(`{source, sha}`) to the estate repository when `published` lists anything,
+apps included, or `changed: true` says something else changed (a rebase),
+so its report and portal refresh now rather than at the next scheduled run.
+`app.yml` does this for an app repository with its `estate` input.
 
 ## 6. One org profile for every repository
 
@@ -566,7 +825,7 @@ the field, not a silent override, so what the file says is what applies:
 | `signing.profile` | Only in a profile you publish |
 | `vulnerabilities.failOn` | The repository may set a stricter (lower) severity, not a looser one |
 | `vulnerabilities.onlyFixed`, `vulnerabilities.allowLocalVEX`, `policy.allowTOFU` | Can only turn off |
-| `policy.requireNonRoot`, `policy.requireSignedStacks`, `policy.requireOfflineBuildTools`, `sbom.scan` | Can only turn on |
+| `policy.requireNonRoot`, `policy.requireSignedStacks`, `policy.requireSignedBases`, `policy.requireOfflineBuildTools`, `sbom.scan` | Can only turn on |
 | `policy.requiredLabels` | Union |
 | `policy.allowedHosts`, `policy.allowedRegistries` | The repository's list, when it sets one, must lie within the shared one (a host or `.suffix` the shared list allows; a registry or repository path at or below a shared one, by whole path segments) |
 | `vulnerabilities.vex` | The shared profile's statements apply to every scan (a statement whose product is an image, `pkg:oci/…` by digest or `repository_url`, to that image only; see the README's [VEX statements are applied per image](../README.md#what-gets-attached-to-a-pushed-image)). The repository's (its profile's `vex` and its manifests' `spec.vex`) are refused unless the shared profile sets `vulnerabilities.allowLocalVEX: true`: a statement that a vulnerability doesn't apply lets an image past the gate |
@@ -641,8 +900,36 @@ the image names as its source (`org.opencontainers.image.source`), and
 bind images only: a stack names no source, so a stack
 signer names its repository with `sourceRepository` (or is a workflow in it,
 as above), and with `policy.requireSignedStacks` a stack signer with
-`sourceMatchesImage` is an error. Pinning the workflows by commit SHA changes
-the identity's `@…` suffix: adjust the regexp to match.
+`sourceMatchesImage` is an error. With `policy.requireSignedBases`, a
+stack's build and run images are checked only against the image signers
+that name a `sourceRepository`, never an owner-scoped one ([Signed
+bases](#platform-stacks)).
+
+**Pinning factory's workflows by commit.** The regexp `init` writes accepts
+the signing workflows at a release tag only (`@refs/tags/v\d+\.\d+\.\d+$`).
+Calling `images.yml`, `fleet.yml`, or `reattest.yml` by commit SHA changes
+the identity's `@…` suffix to that commit. (`app.yml` at a release, by its
+tag or its commit, calls them at the release's tag, so pinning `app.yml`
+by SHA needs nothing here.) `init --allow-commit-pins` writes
+`@(refs/tags/v\d+\.\d+\.\d+|[0-9a-f]{40})$` instead, but a pattern that
+accepts any commit accepts commits nobody reviewed: GitHub resolves
+`northcutted/clearcutt-factory/…@<sha>` for a commit anywhere in the
+repository's fork network (an *impostor commit*), so anyone can push a
+modified workflow to a fork and sign as "factory's `images.yml`" at that
+commit. The source constraints still require the run to be in one of your
+repositories on the publishing branch, so it takes a change merged there to
+call one; but the workflow's identity then proves nothing about the code
+that signed. Name the exact commits you pin instead of the pattern:
+`…\.yml@(refs/tags/v\d+\.\d+\.\d+|1a2b3c…40 hex…)$`, one alternative per
+pinned commit, added in the same pull request that moves the pin.
+
+`sourceRepositoryOwner` is read as clearcutt-verify reads it: exactly
+`https://github.com/OWNER`, and the repository it resolves to (the image's
+source, with `sourceMatchesImage`) must be one of the owner's, which cosign
+is then held to. clearcutt-verify also accepts it alone, reading the
+repository from each certificate; factory, which hands cosign the signer as
+written, needs `sourceMatchesImage` (or `sourceRepository`) with it and
+skips a signer that has neither.
 
 **With keys.** In key mode, `signing.key` signs images and
 `signing.stackKey` signs stacks (default: `signing.key`), so a platform's
@@ -698,8 +985,9 @@ signers:
   - name: factory-builds              # images (the default role)
     identityRegexp: ^https://github\.com/northcutted/clearcutt-factory/\.github/workflows/(images|fleet|reattest)\.yml@refs/tags/v\d+\.\d+\.\d+$
     issuer: https://token.actions.githubusercontent.com
-    sourceRepositoryOwner: https://github.com/acme
-    sourceMatchesImage: true
+    sourceRepositoryOwner: https://github.com/acme   # a run in one of acme's repositories,
+    sourceMatchesImage: true                         # the one the image names as its source,
+    sourceRef: refs/heads/main                       # on main
   - name: platform-stacks
     roles: [stack]
     identity: https://github.com/acme/platform/.github/workflows/stacks.yml@refs/heads/main
@@ -729,11 +1017,12 @@ output start right after the images are published
 
 | Workflow | Inputs | Secrets | Caller permissions |
 |---|---|---|---|
-| `images.yml` | `manifests` (globs, default `**/image.yaml **/app.yaml`), `registry`, `provenance`, `reproduce` (default `true`), `published` (only reproduce this), `changed-only` (default `false`: on a pull request, only the manifests it affects; [above](#pull-requests-build-what-they-change)), `publish-ref` | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write`, `attestations: write` |
+| `images.yml` | `manifests` (globs, default `**/image.yaml **/app.yaml`), `registry`, `provenance`, `reproduce` (default `true`), `published` (only reproduce this), `changed-only` (default `false`: on a pull request, only the manifests it affects; [above](#pull-requests-build-what-they-change)), `publish-ref`, the OIDC login inputs ([above](#registries-in-a-cloud-without-a-stored-secret)) | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write`, `attestations: write` |
 | `update-locks.yml` | `manifests`, `update` (`all`, default, or `stack`: apps only, the stack and its build and run images, as a rebuild pull request), `app-id`, `auto-merge` (`update`, `rebuild`, or `all`) | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: write`, `pull-requests: write` |
-| `fleet.yml` | `apps` (default `**/app.yaml`), `registry`, `provenance`, `app-id`, `auto-merge` (`pin`, `rebuild`, or `all`) | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: write`, `pull-requests: write`, `packages: write`, `id-token: write`, `attestations: write` |
-| `reattest.yml` | `manifests`, `registry`, `older-than` (default `6d`), `reproduce` (default `true`), `publish-ref` | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write` |
-| `notify.yml` | `published` (required), `topic` (default `clearcutt-app`), `owner`, `repositories`, `app-id` | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: read` |
+| `fleet.yml` | `apps` (default `**/app.yaml`), `registry`, `provenance`, `app-id`, `auto-merge` (`pin`, `rebuild`, or `all`), the OIDC login inputs | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: write`, `pull-requests: write`, `packages: write`, `id-token: write`, `attestations: write` |
+| `reattest.yml` | `manifests`, `registry`, `older-than` (default `6d`), `reproduce` (default `true`), `publish-ref`, the OIDC login inputs | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | `contents: read`, `packages: write`, `id-token: write` |
+| `app.yml` | `manifests` (default `**/app.yaml`), `estate`, `registry`, `changed-only` (default `true`), `publish-ref`, `auto-merge` (`pin`, `rebuild`, `update`, `all`), `weekly` (default `23 6 * * 1`), `run`, `reattest` (default `true`), `older-than`, `provenance`, `app-id`, the OIDC login inputs ([above](#an-app-repository-is-its-appyaml-and-one-call)) | all four | `contents: write`, `pull-requests: write`, `packages: write`, `id-token: write`, `attestations: write` |
+| `notify.yml` | `published` (required), `topic` (default `clearcutt-app`), `owner`, `repositories`, `app-id`, `estate-report` and `estate-report-signer` (a run image's dependents by layer digest, [above](#only-the-apps-built-on-it)), `estate` and `changed` (send `clearcutt.estate-changed`) | `CLEARCUTT_APP_PRIVATE_KEY`, `CLEARCUTT_BOT_TOKEN` | `contents: read` |
 
 `reattest.yml` renews published images' evidence on a schedule: each
 platform image's signed SBOM is scanned again with grype's newest database
@@ -767,6 +1056,16 @@ plus cosign, syft, and grype:
 - uses: northcutted/clearcutt-factory@v0.4.1
 - run: clearcutt-factory build -f images/example/image.yaml
 ```
+
+Pinned by commit (`uses: northcutted/clearcutt-factory@<40-hex SHA>`), it
+installs the release whose tag points at exactly that commit, and its
+signature must come from the release workflow running at that commit
+(`cosign verify-blob --certificate-github-workflow-sha`), so a tag moved or
+added later can't hand it another commit's binary. A commit no release tag
+points at is built from source at that commit (Go, from the action's own
+checkout), with a notice in the run's log saying so: pin a release's commit
+to get its signed binary. If the repository's tags can't be listed, the step
+fails rather than building from source.
 
 ## Other CI systems
 

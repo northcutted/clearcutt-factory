@@ -119,6 +119,25 @@ func (o *Org) Signers(role string) []VerifyIdentity {
 	return nil
 }
 
+// BaseSigners returns who the org trusts to sign a base (a stack's build
+// or run image): its image signers that name a sourceRepository, so each
+// vouches only for runs in that one repository. An owner-scoped signer
+// (sourceRepositoryOwner without sourceRepository) accepts a run in any of
+// the owner's repositories: right for apps, which a new repository adds
+// without a change to the trust policy, but with it any of them could
+// vouch for an image every app builds or ships on, with write access to
+// the registry the only other boundary. A key, or an identity without
+// source constraints, names no repository either.
+func (o *Org) BaseSigners() []VerifyIdentity {
+	var out []VerifyIdentity
+	for _, v := range o.Signers(RoleImage) {
+		if v.SourceRepository != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // Verify is the signer as a verify identity.
 func (s TrustedSigner) Verify() VerifyIdentity {
 	return VerifyIdentity{
@@ -152,6 +171,12 @@ func (v VerifyIdentity) validate() error {
 	if constrained && !keyless {
 		return errors.New("source constraints apply to keyless (GitHub Actions) signers")
 	}
+	// The source fields are those of a GitHub Actions certificate, as in
+	// clearcutt-verify's trust policy, which refuses them with another
+	// issuer.
+	if constrained && v.CertificateOIDCIssuer != GitHubActionsIssuer {
+		return fmt.Errorf("source constraints need the GitHub Actions issuer (%s), not %q", GitHubActionsIssuer, v.CertificateOIDCIssuer)
+	}
 	for _, u := range []string{v.SourceRepository, v.SourceRepositoryOwner} {
 		if u != "" && !strings.HasPrefix(u, "https://github.com/") {
 			return fmt.Errorf("%q must be a https://github.com/ URL", u)
@@ -160,5 +185,17 @@ func (v VerifyIdentity) validate() error {
 	if r := strings.TrimPrefix(v.SourceRepository, "https://github.com/"); v.SourceRepository != "" && strings.Count(strings.TrimSuffix(r, "/"), "/") != 1 {
 		return fmt.Errorf("sourceRepository %q must be https://github.com/OWNER/REPO", v.SourceRepository)
 	}
+	// Exactly https://github.com/OWNER (a trailing slash allowed), as
+	// clearcutt-verify reads it: the certificate's repository must be
+	// https://github.com/OWNER/<repo>, its owner segment exactly OWNER.
+	if o := v.SourceRepositoryOwner; o != "" {
+		if rest, ok := strings.CutPrefix(strings.TrimSuffix(o, "/"), "https://github.com/"); !ok || rest == "" || strings.Contains(rest, "/") {
+			return fmt.Errorf("sourceRepositoryOwner %q must be https://github.com/OWNER", o)
+		}
+	}
 	return nil
 }
+
+// GitHubActionsIssuer is the OIDC issuer of GitHub Actions' certificates,
+// the only ones the source constraints apply to.
+const GitHubActionsIssuer = "https://token.actions.githubusercontent.com"

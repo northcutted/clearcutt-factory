@@ -1,0 +1,58 @@
+# Publishes the shared org profile (org/profile.yaml, with org/trust.yaml) as
+# {% .ProfileRef %} and signs it keylessly as this workflow:
+#
+#   {% .ProfileSigner %}
+#
+# which is the signer every app repository's factory.org.yaml names in
+# extends.signer, and org/profile.yaml in signing.profile. Keep it a workflow
+# file of its own for that identity to hold. An unchanged profile only moves
+# its tag.
+#
+# Output: published, [{kind: profile, …}] when it was newly pushed, else [].
+name: profile
+on:
+  workflow_call:
+    outputs:
+      published:
+        description: The newly pushed profile, a JSON array for notify.yml
+        value: ${{ jobs.push.outputs.published }}
+{% if .LoginHost %}    secrets:
+      REGISTRY_USERNAME:
+        required: true
+      REGISTRY_PASSWORD:
+        required: true
+{% end %}  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: profile-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  push:
+    if: github.ref == 'refs/heads/{% .Branch %}'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write # push the profile
+      id-token: write # keyless signing
+    outputs:
+      published: ${{ steps.push.outputs.published == 'true' && format('[{{"kind":"profile","image":"{0}","repository":"{1}","digest":"{2}","tags":["1"]}}]', steps.push.outputs.image, steps.push.outputs.repository, steps.push.outputs.digest) || '[]' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: northcutted/clearcutt-factory@{% .Ref %}
+        with:
+          tools: "false"
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+{% if .LoginHost %}          registry: {% .LoginHost %}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+{% else %}          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+{% end %}      - name: Push and sign the shared profile
+        id: push
+        run: clearcutt-factory profile push -f org/profile.yaml --ref {% .ProfileRef %}

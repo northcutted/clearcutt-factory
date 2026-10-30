@@ -59,6 +59,13 @@ func StackPushWith(ctx context.Context, opts Options, file string, so StackPushO
 	if st, err = st.Resolved(org, func(ref string) (string, error) { return registry.Digest(ctx, ref) }); err != nil {
 		return err
 	}
+	// Under policy.requireSignedBases, the images the stack names must be
+	// the platform's: apps will lock and build on them.
+	for _, b := range []struct{ kind, ref string }{{"build image", st.Spec.Build}, {"run image", st.Spec.Run}} {
+		if err := verifyBase(ctx, org, b.kind, b.ref); err != nil {
+			return fmt.Errorf("%s: %w", rel(abs), err)
+		}
+	}
 	content := st.Marshal()
 	d, err := registry.FileDigest(manifest.StackArtifactType, "stack.yaml", content)
 	if err != nil {
@@ -213,6 +220,60 @@ func verifyStack(ctx context.Context, m *manifest.Manifest, org *manifest.Org) e
 		return fmt.Errorf("stack %s is not signed by the org's stack signer (policy.requireSignedStacks): %w", ref, err)
 	}
 	return nil
+}
+
+// verifyBase checks, under policy.requireSignedBases, that ref, an app's
+// base (what the stack names as its build image or run image: what is the
+// kind of base), carries a signature from one of the org's repository-
+// scoped image signers (manifest.Org.BaseSigners). An owner-scoped signer
+// is never asked: it would let any of the owner's repositories vouch for
+// an image every app builds or ships on. ref is pinned by digest first,
+// so the image checked is the one used.
+func verifyBase(ctx context.Context, org *manifest.Org, kind, ref string) error {
+	if !org.Policy.RequireSignedBases {
+		return nil
+	}
+	signers := org.BaseSigners()
+	if len(signers) == 0 {
+		return fmt.Errorf("policy.requireSignedBases: no image signer can vouch for the %s %s: a base is checked only against signers that name the repository that publishes it (sourceRepository), never an owner-scoped one (sourceRepositoryOwner alone); add one for that repository to the trust policy (or signing.verify)", kind, ref)
+	}
+	if _, d, ok := strings.Cut(ref, "@"); ok {
+		ref = lock.RepoOf(ref) + "@" + d
+	} else {
+		d, err := registry.Digest(ctx, ref)
+		if err != nil {
+			return fmt.Errorf("the %s %s: %w", kind, ref, err)
+		}
+		ref = lock.RepoOf(ref) + "@" + d
+	}
+	source := ""
+	if matchesImage(signers) {
+		art, err := registry.Fetch(ctx, ref)
+		if err != nil {
+			return fmt.Errorf("the %s %s: %w", kind, ref, err)
+		}
+		source = art.Source()
+	}
+	args, err := argsOf(signers, source)
+	if err != nil {
+		return fmt.Errorf("the %s %s is not signed by a repository-scoped image signer (policy.requireSignedBases): %w", kind, ref, err)
+	}
+	if _, err := firstVerified(args, func(a []string) (struct{}, error) { return struct{}{}, attest.VerifySignature(ctx, ref, a) }); err != nil {
+		return fmt.Errorf("the %s %s is not signed by a repository-scoped image signer (policy.requireSignedBases): %w", kind, ref, err)
+	}
+	return nil
+}
+
+// verifyLockedBases checks, under policy.requireSignedBases, the bases an
+// app's lock pins: its build image and its run image.
+func verifyLockedBases(ctx context.Context, org *manifest.Org, l *lock.Lock) error {
+	if l == nil || l.App == nil || !org.Policy.RequireSignedBases {
+		return nil
+	}
+	if err := verifyBase(ctx, org, "build image", l.App.Build.Pinned()); err != nil {
+		return err
+	}
+	return verifyBase(ctx, org, "run image", l.Base.Pinned())
 }
 
 // cacheDir returns (and creates) a directory under the user cache.

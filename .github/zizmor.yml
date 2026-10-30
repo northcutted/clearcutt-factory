@@ -12,3 +12,22 @@ rules:
       - fleet.yml
       - update-locks.yml
       - reattest.yml
+      # The platform init writes calls its own stacks.yml and profile.yml at
+      # the same commit (./), whose workflow identities sign the stacks and
+      # the shared profile.
+      - platform.yml
+  # app.yml calls this repository's own reusable workflows at the release
+  # it is (scripts/release.sh moves the refs from main to the tag), so a
+  # caller pinning app.yml by tag or commit runs those of the same release.
+  # What init writes (internal/factory/testdata/init, audited here too, as
+  # adopters' own workflows) pins ClearCutt's actions and workflows by
+  # release tag, which Dependabot moves, grouped; each verifies what it
+  # installs (the factory and verify actions check the release binary's
+  # Sigstore signature, made by that tag's release workflow, and the portal
+  # workflow builds the release's signed archive). Everything else is
+  # pinned by commit.
+  unpinned-uses:
+    config:
+      policies:
+        "northcutted/*": ref-pin
+        "*": hash-pin

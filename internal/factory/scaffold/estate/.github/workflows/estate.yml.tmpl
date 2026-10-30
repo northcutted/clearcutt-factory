@@ -1,0 +1,211 @@
+# Verifies the {% .Name %} estate with clearcutt-verify and publishes it with
+# clearcutt-portal to GitHub Pages: daily (after the apps' daily fleet runs),
+# whenever a platform or app repository publishes or rebases
+# (clearcutt.estate-changed, from their notify jobs), and by hand.
+#
+#   1. Pull the last report bundle from {% .EstateRef %}, so this run
+#      extends its history; only a bundle this workflow signed on {% .Branch %} is
+#      read (--allow-missing: only "nothing there yet", the first run, may
+#      pass).
+#   2. estate verify over estate/refs.txt against estate/policy.yaml and the
+#      platform's trust policy, read from the signed shared profile;
+#      --rescan scans each image's verified SBOMs again with today's grype
+#      database; --reproduce rebuilds any factory image that has no verified
+#      reproduction attestation.
+#   3. Push the new bundle back and sign it, also when the gate fails (that
+#      is the run to look at); upload it for the portal.
+#   4. clearcutt-portal's reusable workflow builds the site and deploys it
+#      (Settings → Pages → Source: GitHub Actions).
+#
+# The estate's signer, this workflow on {% .Branch %}, is the platform trust policy's
+# estate signer (clearcutt-factory init --platform --estate-repo {% .Repo %}).
+name: estate
+on:
+  pull_request:
+  schedule:
+    - cron: "17 7 * * *" # daily, after the apps' fleet runs (05:41)
+  repository_dispatch:
+    types: [clearcutt.estate-changed]
+  workflow_dispatch:
+permissions:
+  contents: read
+# Publishing runs serialize because each extends the last run's history.
+# Pull request validation has its own group and cannot cancel a publisher.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('estate-pr-{0}', github.event.pull_request.number) || 'estate' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  # A pull request checks the policy and that the signed history restores,
+  # without publishing or signing anything.
+  config:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      ESTATE: {% .EstateRef %}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: northcutted/clearcutt-verify@{% .VerifyRef %}
+      - uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4 # v2.0.2
+      - name: Fetch the trust policy from the signed shared profile
+        env:
+          PROFILE: {% .ProfileRef %}
+          PROFILE_SIGNER: {% .ProfileSigner %}
+        run: |
+          set -euo pipefail
+          digest=$(oras resolve "$PROFILE")
+          cosign verify --certificate-identity "$PROFILE_SIGNER" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${PROFILE%:*}@$digest" >/dev/null
+          oras pull "${PROFILE%:*}@$digest" --output estate/.profile
+          test -s estate/.profile/trust-policy.yaml
+          echo "trust policy from ${PROFILE%:*}@$digest"
+      - name: Validate the policy and restore signed history
+        run: |
+          clearcutt-verify estate pull "$ESTATE" --output dist/estate --allow-missing \
+            --policy estate/policy.yaml
+
+  verify:
+    if: github.ref == 'refs/heads/{% .Branch %}'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write # estate push (and reading the packages)
+      id-token: write # sign the pushed bundle
+    outputs:
+      bundle: ${{ steps.bundle.outputs.present }}
+    env:
+      ESTATE: {% .EstateRef %}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # clearcutt-verify offers it to ghcr.io only
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # clearcutt-factory, for --reproduce (and QEMU for the other platform).
+      - uses: northcutted/clearcutt-factory@{% .Ref %}
+        with:
+          tools: "false"
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          # The privileged binfmt image, pinned (update: crane digest tonistiigi/binfmt:<tag>).
+          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+      # Installs cosign and a signature-verified clearcutt-verify: the
+      # release this action is pinned to, so a Dependabot bump moves both.
+      - uses: northcutted/clearcutt-verify@{% .VerifyRef %}
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4 # v2.0.2
+      # grype, for --rescan: a pinned release, checked against its checksum.
+      - name: Install grype
+        env:
+          GRYPE_VERSION: "{% .GrypeVersion %}"
+          GRYPE_SHA256: {% .GrypeSHA256 %}
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/grype"
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 -o "$dir/grype.tar.gz" \
+            "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
+          echo "${GRYPE_SHA256}  $dir/grype.tar.gz" | sha256sum -c -
+          tar -xzf "$dir/grype.tar.gz" -C "$dir" grype
+          echo "$dir" >> "$GITHUB_PATH"
+
+      # The trust policy is the platform's (org/trust.yaml), read from the
+      # signed shared profile factory builds with ({% .ProfileRef %}), not
+      # from a checkout: the estate trusts exactly whom factory trusts, in the
+      # same signed copy. An unsigned or otherwise signed profile stops the
+      # run here.
+      - name: Fetch the trust policy from the signed shared profile
+        env:
+          PROFILE: {% .ProfileRef %}
+          PROFILE_SIGNER: {% .ProfileSigner %}
+        run: |
+          set -euo pipefail
+          digest=$(oras resolve "$PROFILE")
+          cosign verify --certificate-identity "$PROFILE_SIGNER" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${PROFILE%:*}@$digest" >/dev/null
+          oras pull "${PROFILE%:*}@$digest" --output estate/.profile
+          test -s estate/.profile/trust-policy.yaml
+          echo "trust policy from ${PROFILE%:*}@$digest"
+
+      # The bundle is read only if this workflow signed it on {% .Branch %} (the
+      # trust policy's estate signer): estate pull refuses an unsigned or
+      # otherwise signed one.
+      - name: Pull the last report bundle
+        run: |
+          clearcutt-verify estate pull "$ESTATE" --output dist/estate --allow-missing \
+            --policy estate/policy.yaml
+
+      # Exit 0: every image meets the policy; 2: one falls short (the report
+      # says which and why); anything else: verification couldn't run, or it
+      # ran but could check nothing, and the bundle isn't pushed.
+      - name: Verify the estate
+        id: verify
+        run: |
+          set +e
+          clearcutt-verify estate verify --refs estate/refs.txt --policy estate/policy.yaml \
+            --name {% .Name %} --out dist/estate --platforms linux/amd64,linux/arm64 \
+            --rescan --reproduce --fail-on failed
+          code=$?
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Is there a new report?
+        id: bundle
+        if: ${{ !cancelled() }}
+        env:
+          CODE: ${{ steps.verify.outputs.code }}
+        run: |
+          if { [ "$CODE" = 0 ] || [ "$CODE" = 2 ]; } && [ -f dist/estate/estate-report.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push the bundle and sign it
+        if: ${{ !cancelled() && steps.bundle.outputs.present == 'true' }}
+        run: |
+          set -euo pipefail
+          clearcutt-verify estate push "$ESTATE" --dir dist/estate \
+            --file estate-report.json --file estate-history.json \
+            --generated-at "$(jq -r .metadata.generatedAt dist/estate/estate-report.json)" | tee "$RUNNER_TEMP/push.out"
+          digest=$(sed -n 's/^\[estate\] digest \(sha256:[0-9a-f]\{64\}\)$/\1/p' "$RUNNER_TEMP/push.out")
+          if [ -z "$digest" ]; then
+            echo "::error::estate push printed no digest"
+            exit 1
+          fi
+          cosign sign --yes "${ESTATE%:*}@$digest"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !cancelled() && steps.bundle.outputs.present == 'true' }}
+        with:
+          name: estate-bundle
+          path: |
+            dist/estate/estate-report.json
+            dist/estate/estate-history.json
+          if-no-files-found: error
+
+  # Also when the gate failed: the site shows why.
+  portal:
+    needs: verify
+    if: ${{ !cancelled() && github.ref == 'refs/heads/{% .Branch %}' && needs.verify.outputs.bundle == 'true' }}
+    uses: northcutted/clearcutt-portal/.github/workflows/portal.yml@{% .PortalRef %}
+    permissions: {contents: read, pages: write, id-token: write}
+    with:
+      bundle-artifact: estate-bundle
+      title: {% .Name %} estate

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 
@@ -90,6 +91,7 @@ func Build(ctx context.Context, cfg Config, req Request) (*Result, error) {
 	}
 
 	var cmd *exec.Cmd
+	var rt string // the container runtime, when BuildKit runs in a container
 	if cfg.Addr != "" {
 		bin, err := exec.LookPath("buildctl")
 		if err != nil {
@@ -97,8 +99,8 @@ func Build(ctx context.Context, cfg Config, req Request) (*Result, error) {
 		}
 		cmd = exec.CommandContext(ctx, bin, append([]string{"--addr", cfg.Addr}, args(req.ContextDir, req.OutDir)...)...)
 	} else {
-		rt, err := container.Runtime(cfg.Runtime)
-		if err != nil {
+		var err error
+		if rt, err = container.Runtime(cfg.Runtime); err != nil {
 			return nil, err
 		}
 		run := []string{"run", "--rm", "--privileged",
@@ -126,8 +128,18 @@ func Build(ctx context.Context, cfg Config, req Request) (*Result, error) {
 		run = append(run, args("/ctx", "/out")...)
 		cmd = exec.CommandContext(ctx, rt, run...)
 	}
-	cmd.Stdout, cmd.Stderr = cfg.Stdout, cfg.Stderr
+	// The runtime's own errors come before BuildKit's output: keep the
+	// start of stderr to tell a path the runtime can't see from a failed
+	// build.
+	head := &headWriter{max: 4096}
+	cmd.Stdout = cfg.Stdout
+	cmd.Stderr = io.MultiWriter(writerOrDiscard(cfg.Stderr), head)
 	if err := cmd.Run(); err != nil {
+		if rt != "" {
+			if nse := NotShared(rt, head.String()); nse != nil {
+				return nil, nse
+			}
+		}
 		return nil, fmt.Errorf("build failed: %w", err)
 	}
 
@@ -163,10 +175,88 @@ func containerOptions(cfg Config) []string {
 }
 
 // bind formats a --mount bind spec; unlike -v it tolerates ':' in host paths.
+// The source is the path with its symbolic links resolved, since a
+// container runtime in a VM (a podman machine, Docker Desktop) sees only
+// the host directories shared with it, by their real paths: on macOS /tmp
+// is /private/tmp, which a podman machine shares, while the VM's own /tmp
+// is another directory.
 func bind(src, dst string, readonly bool) string {
-	m := "type=bind,source=" + src + ",target=" + dst
+	m := "type=bind,source=" + HostPath(src) + ",target=" + dst
 	if readonly {
 		m += ",readonly"
 	}
 	return m
+}
+
+// HostPath is p as a container runtime should be given it: absolute, with
+// symbolic links resolved (p itself when it can't be resolved).
+func HostPath(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return real
+	}
+	return abs
+}
+
+// NotSharedError is a path the container runtime couldn't see: it runs in
+// a VM (a podman machine, Docker Desktop) that shares only some host
+// directories with it.
+type NotSharedError struct {
+	Runtime string // docker or podman
+	Path    string
+}
+
+func (e *NotSharedError) Error() string {
+	if e.Runtime == "podman" {
+		return fmt.Sprintf("podman can't see %s, which the build mounts into its BuildKit container: a podman machine shares only some host directories with its VM (your home directory, by default; podman machine inspect lists them), so build from a directory under one of them and keep --out there, or share the path with the machine (podman machine init --volume)", e.Path)
+	}
+	return fmt.Sprintf("%s can't see %s, which the build mounts into its BuildKit container: the runtime's VM shares only some host directories (Docker Desktop: Settings → Resources → File sharing), so build from a directory it shares and keep --out there, or share the path", e.Runtime, e.Path)
+}
+
+var (
+	// podman: Error: statfs /tmp/x/context: no such file or directory
+	podmanNotShared = regexp.MustCompile(`statfs (\S+): no such file or directory`)
+	// Docker Desktop: Mounts denied: The path /x is not shared from the host and is not known to Docker.
+	dockerNotShared = regexp.MustCompile(`(?s)Mounts denied:.*?[Tt]he path (\S+) is not shared`)
+)
+
+// NotShared recognizes the runtime's message for a bind mount source it
+// can't see, in the start of its stderr, and returns it as an error that
+// names the cause and the fix; nil for any other failure.
+func NotShared(runtimeBin, stderr string) error {
+	rt := "docker"
+	if strings.Contains(filepath.Base(runtimeBin), "podman") {
+		rt = "podman"
+	}
+	for _, re := range []*regexp.Regexp{podmanNotShared, dockerNotShared} {
+		if m := re.FindStringSubmatch(stderr); m != nil {
+			return &NotSharedError{Runtime: rt, Path: strings.TrimSuffix(m[1], ".")}
+		}
+	}
+	return nil
+}
+
+// headWriter keeps the first max bytes written to it.
+type headWriter struct {
+	max int
+	buf []byte
+}
+
+func (h *headWriter) Write(p []byte) (int, error) {
+	if room := h.max - len(h.buf); room > 0 {
+		h.buf = append(h.buf, p[:min(room, len(p))]...)
+	}
+	return len(p), nil
+}
+
+func (h *headWriter) String() string { return string(h.buf) }
+
+func writerOrDiscard(w io.Writer) io.Writer {
+	if w == nil {
+		return io.Discard
+	}
+	return w
 }

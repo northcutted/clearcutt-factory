@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/northcutted/clearcutt-factory/v1.2.3/schemas/org.schema.json
+# Org profile for this platform repository's own images (images/*/image.yaml)
+# and stacks (stacks/*.yaml). It extends the shared profile this repository
+# publishes (org/profile.yaml, with org/trust.yaml) by path, so the platform
+# builds under exactly what every app repository extends. Each lock pins it
+# as profile: {path, digest}, the digest profile push publishes it at.
+apiVersion: factory.clearcutt.dev/v1alpha1
+kind: OrgProfile
+
+extends:
+  path: org/profile.yaml
+
+registry: registry.example.com/acme/platform # images go to <registry>/<metadata.name>
+# Platform images carry line tags (metadata.tags in each image.yaml), not latest.
+tags: []
+
+defaults:
+  base: cgr.dev/chainguard/wolfi-base:latest

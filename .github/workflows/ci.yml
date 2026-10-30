@@ -30,6 +30,16 @@ jobs:
         run: .github/scripts/publish-ref_test.sh
       - name: notify.yml announces build images as such
         run: .github/scripts/notify-events_test.sh
+      - name: notify.yml wakes the run images' dependents by layer digest, and the estate
+        run: .github/scripts/notify-dependents_test.sh
+      - name: The action installs the release its tag or commit names
+        run: .github/scripts/action-version_test.sh
+      - name: release.sh tags only a tree whose workflows name the release
+        run: .github/scripts/release_test.sh
+      - name: app.yml runs what each event needs
+        run: .github/scripts/app-plan_test.sh
+      - name: registry-login picks one cloud's complete inputs, or fails
+        run: .github/scripts/registry-login_test.sh
       - name: open-pr.sh opens, updates, closes, and auto-merges
         run: .github/scripts/open-pr_test.sh
       - name: changed-only builds what a pull request affects
@@ -51,8 +61,14 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
       - name: actionlint
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+        run: actionlint
+      # What clearcutt-factory init writes, as adopters run it (zizmor, below,
+      # audits it too).
+      - name: actionlint the workflows init writes
+        run: .github/scripts/init-lint.sh
       - name: zizmor
         uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
         with:

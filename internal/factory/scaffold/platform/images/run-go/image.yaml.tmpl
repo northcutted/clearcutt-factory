@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/northcutted/clearcutt-factory/{% .Ref %}/schemas/manifest.schema.json
+# Run image for stack go:1, what Go apps ship on: static binaries need only
+# CA certificates and time zone data. Apps on it are rebased onto each new
+# build (fleet.yml), when notify.yml announces one.
+apiVersion: factory.clearcutt.dev/v1alpha1
+kind: Image
+metadata:
+  name: run-go
+  tags: ["1"]
+spec:
+  packages: [ca-certificates-bundle, tzdata]
+  labels:
+    org.opencontainers.image.source: https://github.com/{% .Repo %}
+    org.opencontainers.image.description: Run image for Go apps (stack go:1)
+  user: "65532"
+  workdir: /app
+  test:
+    command: [/bin/sh, -c, 'test "$(id -u)" = 65532 && test -s /etc/ssl/certs/ca-certificates.crt && test -e /usr/share/zoneinfo/UTC']

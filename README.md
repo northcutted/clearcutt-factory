@@ -44,13 +44,26 @@ Install a signed release binary from
 Building needs Docker or Podman (BuildKit runs inside a container, pinned by
 digest); scanning and signing need `syft`, `grype`, and `cosign` on `PATH`.
 
-Set up your own repository (an org profile, an example image, and a GitHub
-Actions workflow that publishes and maintains everything):
+Set up your own repository (an org profile, an example image, a GitHub
+Actions workflow that publishes and maintains everything, and a Dependabot
+configuration):
 
 ```sh
 clearcutt-factory init
 ```
 
+An organization sets up its platform, app, and estate repositories with
+`init --platform`, `init --app`, and `init --estate`: the platform's images,
+stack, shared profile and owner-scoped trust policy, and workflows; an app
+that is its `app.yaml` plus a short caller of `app.yml`; and the estate's
+clearcutt-verify and clearcutt-portal workflow
+([adopting](docs/adopting.md#init-for-a-platform-its-apps-and-its-estate)).
+
+`clearcutt-factory doctor` checks that this machine can build: docker or
+podman (and that it sees the repository and `--out`), BuildKit and QEMU for
+every platform, syft, grype, and cosign, registry push access, the GitHub
+App, and that this binary is the release the workflows pin; each failure
+comes with its fix ([adopting](docs/adopting.md#1-install)).
 [docs/adopting.md](docs/adopting.md) walks through the rest. To try the
 examples here:
 
@@ -259,6 +272,11 @@ the stack's digest until `lock --update` moves it, and
 `policy.requireSignedStacks` accepts only stacks signed by the org's stack
 signer (`signing.stacks`). Every command that uses the stack checks the
 version the lock pins, so editing the lock can't bring in an unsigned one.
+`policy.requireSignedBases` also checks the stack's build and run images
+(where they are pinned, built on, rebased onto, and named by `stack push`),
+against the image signers that name one repository (`sourceRepository`)
+only: an owner-scoped signer would let any of the owner's repositories
+vouch for what every app ships on.
 Pushing an unchanged stack again only moves its tag once the stack signer
 has signed it, and in key mode stacks are signed with `signing.stackKey`
 (or `stack push --key`) when the platform's stacks have a key of their own.
@@ -720,8 +738,14 @@ failed reproduction still fails the run. `clearcutt-factory build`, `rebase`,
 [`notify.yml`](.github/workflows/notify.yml) keep the fleet current (see
 [Running a fleet](#running-a-fleet)), and
 [`reattest.yml`](.github/workflows/reattest.yml) its evidence
-([Renewing the evidence](#renewing-the-evidence)). Other CI systems call the same commands;
-nothing is GitHub-specific.
+([Renewing the evidence](#renewing-the-evidence)).
+[`app.yml`](.github/workflows/app.yml) calls all of them for an app
+repository, choosing from the event, so an app repository's workflow is one
+job ([adopting](docs/adopting.md#an-app-repository-is-its-appyaml-and-one-call)).
+The workflows that push log in with `REGISTRY_USERNAME`/`REGISTRY_PASSWORD`,
+or by OIDC federation to Amazon ECR, Google Artifact Registry, or Azure
+Container Registry ([adopting](docs/adopting.md#registries-in-a-cloud-without-a-stored-secret)).
+Other CI systems call the same commands; nothing is GitHub-specific.
 
 ## Limitations
 
@@ -751,10 +775,10 @@ nothing is GitHub-specific.
   registry.
 * The fleet workflow rebases the apps whose manifests are in its own
   repository. Apps elsewhere run it themselves, on their schedule or when
-  `notify.yml` wakes them; `notify.yml` finds them by a topic, not by what
-  they are built on. clearcutt-verify's `estate dependents` lists the images
-  actually built on a base (by layer digest), for `notify.yml`'s
-  `repositories` input or for `clearcutt-factory rebase --image`.
+  `notify.yml` wakes them; `notify.yml` finds them by a topic, or, with
+  its `estate-report` input, by what the estate's clearcutt-verify report
+  proves (by layer digest) is built on a run image: only for apps whose
+  images the estate verifies, with the topic as the fallback.
 * Smoke tests run images on the build machine, other architectures through
   emulation (QEMU in CI); `--no-test` skips them. A command test's container
   has no network unless the test sets `network: true`; an HTTP test's has the

@@ -23,9 +23,23 @@ const usage = `clearcutt-factory: declarative, reproducible, signed OCI images (
 Usage:
   clearcutt-factory init    [--dir .] [--repo OWNER/NAME] [--registry REGISTRY] [--default-branch BRANCH] [--force]
                             [--extends REF (--extends-identity URL [--extends-issuer URL] | --extends-key K)]
-      Set up a repository: an org profile, an example image, and a GitHub
+                            [--allow-commit-pins]
+      Set up a repository of images: an org profile, an example image, and a GitHub
       Actions workflow that publishes, updates, and rebases with ClearCutt Factory.
       --extends makes the org profile extend a shared one, signed by that identity or key.
+      The image signer accepts factory's signing workflows at a release tag;
+      --allow-commit-pins also at any commit (see docs/adopting.md first).
+  clearcutt-factory init --platform [--estate-repo OWNER/NAME] [same flags]
+      A platform repository: run and build images, a stack, the shared org profile
+      with the trust policy (images: any repository of the owner the image names as
+      its source), and the workflows that publish them and wake the apps.
+  clearcutt-factory init --app [--platform-repo OWNER/NAME] [--stack REF] [--name NAME] [--estate-repo OWNER/NAME]
+      An app repository: app.yaml on the platform's stack, an org profile extending
+      the platform's (its signature checked), and a caller of app.yml.
+  clearcutt-factory init --estate --platform-repo OWNER/NAME [--name NAME]
+      An estate repository: clearcutt-verify over the images, with the trust policy
+      from the platform's signed profile, published with clearcutt-portal.
+      Every kind writes a Dependabot configuration (the app's ecosystem too).
   clearcutt-factory lock    [-f image.yaml] [--update | --update-base | --update-stack | --update-package NAME[,NAME…]…]
       Pin every input and write the lock and Containerfile. --update re-resolves
       all of them; --update-base only the base; --update-stack an app's stack
@@ -78,6 +92,13 @@ Usage:
       other repositories can extend it (extends: {ref: REF, signer: …}), and sign
       it as stacks are signed. An unchanged profile signing.profile signed only
       moves the tag.
+  clearcutt-factory doctor  [-f image.yaml] [--out DIR] [--json]
+      Check that this machine (or runner) can do what factory does: docker or
+      podman, and that it sees the repository and --out; BuildKit with every
+      platform the manifest builds (QEMU); syft, grype, cosign; push access to
+      the manifest's repository (without pushing); the GitHub App or token
+      (CLEARCUTT_APP_ID, CLEARCUTT_APP_PRIVATE_KEY, CLEARCUTT_BOT_TOKEN); and the
+      factory release the workflows pin. A fix for each failure; exit 1 on one.
   clearcutt-factory version
 
 Common flags:
@@ -229,7 +250,27 @@ var commands = []command{
 		fs.StringVar(&io.ExtendsIdentity, "extends-identity", "", "the certificate identity that signs the shared profile")
 		fs.StringVar(&io.ExtendsIssuer, "extends-issuer", "", "its OIDC issuer (default: GitHub Actions)")
 		fs.StringVar(&io.ExtendsKey, "extends-key", "", "the public key that signs the shared profile instead of an identity")
-		return func(ctx context.Context) error { return factory.Init(ctx, *opts, io) }
+		app := fs.Bool("app", false, "set up an app repository: app.yaml, an org profile, and a caller of app.yml")
+		platform := fs.Bool("platform", false, "set up a platform repository: run and build images, a stack, the shared org profile and trust policy, and their workflows")
+		estate := fs.Bool("estate", false, "set up an estate repository: clearcutt-verify and clearcutt-portal over the organization's images")
+		fs.StringVar(&io.Name, "name", "", "the app's name (--app; default the repository's), or the estate's (--estate; default the owner)")
+		fs.StringVar(&io.Stack, "stack", "", "the stack the app builds on (--app), e.g. ghcr.io/acme/stacks/go:1; writes app.yaml")
+		fs.StringVar(&io.PlatformRepo, "platform-repo", "", "the platform repository (OWNER/NAME) whose profile.yml signs <registry>/factory/org:1: --app extends it, --estate reads its trust policy")
+		fs.BoolVar(&io.AllowCommitPins, "allow-commit-pins", false, "the image signer also accepts factory's signing workflows at any commit, not only a release tag, for callers that pin them by SHA (any commit in the fork network: see docs/adopting.md)")
+		fs.StringVar(&io.EstateRepo, "estate-repo", "", "the estate repository (OWNER/NAME): --app and --platform send it clearcutt.estate-changed; --platform trusts its estate.yml and wakes only the apps its report proves are built on a run image")
+		return func(ctx context.Context) error {
+			n := 0
+			for kind, set := range map[string]bool{factory.InitApp: *app, factory.InitPlatform: *platform, factory.InitEstate: *estate} {
+				if set {
+					io.Kind = kind
+					n++
+				}
+			}
+			if n > 1 {
+				return usageError{errors.New("init takes one of --app, --platform, and --estate")}
+			}
+			return factory.Init(ctx, *opts, io)
+		}
 	}},
 	{"reattest", func(fs *flag.FlagSet, opts *factory.Options) func(context.Context) error {
 		var ro factory.ReattestOptions
@@ -247,6 +288,12 @@ var commands = []command{
 			}
 			return factory.Reattest(ctx, *opts, ro)
 		}
+	}},
+	{"doctor", func(fs *flag.FlagSet, opts *factory.Options) func(context.Context) error {
+		var do factory.DoctorOptions
+		fs.StringVar(&do.OutDir, "out", "out", "the directory builds write to (build --out), which the container runtime must see")
+		fs.BoolVar(&do.JSON, "json", false, "print the checks as JSON: {version, ok, checks: [{name, status (ok, warn, fail, skip), detail, fix}]}")
+		return func(ctx context.Context) error { return factory.Doctor(ctx, *opts, do) }
 	}},
 	{"affected", func(fs *flag.FlagSet, opts *factory.Options) func(context.Context) error {
 		var ao factory.AffectedOptions
