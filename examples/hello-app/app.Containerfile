@@ -7,14 +7,14 @@
 # (moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea):
 #   buildctl build --frontend dockerfile.v0 --local context=. --local dockerfile=. \
 #     --opt platform=linux/amd64,linux/arm64 \
-#     --opt build-arg:SOURCE_DATE_EPOCH=1791504000 \
+#     --opt build-arg:SOURCE_DATE_EPOCH=1793318400 \
 #     --output type=oci,dest=image.tar,rewrite-timestamp=true,$ANNOTATIONS
 # from a context staged with `clearcutt-factory render --context-dir`, where
 # $ANNOTATIONS (comma-separated) records the base for `clearcutt-factory rebase`:
 #   annotation-manifest[linux/amd64].org.opencontainers.image.base.name=cgr.dev/chainguard/static:latest
-#   annotation-manifest[linux/amd64].org.opencontainers.image.base.digest=sha256:a40219f3b0c2719e4e4220310e80a2230a4b95881644292c130e3a8e8287fc6c
+#   annotation-manifest[linux/amd64].org.opencontainers.image.base.digest=sha256:939754fefdbdb198356dc3187310417777d4dd8561be000885e224d49a4ce727
 #   annotation-manifest[linux/arm64].org.opencontainers.image.base.name=cgr.dev/chainguard/static:latest
-#   annotation-manifest[linux/arm64].org.opencontainers.image.base.digest=sha256:daed076c904e5dc26f5ff87d77aa4cea8b7ca76e906b561915dafe5b086377dc
+#   annotation-manifest[linux/arm64].org.opencontainers.image.base.digest=sha256:8f9c7533c7709270342660bca209e5fc593483c27f95283e1082424c1e0da967
 
 ARG TARGETARCH
 
@@ -39,7 +39,7 @@ GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -buildid=" 
 FACTORY_EOF
 
 # ---- app ----
-FROM cgr.dev/chainguard/static:latest@sha256:fe55470f22d3259488d9d3739168d8f04da67755f0b69382bc26eda4a7d3d327
+FROM cgr.dev/chainguard/static:latest@sha256:fc42af33e643f20d08baf03cddcc1c02ba57052dfb02edb0d79f3fc47bcea8d9
 COPY --link --from=build /out/ /app/
 ENV PORT="8080"
 LABEL "org.opencontainers.image.description"="A tiny HTTP service built on the go stack"
