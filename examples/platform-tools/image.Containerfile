@@ -7,19 +7,19 @@
 # (moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea):
 #   buildctl build --frontend dockerfile.v0 --local context=. --local dockerfile=. \
 #     --opt platform=linux/amd64,linux/arm64 \
-#     --opt build-arg:SOURCE_DATE_EPOCH=1792886400 \
+#     --opt build-arg:SOURCE_DATE_EPOCH=1793491200 \
 #     --output type=oci,dest=image.tar,rewrite-timestamp=true
 # from a context staged with `clearcutt-factory render --context-dir`.
 
 ARG TARGETARCH
 
 # ---- tool: kubectl (url 1.37.1, verified: checksum-file) ----
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43 AS tool-kubectl-amd64
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:88a20e2d017bd20cdc0cb3910de603e7bea9512a6c351a8dd3c9df212ab03d73 AS tool-kubectl-amd64
 ARG SOURCE_DATE_EPOCH
 ADD --checksum=sha256:65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8 https://dl.k8s.io/release/v1.37.1/bin/linux/amd64/kubectl /src/kubectl
 RUN install -D -m 0755 /src/kubectl /out/usr/local/bin/kubectl
 
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43 AS tool-kubectl-arm64
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:88a20e2d017bd20cdc0cb3910de603e7bea9512a6c351a8dd3c9df212ab03d73 AS tool-kubectl-arm64
 ARG SOURCE_DATE_EPOCH
 ADD --checksum=sha256:ff749f4b78d9c4f1ec87307df9b50119ed819e2094aa9810cb9acffc3286c8c7 https://dl.k8s.io/release/v1.37.1/bin/linux/arm64/kubectl /src/kubectl
 RUN install -D -m 0755 /src/kubectl /out/usr/local/bin/kubectl
@@ -27,13 +27,13 @@ RUN install -D -m 0755 /src/kubectl /out/usr/local/bin/kubectl
 FROM tool-kubectl-${TARGETARCH} AS tool-kubectl
 
 # ---- tool: helm (url 4.3.0, verified: checksum-file) ----
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43 AS tool-helm-amd64
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:88a20e2d017bd20cdc0cb3910de603e7bea9512a6c351a8dd3c9df212ab03d73 AS tool-helm-amd64
 ARG SOURCE_DATE_EPOCH
 ADD --checksum=sha256:86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz /src/helm-v4.3.0-linux-amd64.tar.gz
 RUN mkdir -p /x && tar -xzf /src/helm-v4.3.0-linux-amd64.tar.gz -C /x \
  && install -D -m 0755 /x/linux-amd64/helm /out/usr/local/bin/helm
 
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43 AS tool-helm-arm64
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:88a20e2d017bd20cdc0cb3910de603e7bea9512a6c351a8dd3c9df212ab03d73 AS tool-helm-arm64
 ARG SOURCE_DATE_EPOCH
 ADD --checksum=sha256:31c5794dd55c66a51e6b7d2e2ac7a114ae8b1de41ff1d9ba51748ac973b06a08 https://get.helm.sh/helm-v4.3.0-linux-arm64.tar.gz /src/helm-v4.3.0-linux-arm64.tar.gz
 RUN mkdir -p /x && tar -xzf /src/helm-v4.3.0-linux-arm64.tar.gz -C /x \
@@ -42,13 +42,13 @@ RUN mkdir -p /x && tar -xzf /src/helm-v4.3.0-linux-arm64.tar.gz -C /x \
 FROM tool-helm-${TARGETARCH} AS tool-helm
 
 # ---- tool: gh (github-release 2.102.0, verified: checksum-file) ----
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43 AS tool-gh-amd64
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:88a20e2d017bd20cdc0cb3910de603e7bea9512a6c351a8dd3c9df212ab03d73 AS tool-gh-amd64
 ARG SOURCE_DATE_EPOCH
 ADD --checksum=sha256:bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386 https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_amd64.tar.gz /src/gh_2.102.0_linux_amd64.tar.gz
 RUN mkdir -p /x && tar -xzf /src/gh_2.102.0_linux_amd64.tar.gz -C /x \
  && install -D -m 0755 /x/gh_2.102.0_linux_amd64/bin/gh /out/usr/local/bin/gh
 
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43 AS tool-gh-arm64
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:88a20e2d017bd20cdc0cb3910de603e7bea9512a6c351a8dd3c9df212ab03d73 AS tool-gh-arm64
 ARG SOURCE_DATE_EPOCH
 ADD --checksum=sha256:7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484 https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_arm64.tar.gz /src/gh_2.102.0_linux_arm64.tar.gz
 RUN mkdir -p /x && tar -xzf /src/gh_2.102.0_linux_arm64.tar.gz -C /x \
@@ -57,12 +57,12 @@ RUN mkdir -p /x && tar -xzf /src/gh_2.102.0_linux_arm64.tar.gz -C /x \
 FROM tool-gh-${TARGETARCH} AS tool-gh
 
 # ---- tool: cosign (github-release 3.1.3, verified: github-asset-digest) ----
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43 AS tool-cosign-amd64
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:88a20e2d017bd20cdc0cb3910de603e7bea9512a6c351a8dd3c9df212ab03d73 AS tool-cosign-amd64
 ARG SOURCE_DATE_EPOCH
 ADD --checksum=sha256:4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71 https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign-linux-amd64 /src/cosign-linux-amd64
 RUN install -D -m 0755 /src/cosign-linux-amd64 /out/usr/local/bin/cosign
 
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43 AS tool-cosign-arm64
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:88a20e2d017bd20cdc0cb3910de603e7bea9512a6c351a8dd3c9df212ab03d73 AS tool-cosign-arm64
 ARG SOURCE_DATE_EPOCH
 ADD --checksum=sha256:c5d324e091826b0d7a78eb16fef316450b4eb9aaec045611c08ba06f5e73220a https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign-linux-arm64 /src/cosign-linux-arm64
 RUN install -D -m 0755 /src/cosign-linux-arm64 /out/usr/local/bin/cosign
@@ -70,10 +70,10 @@ RUN install -D -m 0755 /src/cosign-linux-arm64 /out/usr/local/bin/cosign
 FROM tool-cosign-${TARGETARCH} AS tool-cosign
 
 # ---- tool: crane (oci, verified: image-digest) ----
-# copied straight from gcr.io/go-containerregistry/crane:latest@sha256:9162effd4c674ad2fa4e7170a894503ffff9114f15a57e75a0a32e111ad32d85
+# copied straight from gcr.io/go-containerregistry/crane:latest@sha256:61bc716946c2779e1dc0fb8068d116edf8de10e5402262c17e8e4904ddcc14ac
 
 # ---- tool: yq (go v4.54.1, verified: go-sumdb) ----
-FROM --platform=$BUILDPLATFORM golang:1@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8 AS tool-yq
+FROM --platform=$BUILDPLATFORM golang:1@sha256:2920bb124f1a2e12a1d39f0cab756ae0068441ee1da7655dec7f5e374944095b AS tool-yq
 ARG TARGETOS TARGETARCH SOURCE_DATE_EPOCH
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOFLAGS=-trimpath \
@@ -81,66 +81,67 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
  && install -D -m 0755 "$(find /go/bin -type f | head -n 1)" /out/usr/local/bin/yq
 
 # ---- files ----
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43 AS files
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base:latest@sha256:88a20e2d017bd20cdc0cb3910de603e7bea9512a6c351a8dd3c9df212ab03d73 AS files
 ARG SOURCE_DATE_EPOCH
 COPY files/0/ /in/0/
 RUN mkdir -p /out/etc/platform-tools && cp -R /in/0/. /out/etc/platform-tools/
 
 # ---- image ----
-FROM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43 AS packages-amd64
+FROM cgr.dev/chainguard/wolfi-base:latest@sha256:88a20e2d017bd20cdc0cb3910de603e7bea9512a6c351a8dd3c9df212ab03d73 AS packages-amd64
 ARG SOURCE_DATE_EPOCH
 RUN <<'FACTORY_EOF'
 set -eu
 apk add --no-cache --repositories-file /dev/null \
   --repository https://apk.cgr.dev/chainguard \
-  apk-tools=2.14.10-r17 \
+  apk-tools=2.14.12-r0 \
   bash=5.3-r14 \
   busybox=1.38.0-r3 \
-  ca-certificates-bundle=20260909-r2 \
-  curl=8.22.0-r4 \
+  ca-certificates-bundle=20261020-r0 \
+  curl=8.23.0-r3 \
   cyrus-sasl-heimdal-libs=2.1.28-r58 \
-  gdbm=1.26-r7 \
-  git=2.56.0-r0 \
-  glibc-2.44=2.44-r8 \
-  glibc-2.44-locale-posix=2.44-r8 \
-  heimdal-libs=7.8.0-r53 \
+  gdbm=1.26-r9 \
+  git=2.56.0-r3 \
+  glibc-2.44=2.44-r11 \
+  glibc-2.44-locale-posix=2.44-r11 \
+  heimdal-libs=7.8.0-r55 \
   jq=1.8.2-r3 \
   keyutils-libs=1.6.3-r41 \
   krb5-conf=1.0-r10 \
   krb5-libs=1.22.2-r5 \
-  ld-linux-2.44=2.44-r8 \
-  libbrotlicommon1=1.2.1-r1 \
-  libbrotlidec1=1.2.1-r1 \
-  libbrotlienc1=1.2.1-r1 \
-  libcom_err=1.47.4-r3 \
-  libcrypt1-2.44=2.44-r8 \
-  libcrypto3=3.6.5-r2 \
-  libcurl-openssl4=8.22.0-r4 \
+  ld-linux-2.44=2.44-r11 \
+  libbrotlicommon1=1.2.1-r2 \
+  libbrotlidec1=1.2.1-r2 \
+  libbrotlienc1=1.2.1-r2 \
+  libcom_err=1.47.4-r5 \
+  libcrypt1-2.44=2.44-r11 \
+  libcurl-openssl4=8.23.0-r3 \
   libexpat1=2.9.0-r0 \
-  libgcc=16.2.0-r1 \
-  libidn2=2.3.8-r10 \
+  libgcc=16.2.0-r2 \
+  libidn2=2.3.8-r12 \
   libldap-2.6=2.6.14-r0 \
-  libnghttp2-14=1.70.0-r5 \
+  libnghttp2-14=1.70.0-r7 \
   libpcre2-8-0=10.49-r1 \
-  libpsl=0.23.3-r2 \
-  libssl3=3.6.5-r2 \
-  libunistring=1.4.2-r4 \
-  libverto=0.3.2-r9 \
+  libpsl=0.23.3-r4 \
+  libunistring=1.5-r0 \
+  libverto=0.3.2-r11 \
   libxcrypt=4.5.2-r6 \
-  ncurses=6.6.20261010-r0 \
-  ncurses-terminfo-base=6.6.20261010-r0 \
-  nghttp3=1.18.0-r1 \
-  ngtcp2=1.25.0-r5 \
-  oniguruma=6.9.10-r5 \
-  openssl-4.0-libcrypto=4.0.3-r6 \
-  openssl-4.0-libssl=4.0.3-r6 \
-  openssl-provider-legacy-allowed=4.0.3-r1 \
+  lmdb=0.9.35-r3 \
+  ncurses=6.6.20261031-r0 \
+  ncurses-terminfo-base=6.6.20261031-r0 \
+  nghttp3=1.18.0-r3 \
+  ngtcp2=1.25.0-r7 \
+  oniguruma=6.9.10-r7 \
+  openssl-3.6-libcrypto=3.6.5-r6 \
+  openssl-3.6-libssl=3.6.5-r6 \
+  openssl-4.0-libcrypto=4.0.3-r8 \
+  openssl-4.0-libssl=4.0.3-r8 \
+  openssl-provider-legacy-allowed=4.1.0-r0 \
   readline=8.3-r3 \
-  sqlite-libs=3.54.0-r0 \
+  sqlite-libs=3.54.1-r0 \
   wolfi-base=1-r7 \
-  wolfi-baselayout=20230201-r30 \
-  wolfi-keys=1-r13 \
-  zlib=1.3.2.1_rc20260921-r0
+  wolfi-baselayout=20230201-r31 \
+  wolfi-keys=1-r14 \
+  zlib=1.3.2.1_rc20260921-r1
 rm -f /var/cache/ldconfig/aux-cache
 # every package must be the build the lock pins (apk's database records
 # each one's APKINDEX checksum)
@@ -158,111 +159,113 @@ awk '
     }
     exit bad
   }' - /lib/apk/db/installed <<'LOCKED'
-apk-tools 2.14.10-r17 Q1E8t4KtTp/Uwpr20qpzYhUreUy+o=
+apk-tools 2.14.12-r0 Q1w4dvbYANZCyPgUWkh+tvBlgUShs=
 bash 5.3-r14 Q1CJBEpKoxYcrKWwAz0i/b9Z57GHk=
 busybox 1.38.0-r3 Q1nJ0RNPYKE/6p9+1WgdqC1lA0JnM=
-ca-certificates-bundle 20260909-r2 Q1zbsxuUTyaGsjqjVdn2gTRDfZs68=
-curl 8.22.0-r4 Q1aQJ3dlzjLjSkDTTA/4vv2WSn/s0=
+ca-certificates-bundle 20261020-r0 Q19P7fzB945PuRaQEnzg9napiRzKE=
+curl 8.23.0-r3 Q1hu3fXp/Hz+dI6VjXDfTZ02+y0mk=
 cyrus-sasl-heimdal-libs 2.1.28-r58 Q1DC9Yw4pMVRzfDpC3daQYzbX25Mw=
-gdbm 1.26-r7 Q130XEa78ss5wFp3M/3qjGLEUjq/4=
-git 2.56.0-r0 Q1c/gXw3ZlWqlTTOszeBVlwRVA+Tw=
-glibc-2.44 2.44-r8 Q1QD7MR3LUBjYC3CjWPYwBPlWUIF8=
-glibc-2.44-locale-posix 2.44-r8 Q1HJs/adAnfhoPwDdF77QyY4qGAP4=
-heimdal-libs 7.8.0-r53 Q1M+pGZHrwGgdSfxGX4HUcKQ+CDGk=
+gdbm 1.26-r9 Q1+OpsdmzH2i87yrQzTUkS0smKEPg=
+git 2.56.0-r3 Q1jYzTC0P9foVOJYRFILHLglveILw=
+glibc-2.44 2.44-r11 Q1ANYp0lxlNW/iQ+fuhEsDCJXYREk=
+glibc-2.44-locale-posix 2.44-r11 Q178/+Rrf+Tn1Uh+R0EpxmuQwWdrs=
+heimdal-libs 7.8.0-r55 Q1UeySuHDx/CaKpIfcvcN6/Zs5XYY=
 jq 1.8.2-r3 Q1cIjjnzqrowWo6jY/D8dmbkQ8mdk=
 keyutils-libs 1.6.3-r41 Q1XgkcHdv1/smZU0SQNAaWB5d4h1Y=
 krb5-conf 1.0-r10 Q1+nzcG33MVDgV7NxwDXA6r0h6j14=
 krb5-libs 1.22.2-r5 Q1gZY9KeWPIWMl4XhKlmOtDt+EYLQ=
-ld-linux-2.44 2.44-r8 Q1aH28bsgAgF+jvjKr5gugOyjTbmY=
-libbrotlicommon1 1.2.1-r1 Q1BnOASAJctNICIV3RYBxRlqcTIhs=
-libbrotlidec1 1.2.1-r1 Q18McycIizTY7w2et1oDNJ2OAnBtQ=
-libbrotlienc1 1.2.1-r1 Q1mmfdrEXpK/DsS57Iu4I61mELlUE=
-libcom_err 1.47.4-r3 Q1clzcZn1PrD2HuFWquJ0qANlaq8o=
-libcrypt1-2.44 2.44-r8 Q1ExmmYpVQuajyuK5ADM9RYRmNOYs=
-libcrypto3 3.6.5-r2 Q1QGirPfFiIRUV8XehQIeCaJvZMic=
-libcurl-openssl4 8.22.0-r4 Q1wzjLvFA57OiEjEOZEEkyNz2SDsA=
+ld-linux-2.44 2.44-r11 Q1uF4xI470TysfS518dXmkyYfwuIw=
+libbrotlicommon1 1.2.1-r2 Q1hR13/btAoHKw3piU/POT5y4GwS8=
+libbrotlidec1 1.2.1-r2 Q1StgOWSmECA/XsKwXr9lNj6rRTiQ=
+libbrotlienc1 1.2.1-r2 Q1sd/3jnUNRLQE1b2odCcgTMx/ORs=
+libcom_err 1.47.4-r5 Q12E6gt50fLlmRNgcOcU4cAFxp4Ec=
+libcrypt1-2.44 2.44-r11 Q1qRFJsC7oucODb1IyQMq/XVCBPzQ=
+libcurl-openssl4 8.23.0-r3 Q1FFfnB1sVWR4lll8iWoEz2xunvUU=
 libexpat1 2.9.0-r0 Q1BC65V0Hv+gnJNyw/bhPXBGDFang=
-libgcc 16.2.0-r1 Q1krF+IIJj8jk+4D2vdu0yg968QJg=
-libidn2 2.3.8-r10 Q1lw4nbo4LxjEef5I1byYHsAPpBqk=
+libgcc 16.2.0-r2 Q1ZiXgGGwe5h6UXD0/Zbd/7LKBpkw=
+libidn2 2.3.8-r12 Q1DSX/9PdfZuEiGQa88AP6gnX7JlI=
 libldap-2.6 2.6.14-r0 Q1ZNAisf6KH5qXv6KSAZwq1Ny425Y=
-libnghttp2-14 1.70.0-r5 Q1SR30zJvr/NgsgUhhwWj5iHVwk9s=
+libnghttp2-14 1.70.0-r7 Q1WieibmAzVU9bov1nZqz2iAcu1h4=
 libpcre2-8-0 10.49-r1 Q1E4AUcoiBlrrXlERl3QkBFhs2lMQ=
-libpsl 0.23.3-r2 Q1RK7VaR2vKo6I5N29L55HpiPh/ms=
-libssl3 3.6.5-r2 Q1il14v6kmTST7ngVhku5rLCzlSQU=
-libunistring 1.4.2-r4 Q1yApg46kY03wUYnuZkOTykCHs7d0=
-libverto 0.3.2-r9 Q1IzbuwOrJqbe8tlRUDXneJWwAvr0=
+libpsl 0.23.3-r4 Q1AtlcyaRuh5+CmWk0sVjGoGNbSdo=
+libunistring 1.5-r0 Q1JOYISGQ5t+ClT8ylDxfGDMZqpuw=
+libverto 0.3.2-r11 Q12cjXpTDtJcf1xg1tIxwFxqgMQ7k=
 libxcrypt 4.5.2-r6 Q1AgAMlqTIWIJ/agsYN4WFrdg4lUE=
-ncurses 6.6.20261010-r0 Q1q3rcxpTF2dFNnsEs3+cCRQ9M7UM=
-ncurses-terminfo-base 6.6.20261010-r0 Q1u9KHjNbaa8tVzi6ykLYlHiql3CA=
-nghttp3 1.18.0-r1 Q1vRUA9JlgKHJEdBopTzJLUJ3Zaa8=
-ngtcp2 1.25.0-r5 Q1Hh7vkmdczpC3oumz0naTz8nLZ0A=
-oniguruma 6.9.10-r5 Q1pOjsFSXbw5VfRdOIYMw1ZF51mtI=
-openssl-4.0-libcrypto 4.0.3-r6 Q1Gd2v1sjT5RedxpCLY/wn72oGNtg=
-openssl-4.0-libssl 4.0.3-r6 Q1SdxZYSluzOL+Dl8TUmg6qgJOFlg=
-openssl-provider-legacy-allowed 4.0.3-r1 Q1GPTXqRetxoF0f0PU1QPba50eqyw=
+lmdb 0.9.35-r3 Q1V0XfTN1JDlshI1+TyHnkS2T0Ge8=
+ncurses 6.6.20261031-r0 Q1gW25Kb9fqmel5hPO4cWZedYPvDw=
+ncurses-terminfo-base 6.6.20261031-r0 Q1k7ds1A74ij4vql3+aeD2h5i3Koo=
+nghttp3 1.18.0-r3 Q10j3kXOUOZ+Q8NruVOqWWE6SsAEU=
+ngtcp2 1.25.0-r7 Q1rMD8Azi4PeJZXgNSn3BjOb+aMLg=
+oniguruma 6.9.10-r7 Q1lKLd1vjhNmSxs2tcDs60xgv5iEs=
+openssl-3.6-libcrypto 3.6.5-r6 Q1ioZ+4eSEDmHV//QoL/GOlHfwAiQ=
+openssl-3.6-libssl 3.6.5-r6 Q1wn+6m6IEFLD8t02ntk2UofPc7go=
+openssl-4.0-libcrypto 4.0.3-r8 Q1W9piTcgyubhrducJCMM7+qErDxo=
+openssl-4.0-libssl 4.0.3-r8 Q1arwi4n4L3VZ3S8YJ6P4WwY/7JjY=
+openssl-provider-legacy-allowed 4.1.0-r0 Q1K5CR6PVd/wWU++lG1SG1MRrQkJA=
 readline 8.3-r3 Q1DpD7gaJW7NfhS6UXgOqJ/d9LlBc=
-sqlite-libs 3.54.0-r0 Q1ohm0OAaigF9vv2uU3P72hSlXg9g=
+sqlite-libs 3.54.1-r0 Q1VRLw0RR5HoAu1uTfKALfMDoAMco=
 wolfi-base 1-r7 Q16Ctc7TvokDUPOi+0TkHCeSmryh0=
-wolfi-baselayout 20230201-r30 Q1qyFV0NZAQAnaHoGFhRwUQlzoQC0=
-wolfi-keys 1-r13 Q1yen1tKh3ha5KrpU55DnYWyLHOQ0=
-zlib 1.3.2.1_rc20260921-r0 Q1qghpZ2L1/BEB0JcVmsu+LM29uoI=
+wolfi-baselayout 20230201-r31 Q1W4ff78hzbtDn6J9JJRRwbjKmKR4=
+wolfi-keys 1-r14 Q1pjSE0onslwptVuXi4b8BfLXGXXw=
+zlib 1.3.2.1_rc20260921-r1 Q1Ub6dKp3Ta9ickOJCrZu6zbJa70s=
 LOCKED
 FACTORY_EOF
 
-FROM cgr.dev/chainguard/wolfi-base:latest@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43 AS packages-arm64
+FROM cgr.dev/chainguard/wolfi-base:latest@sha256:88a20e2d017bd20cdc0cb3910de603e7bea9512a6c351a8dd3c9df212ab03d73 AS packages-arm64
 ARG SOURCE_DATE_EPOCH
 RUN <<'FACTORY_EOF'
 set -eu
 apk add --no-cache --repositories-file /dev/null \
   --repository https://apk.cgr.dev/chainguard \
-  apk-tools=2.14.10-r17 \
+  apk-tools=2.14.12-r0 \
   bash=5.3-r14 \
   busybox=1.38.0-r3 \
-  ca-certificates-bundle=20260909-r2 \
-  curl=8.22.0-r4 \
+  ca-certificates-bundle=20261020-r0 \
+  curl=8.23.0-r3 \
   cyrus-sasl-heimdal-libs=2.1.28-r58 \
-  gdbm=1.26-r7 \
-  git=2.56.0-r0 \
-  glibc-2.44=2.44-r8 \
-  glibc-2.44-locale-posix=2.44-r8 \
-  heimdal-libs=7.8.0-r53 \
+  gdbm=1.26-r9 \
+  git=2.56.0-r3 \
+  glibc-2.44=2.44-r11 \
+  glibc-2.44-locale-posix=2.44-r11 \
+  heimdal-libs=7.8.0-r55 \
   jq=1.8.2-r3 \
   keyutils-libs=1.6.3-r41 \
   krb5-conf=1.0-r10 \
   krb5-libs=1.22.2-r5 \
-  ld-linux-2.44=2.44-r8 \
-  libbrotlicommon1=1.2.1-r1 \
-  libbrotlidec1=1.2.1-r1 \
-  libbrotlienc1=1.2.1-r1 \
-  libcom_err=1.47.4-r3 \
-  libcrypt1-2.44=2.44-r8 \
-  libcrypto3=3.6.5-r2 \
-  libcurl-openssl4=8.22.0-r4 \
+  ld-linux-2.44=2.44-r11 \
+  libbrotlicommon1=1.2.1-r2 \
+  libbrotlidec1=1.2.1-r2 \
+  libbrotlienc1=1.2.1-r2 \
+  libcom_err=1.47.4-r5 \
+  libcrypt1-2.44=2.44-r11 \
+  libcurl-openssl4=8.23.0-r3 \
   libexpat1=2.9.0-r0 \
-  libgcc=16.2.0-r1 \
-  libidn2=2.3.8-r10 \
+  libgcc=16.2.0-r2 \
+  libidn2=2.3.8-r12 \
   libldap-2.6=2.6.14-r0 \
-  libnghttp2-14=1.70.0-r5 \
+  libnghttp2-14=1.70.0-r7 \
   libpcre2-8-0=10.49-r1 \
-  libpsl=0.23.3-r2 \
-  libssl3=3.6.5-r2 \
-  libunistring=1.4.2-r4 \
-  libverto=0.3.2-r9 \
+  libpsl=0.23.3-r4 \
+  libunistring=1.5-r0 \
+  libverto=0.3.2-r11 \
   libxcrypt=4.5.2-r6 \
-  ncurses=6.6.20261010-r0 \
-  ncurses-terminfo-base=6.6.20261010-r0 \
-  nghttp3=1.18.0-r1 \
-  ngtcp2=1.25.0-r5 \
-  oniguruma=6.9.10-r5 \
-  openssl-4.0-libcrypto=4.0.3-r6 \
-  openssl-4.0-libssl=4.0.3-r6 \
-  openssl-provider-legacy-allowed=4.0.3-r1 \
+  lmdb=0.9.35-r3 \
+  ncurses=6.6.20261031-r0 \
+  ncurses-terminfo-base=6.6.20261031-r0 \
+  nghttp3=1.18.0-r3 \
+  ngtcp2=1.25.0-r7 \
+  oniguruma=6.9.10-r7 \
+  openssl-3.6-libcrypto=3.6.5-r6 \
+  openssl-3.6-libssl=3.6.5-r6 \
+  openssl-4.0-libcrypto=4.0.3-r8 \
+  openssl-4.0-libssl=4.0.3-r8 \
+  openssl-provider-legacy-allowed=4.1.0-r0 \
   readline=8.3-r3 \
-  sqlite-libs=3.54.0-r0 \
+  sqlite-libs=3.54.1-r0 \
   wolfi-base=1-r7 \
-  wolfi-baselayout=20230201-r30 \
-  wolfi-keys=1-r13 \
-  zlib=1.3.2.1_rc20260921-r0
+  wolfi-baselayout=20230201-r31 \
+  wolfi-keys=1-r14 \
+  zlib=1.3.2.1_rc20260921-r1
 rm -f /var/cache/ldconfig/aux-cache
 # every package must be the build the lock pins (apk's database records
 # each one's APKINDEX checksum)
@@ -280,54 +283,55 @@ awk '
     }
     exit bad
   }' - /lib/apk/db/installed <<'LOCKED'
-apk-tools 2.14.10-r17 Q1vIqs9LYJJ8bU8v4G9BTJpQNtxKQ=
+apk-tools 2.14.12-r0 Q1IMqIw3lsc/XA3NQJI+onuv8nkuo=
 bash 5.3-r14 Q1eVGY7hnkHKtE7sQvWTZ8VAsVojA=
 busybox 1.38.0-r3 Q1EJpocCHP/Q38Ix79OXIZwyt7hDA=
-ca-certificates-bundle 20260909-r2 Q1pd7MNLZ6Hhu/zDZ7K+4UO3H8o+I=
-curl 8.22.0-r4 Q1RNVF949bhI4kHashQ3RpsvBT4kk=
+ca-certificates-bundle 20261020-r0 Q1Uxft6BYfAMq8F4Gi9M7Q2XromUs=
+curl 8.23.0-r3 Q1+sMys77aijLe6N9xFlCmIwrYTw4=
 cyrus-sasl-heimdal-libs 2.1.28-r58 Q1NOAPW2cQulC8VW9tww3lp1GnV5k=
-gdbm 1.26-r7 Q14SmVaXeZqyRFw1beUaoxg16UBzk=
-git 2.56.0-r0 Q1lV/sPjnmRs20W+9YUQGcn8ibY2g=
-glibc-2.44 2.44-r8 Q1uR7jBi4ymAetU0kEvxgdYFAfAWo=
-glibc-2.44-locale-posix 2.44-r8 Q1r5cBINrXHVzPwclPtSXVGqNoX/k=
-heimdal-libs 7.8.0-r53 Q1tTTsxW+BBcyGV16QLl1lpF2jJO0=
+gdbm 1.26-r9 Q1YbVQY0lrywqPTh3yp2HkWyfZk1g=
+git 2.56.0-r3 Q1fmtdLmocRA6WES+y3c4lmmlEVMM=
+glibc-2.44 2.44-r11 Q1jlcrAJQnt0XkRwqu85D5NNJQbLY=
+glibc-2.44-locale-posix 2.44-r11 Q1qN5m8vl0TXe0VOgFxXRu10pSuKU=
+heimdal-libs 7.8.0-r55 Q1/UYWRdK4YZN3aLZx8kd/z0JYTQY=
 jq 1.8.2-r3 Q1UVd+QYZzLs19UhTnUAfchEVOH8Q=
 keyutils-libs 1.6.3-r41 Q1Jwz50TjAkWnJuq3rB9QODnUE87g=
 krb5-conf 1.0-r10 Q1VYg7l46TvIrY6GYfhkQ/ghkw7l8=
 krb5-libs 1.22.2-r5 Q15gVCBS8eVVRSoVyXGLW6FTQsk7M=
-ld-linux-2.44 2.44-r8 Q1yEVdnndrAroQKZ0y4eCq5QmOyFc=
-libbrotlicommon1 1.2.1-r1 Q13kKxkPG4a4QoIEWOUYUWR745Urc=
-libbrotlidec1 1.2.1-r1 Q1D89+5z1UWrwdFvdl8ogPbG5l+x4=
-libbrotlienc1 1.2.1-r1 Q1shZXTE3aaTWTDElKuOp2ib6v9G0=
-libcom_err 1.47.4-r3 Q1o6Nj9DShuQkflDRleG4dd/tKXMI=
-libcrypt1-2.44 2.44-r8 Q1Anspz2H98t3yYWNYZwDUevwvbLE=
-libcrypto3 3.6.5-r2 Q1R853ywPuMZLxV3tKSzsAALpV8Ew=
-libcurl-openssl4 8.22.0-r4 Q155Re6v1aXK3i4tqR8EMQbjvrfs8=
+ld-linux-2.44 2.44-r11 Q1lyp40Ihovem9g84jXfWNZbvlffc=
+libbrotlicommon1 1.2.1-r2 Q1zDkoQRhezHwQDJmvRgjKY3Sz3TQ=
+libbrotlidec1 1.2.1-r2 Q1VIOviy6wnBhwwjIosVW3imsGRNQ=
+libbrotlienc1 1.2.1-r2 Q14JaKTqBvXh1q536Ln5xmVIbFE8w=
+libcom_err 1.47.4-r5 Q1ahB2dl5v6avHq4oHG9XExJq/Dhs=
+libcrypt1-2.44 2.44-r11 Q1dKkPYb1b1UwanUrt2BmexRZ0dCU=
+libcurl-openssl4 8.23.0-r3 Q1WSQAM/gy5To3STuK+M0KLnidB94=
 libexpat1 2.9.0-r0 Q1lRSL/Wub6+as280K86QfIdGkzvo=
-libgcc 16.2.0-r1 Q10B3sunNH1/57hljS+7r1oisdKB8=
-libidn2 2.3.8-r10 Q1ew3lvE7AZWVsPe0IWv95ZYu/bvA=
+libgcc 16.2.0-r2 Q1W8wNem4DirycEcKw02oRG/G4dIw=
+libidn2 2.3.8-r12 Q1FMCOxtZ+R6HtBtxk6KNbgcG9/t4=
 libldap-2.6 2.6.14-r0 Q1jglcaD1Nh5VxKYXmLpFlmsO+Ffs=
-libnghttp2-14 1.70.0-r5 Q1xbgMSFisur1yAsl5AnYwUgOIR4A=
+libnghttp2-14 1.70.0-r7 Q1Aopdog1j7uy+Pr7AjMkucvl9uVc=
 libpcre2-8-0 10.49-r1 Q1o7nQwmNCEJVyFFSk8YZrtiR70y0=
-libpsl 0.23.3-r2 Q1KJZ53kEE4t478ZOYOPqe84B/1Ls=
-libssl3 3.6.5-r2 Q1plAWQfTxdOdY76b9kYO2+WSj8kc=
-libunistring 1.4.2-r4 Q1vxztVwua2GLpyAb+qOQycXtptk8=
-libverto 0.3.2-r9 Q1Sb2KgPMJ/O9YaMx3jdprP/cgcE8=
+libpsl 0.23.3-r4 Q1CCD0M36tKrPi4+w/XZbBQCOFYWg=
+libunistring 1.5-r0 Q188KDmDxM1e/69KrsG8L3SufpPxg=
+libverto 0.3.2-r11 Q1iDJxqWDIETMpE0AWQYtXsBXyTIE=
 libxcrypt 4.5.2-r6 Q136uIG5Y/puIb7nbFIG90fgU8KK4=
-ncurses 6.6.20261010-r0 Q1J3I1CvdQnuGxDGnGkZ5LwEYUVpU=
-ncurses-terminfo-base 6.6.20261010-r0 Q1DqI1+QI4Ec+GffI8R8zkO+dMI1A=
-nghttp3 1.18.0-r1 Q1ywFVX7AjSUUoAZUDxHmHKWOmdHk=
-ngtcp2 1.25.0-r5 Q1ZBamq3sSW8Mc3fGd9eDCz9AX30o=
-oniguruma 6.9.10-r5 Q1pT50DffBVWhwogYqq+VJb0mXIzI=
-openssl-4.0-libcrypto 4.0.3-r6 Q1Ntez0qoDIBGHBD6moOZ2iPegnuU=
-openssl-4.0-libssl 4.0.3-r6 Q1rQfJCW/px/LCCDsdGRdgc8c/2LI=
-openssl-provider-legacy-allowed 4.0.3-r1 Q1a1fNGtTpkMb5GgBdxE47Kl28Cxk=
+lmdb 0.9.35-r3 Q10KJYgn4UIVbHPol5ORhPjAvD0Xc=
+ncurses 6.6.20261031-r0 Q1+QqpJu4XVXtZxTh1NT3rlb5BAco=
+ncurses-terminfo-base 6.6.20261031-r0 Q1GIiML+6IIw0Ro5IXSi/0dfYB5A0=
+nghttp3 1.18.0-r3 Q1HS2Ii8aC/o4GRz4fuL6qUvX5YE8=
+ngtcp2 1.25.0-r7 Q10pP7YtzB2jS/J7Qzagd/GrPiylU=
+oniguruma 6.9.10-r7 Q1ugnRuWcyi6PCU9TAuEWi6nrF8ws=
+openssl-3.6-libcrypto 3.6.5-r6 Q1JVIcRZwJ9hlJ6WGvIcbDmtp5d4E=
+openssl-3.6-libssl 3.6.5-r6 Q1M21x0U0MlLH90YZM7CYpPC0RYzg=
+openssl-4.0-libcrypto 4.0.3-r8 Q1xsqc7PMrIo4Ax/LEKUWoPaHKkzk=
+openssl-4.0-libssl 4.0.3-r8 Q1rI2Y8AG/AEGS8TEy4/LCN6qfsb4=
+openssl-provider-legacy-allowed 4.1.0-r0 Q1NKQ+uHzeWRAsocpJrWwxpo8IeiQ=
 readline 8.3-r3 Q1BmEgSRVEbSo6hg0gmugFfZRxwFw=
-sqlite-libs 3.54.0-r0 Q1w9ZNQ8d0SiglNkv8hpJ++wwiyz0=
+sqlite-libs 3.54.1-r0 Q1Nf7tuYzhYoQQzeIfbctX7oi/la8=
 wolfi-base 1-r7 Q1+0E0UlaxkLWVTbmu8bjwYXhbZjo=
-wolfi-baselayout 20230201-r30 Q1aF/6XzN/J9leZvrqW26UuNZ1IXw=
-wolfi-keys 1-r13 Q1MfuXifUsiF7Gi6pYnIuTfJM+2tk=
-zlib 1.3.2.1_rc20260921-r0 Q1J5R/y3HIlkvJXcoi/m754t027Eg=
+wolfi-baselayout 20230201-r31 Q1rRT/lrbBVxEZdhyr2qqt3S8ghjc=
+wolfi-keys 1-r14 Q1EoadkvCKoaZva6/KP6zyDyjja7o=
+zlib 1.3.2.1_rc20260921-r1 Q1CLjxbA73b8jpoHNTyi4nhkx7Wps=
 LOCKED
 FACTORY_EOF
 
@@ -336,7 +340,7 @@ COPY --link --from=tool-kubectl /out/ /
 COPY --link --from=tool-helm /out/ /
 COPY --link --from=tool-gh /out/ /
 COPY --link --from=tool-cosign /out/ /
-COPY --link --from=gcr.io/go-containerregistry/crane:latest@sha256:9162effd4c674ad2fa4e7170a894503ffff9114f15a57e75a0a32e111ad32d85 /ko-app/crane /usr/local/bin/crane
+COPY --link --from=gcr.io/go-containerregistry/crane:latest@sha256:61bc716946c2779e1dc0fb8068d116edf8de10e5402262c17e8e4904ddcc14ac /ko-app/crane /usr/local/bin/crane
 COPY --link --from=tool-yq /out/ /
 COPY --link --from=files /out/ /
 ENV KUBECONFIG="/home/nonroot/.kube/config"
